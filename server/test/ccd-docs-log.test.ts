@@ -298,8 +298,29 @@ describe('docs-log: a walk that ends short is truncated', () => {
     fs.writeFileSync(path.join(dir, '.git', 'shallow'), `${c2}\n`);
     expect(h.git(dir, 'rev-parse', '--is-shallow-repository')).toBe('true');
     const after = answer(c3!, 'specs', 'a.md');
-    expect(entriesOf(after).map((e) => e.sha)).toEqual([c3, c2]);
+    // The boundary is a root to git and is never listed (next case), so only the commit above it is.
+    expect(entriesOf(after).map((e) => e.sha)).toEqual([c3]);
     expect(after['truncated']).toBe(true);
+  });
+
+  it('a shallow repository never lists its boundary commit, and every listed parent is a full sha', () => {
+    const dir = freshRepo();
+    commitDocs(h, dir, { [`${SPECS}/a.md`]: 'one\n' }, 'doc one');
+    const boundary = touch(dir, `${SPECS}/b.md`, 'other', 'other doc');
+    const top = touch(dir, `${SPECS}/a.md`, 'two', 'doc two');
+    // CONTROL: before the repository is shallow, the other doc's commit is not a change to a.md either.
+    expect(entriesOf(answer(top, 'specs', 'a.md')).map((e) => e.sha)).not.toContain(boundary);
+    fs.writeFileSync(path.join(dir, '.git', 'shallow'), `${boundary}\n`);
+    expect(h.git(dir, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    // CONTROL: git itself prints the boundary as a root with every file of the section, the doc included.
+    expect(h.git(dir, '-c', 'log.showRoot=true', 'log', '--no-merges', '--format=%H', '--name-only', '--', SPECS).split('\n'))
+      .toContain(`${SPECS}/a.md`);
+    const o = answer(top, 'specs', 'a.md');
+    const es = entriesOf(o);
+    expect(es.map((e) => e.sha)).toEqual([top]);
+    expect(es.map((e) => e.sha)).not.toContain(boundary);
+    for (const e of es) expect(e.parent).toMatch(/^[0-9a-f]{40}$/);
+    expect(o['truncated']).toBe(true);
   });
 });
 

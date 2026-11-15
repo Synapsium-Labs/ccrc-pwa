@@ -48003,7 +48003,7 @@ def verb_show(ctx, a):
 LOG_SHA_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
-def parse_log(buf, sec_b, want, limit):
+def parse_log(buf, sec_b, want, limit, shallow=False):
     """The records of LOG_ROW's output whose names hold `want` exactly, as
     (sha, parents, date, author, subject) byte strings, newest first, at most
     `limit`. A record is five NUL-ended fields, the newline git writes before
@@ -48012,7 +48012,10 @@ def parse_log(buf, sec_b, want, limit):
     FILE at the section path, which is never the doc but must be read past);
     the next record starts after the last name's NUL. A buffer cut inside a
     record (an expiry or the stdout cap) ends the walk at the last whole
-    record. A record that does not parse is git-failed {step:'log'}."""
+    record. A record that does not parse is git-failed {step:'log'}. When
+    `shallow`, a parentless record is parsed and read past but never listed: a
+    shallow boundary is a root to git, so it prints every file of the section,
+    and it cannot be told from a true root without reading the shallow file."""
     rows = []
     prefix = sec_b + b'/'
     bare = sec_b + b'\0'
@@ -48039,7 +48042,7 @@ def parse_log(buf, sec_b, want, limit):
                 return rows
             hit = hit or buf[i:j] == want
             i = j + 1
-        if hit:
+        if hit and not (shallow and not parent):
             rows.append(tuple(fields))
     return rows
 
@@ -48104,7 +48107,7 @@ def verb_log(ctx, a):
     if not cut and r.rc != 0:
         raise show_failed('log', r)
     want = (sec + '/' + a.path).encode('utf-8')
-    entries = log_entries(parse_log(r.out, sec.encode('ascii'), want, DOCS_LOG_MAX_ENTRIES))
+    entries = log_entries(parse_log(r.out, sec.encode('ascii'), want, DOCS_LOG_MAX_ENTRIES, repo.shallow))
     truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow)
     return {'commit': a.commit, 'section': a.section, 'path': a.path, 'entries': entries, 'truncated': truncated}
 
