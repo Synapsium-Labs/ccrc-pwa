@@ -1831,7 +1831,7 @@ describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, remov
   });
 });
 
-// The three libraries the body pins (D-6913, D-7463, wave 5), each held to the same four facts.
+// The four libraries the body pins (D-6913, D-7463, wave 5, the Overlord W1 pool set), each held to the same four facts.
 for (const prefix of ['', 'TRAIN_', 'LEASE_', 'POOLSET_'] as const) {
 describe(`ccd's ${prefix === '' ? 'library (D-6913)' : prefix === 'TRAIN_' ? 'second library (D-7463)' : prefix === 'LEASE_' ? 'third library (wave 5)' : 'fourth library (the pool set)'}: the file the body pins is placed by the pair publisher, removed by name and backed up before the body`, () => {
   it('the publisher declares it once, under a lib/ directory beside the body, and it is a tracked file', () => {

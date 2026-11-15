@@ -119,3 +119,32 @@ No `Record<RouteField, …>` outside `route-fields-parse.test.ts` needed a row: 
 - **`route-argv-refusal-is-argv-only`.** The refusal of both fields in `_route_argv_check` is a line `cmd_route` does not
   share (it is the set's one writer), so `ccd-route-argv.test.ts`'s census of argv-only lines grows from five to six,
   with an assertion that `cmd_route` makes no such refusal.
+
+## Fix round 1: the pure-move pin, and two more counts
+
+The PR's first fast run failed three checks the local gate had not run:
+
+- **`ccd-split-pin.test.ts`'s REAL row.** #2810's pure-move pin judged every diff that adds a `# @ccd-lib:` pointer as a
+  pure move out of `ccd/ccd`. A library of new code, wired as the plan asks with its pointer, could never pass it.
+  - **Ruled (ask 433, narrow the pin; slug `new-code-library-is-not-a-move`, recorded in the split plan):**
+    `server/test/ccdSplit.ts#pureMoveVerdict` now skips a new pointer whose region defines only functions absent from the
+    base program, `ccd/ccd` and every library alike, provided the diff removes no function from `ccd/ccd`. It reports the
+    skip in its answer (`newCode`, "new library code, not judged as a move").
+  - **Still judged in full:** a region that mixes moved and new functions, a pointer with no region, and a diff that also
+    removes a function from `ccd/ccd`.
+  - **FIXTURE rows:** they cover each of those cases, plus a region that holds a base library's function.
+  - **Mutations**, each restored from a saved copy, all red:
+
+    | Mutation | Result |
+    |---|---|
+    | without the new-code arm | 2 failed |
+    | ignoring removals from `ccd/ccd` | 1 failed |
+    | forgetting the base libraries | 1 failed |
+    | a region-less pointer read as new code | 2 failed |
+
+  - **Order:** the ruling asked for the pin's change as its own commit before the library's. The library's commits were
+    already pushed and the worker contract forbids a rebase or force-push, so it is its own commit, after them.
+- **`browser-mcp-wire.test.ts`** pins `browser`'s index from the end of `ROUTE_WRITABLE_FIELDS`. It moves from
+  `length - 5` to `length - 7`.
+- **`ccd-docs-helper-redactor.test.ts`** counts the loader's hash calls before the docs front's: three libraries become
+  four.
