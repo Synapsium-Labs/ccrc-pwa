@@ -3427,7 +3427,8 @@ export class CoordStore {
             if (!gate.ok) return { ok: false as const, error: gate.error };
             reserved = gate.own?.id ?? facts.nextId;
           }
-          const decision = decideLandingWrite({ landing, from, runId, current, projection, episode });
+          const storedState = facts?.stateWords.find((w) => w.id === current?.id)?.value ?? null;
+          const decision = decideLandingWrite({ landing, from, runId, current, projection, episode, storedState });
           if (decision.act === 'refuse') return decision.failure;
           if (decision.act === 'insert' && reserved === null) return { ok: false as const, error: 'landing-id-overflow' as const };
           effects = 'applying';

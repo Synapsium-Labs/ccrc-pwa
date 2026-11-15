@@ -54,7 +54,9 @@ export function landingAdvanceOf(f: { to: RunState; measured: { branchTip: strin
  *  `current` is the row for (project, `pin.pr`) on a pin, or for (project, `episode.pr`) on a retreat; null means no
  *  such row. D-7618 (advances the line does not place) and D-7617 (a re-pin moves to the back). */
 export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState; runId: number;
-  current: LandingEntry | null; projection: LandingProjectionRead | null; episode: { pr: number | null; head: string } | null }): LandingWriteDecision {
+  current: LandingEntry | null; projection: LandingProjectionRead | null; episode: { pr: number | null; head: string } | null;
+  /** The STORED state word of `current` (`LandingMutationFacts.stateWords`), null when there is no row or no record. */
+  storedState: LandingEntryState | 'unrecognised' | null }): LandingWriteDecision {
   const { landing, current } = f;
   if (landing.kind === 'plain') return { act: 'none', write: { kind: 'none' } };
   if (landing.kind === 'pin') {
@@ -80,7 +82,13 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   if (f.episode === null) return { act: 'none', write: { kind: 'no-episode' } };
   if (f.episode.pr === null) return { act: 'none', write: { kind: 'no-pr' } };
   if (current === null) return { act: 'none', write: { kind: 'no-entry' } };
-  if (current.runId !== f.runId || current.state !== 'pinned') return { act: 'none', write: { kind: 'kept', state: current.state } };
+  // Fix round 2 (R1): an owned row whose STORED word is `pinned` is held to the projection check whatever it DISPLAYS: a row
+  // with a damaged afterIds, fixesMain, ejectionKind, pinnedAt or ejections displays `unknown`, and the display state is a
+  // fold, not the word. Only the stored word and the ownership fact decide here; every other stored word keeps `kept`.
+  const ownedPinned = current.runId === f.runId && f.storedState === 'pinned';
+  if (current.runId !== f.runId || (current.state !== 'pinned' && !ownedPinned)) {
+    return { act: 'none', write: { kind: 'kept', state: current.state } };
+  }
   // An unreadable projection is neither ejected nor rewritten to mint the marker, and the retreat is refused, so the run is
   // not moved past an entry nobody can read. Wave 5i (M16): this is asked BEFORE the head is compared, so the owned, pinned
   // entry at the episode's own head is held to it too (a corrupt handoff or setter is no ejection, and counts no ask).
