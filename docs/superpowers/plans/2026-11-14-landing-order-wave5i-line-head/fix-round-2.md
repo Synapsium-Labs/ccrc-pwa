@@ -82,3 +82,41 @@ the previous commit failed `expected { ok: false, reason: 'unreadable' } to deep
 | late control made `{ lander: late, probe: <answered>, health: late }` | rc 1, 4 failed, all at the control-equality assertion (`expected { lander: ..., probe: ..., health: ... } to deeply equal ...`). The zero-cue assertion was NOT reached in this run, so this mutant shows the control equality catches it, not that the cue count would; I did not measure whether the store would queue a cue from that partial bundle. |
 
 Deadline note: the pass-level R2 cases now use a 2000 ms deadline instead of 60 ms (the hung reads never resolve, so they still settle at the deadline; a loaded box cannot make the fast probe miss it).
+
+## R4 (a damaged terminal dependency target is not an outstanding blocker)
+
+**Defect.** `landingOrder` built `outstanding` from the display state, so a target stored `landed`, `closed` or `withdrawn` whose
+retained fields were damaged (display `unknown`) held every dependent head `empty-or-blocked` forever. Fix round 1 recorded this as a
+limitation; **that limitation is withdrawn** (plan Task 3 Step 5: terminal rows with retained diagnostic damage do not become open
+blockers). `fix-round-1.md` is not edited.
+
+**Rule.** A display-`unknown` target is settled (not outstanding) only when all hold: its id is a safe positive integer; exactly one
+entry of the project carries that id; exactly one `stateWords` record carries that id; and that record's word has
+`LANDING_ENTRY_TERMINAL[word] === true`. A missing or duplicate record, `'unrecognised'`, stored `unknown`, `pinned` and `ejected`
+stay outstanding. Display `pinned`, `ejected` and a non-terminal target are unchanged.
+
+**Interface change (departure `order-reads-stored-words`).** `landingOrder(entries, flags, recovery?, stateWords?)` and
+`landingViewOf(entries, flags, recovery, pr, stateWords?)` gain the optional `LandingMutationFacts['stateWords']`; omitted is the old
+display-only rule exactly. Callers: `landingBindingOf` (passes `facts.stateWords`) and `GET /api/landing` (one argument added to its
+`landingViewOf` call; no decision in the route). The walk, `byKey`, line membership and raw bytes are untouched.
+
+**Cases** (`landing-terminal-damage.test.ts`, real store; H is created by the authority writer, ordered behind T while T reads, then T
+is damaged): 3 words x 5 damages (afterIds, fixesMain, ejectionKind, pinnedAt, ejections): H is the ready head, its cue queues once,
+a second pass answers `duplicate`, T's raw bytes are unchanged. Controls: damaged pinned, ejected, unrecognised and stored-unknown
+targets, a quarantined stored-unknown target (order head null, binding held, zero cue); an independent recovery hold answers
+`recovery`; a dangling edge (T's id in no entry) answers exactly as before (it was never outstanding, so this is parity, not a new
+hold); the entries table keys on `id`, so a duplicate-id fixture cannot be built in the store (the insert throws) and duplicates are
+covered purely. `landing-line-order.test.ts`: omitted input equals today's answer; each terminal word settles; pinned, ejected,
+unknown, unrecognised, missing record, duplicate record, duplicate entry id and an unsafe id stay outstanding.
+`landing-read-route.test.ts`: `order.head` is H behind a damaged landed target and null behind a damaged pinned one.
+Pass: 248 tests, 5 files, rc 0 (full selection of the brief, `--maxWorkers=2`), at 8e52241e8.
+
+**Reds.** Tests were written after the fix (a store-level red against the old code is mutant (a), which restores the old rule).
+
+| Mutant (one at a time, saved copy, `cmp` restore, same selection green) | Result at 8e52241e8 |
+|---|---|
+| (a) terminal test ignores the stored word (`settled` returns false: display-only rule) | 19 failed: the 15 damaged-terminal cases, 3 pure, 1 route (`expected null to be 1`, `expected { mode: 'held' ...} to match object { mode: 'ready' ...}`) |
+| (b) stored-word test accepts any word except `pinned`/`ejected` | 5 failed: pure stored `unknown` and `unrecognised`, controls raw `unknown`, raw `parked-v9`, quarantined `unknown` (`expected 7 to be null`, `expected 1 to be null`) |
+| (c) exact identity dropped (no one-entry check, any record count >= 1) | 1 failed: "a missing record, a duplicate record and a duplicate entry id stay outstanding" (`expected 1 to be null`); duplicate id is pure-covered only, as the store cannot build it |
+
+Each mutant was restored from the saved copy; `cmp` matched; the unmutated file is the committed one.
