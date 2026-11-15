@@ -13,7 +13,7 @@
 // "has never been live" and "is shadow now" agree. A read that is not an exact `shadow` (live, a token this build does not
 // know, a lost row, a read that failed) makes no baseline: doubt never makes one.
 import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, type LaneArmLane } from '../../../shared/lane-arm.js';
-import type { LaneArmRead } from '../coord/laneArm.js';
+import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
 
 /** The W1a lane-arm rows the baseline guards, in the card's order: an arm of any of them changes what a session recalls,
  *  so none goes live before the baseline is taken. A later W1a row joins here. */
@@ -106,4 +106,85 @@ export function quizBaseline(runs: readonly { readonly baseline: boolean }[], w1
     const read = w1aChoices[lane];
     return read.kind === 'row' && read.choice === 'shadow';
   });
+}
+
+// ── The weekly item (plan Task 4; slugs quiz-lane-reminds-not-runs, quiz-week-is-utc, quiz-item-waits-for-the-record-path) ──
+
+/** The programme the weekly item is raised on. */
+export const QUIZ_ITEM_PROGRAMME = 'overlord';
+
+/** THE RECORD PATH'S GATE (ask 434; slug quiz-item-waits-for-the-record-path). The weekly item asks the operator to run the
+ *  quiz and record it with `ccrc quiz-record`; until the single-arm mode and that verb with its door ship (the plan's
+ *  Task 3, a later pull request under its own plan), there is nothing the operator can do, so the lane raises nothing. That
+ *  pull request sets this true beside the door, and `continuity-quiz-lane.test.ts` pins the two together. */
+export const QUIZ_RECORD_READY: boolean = false;
+
+/** The ISO week a wall time falls in, in UTC (slug quiz-week-is-utc: the Settings time zone ships in W1), as `YYYY-Www`, and
+ *  the ms of its Monday 00:00 UTC. */
+export function quizWeek(now: number): { readonly key: string; readonly start: number } {
+  const d = new Date(now);
+  const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const dow = (d.getUTCDay() + 6) % 7;                      // Monday 0 .. Sunday 6
+  const start = midnight - dow * 86_400_000;
+  const thursday = new Date(start + 3 * 86_400_000);        // the ISO year is the year of the week's Thursday
+  const year = thursday.getUTCFullYear();
+  const week = 1 + Math.floor((thursday.getTime() - Date.UTC(year, 0, 1)) / (7 * 86_400_000));
+  return { key: `${year}-W${String(week).padStart(2, '0')}`, start };
+}
+
+/** The item's words: what, how and why, the four conditions of the W0-28 ruling among them. Before a baseline exists the
+ *  title says this run is the baseline. */
+export function quizItemText(weekKey: string, baselineExists: boolean): { readonly title: string; readonly why: string; readonly how: readonly string[] } {
+  const title = baselineExists
+    ? `Run this week's replay quiz (${weekKey})`
+    : `Run this week's replay quiz: the baseline (${weekKey})`;
+  const why = 'What: one run of the history programme\'s replay quiz over live coordinator families, recall on, no A/B window, '
+    + 'with the same questions, judge, judge model and scoring every week. Why: the scores show whether recall holds or drifts '
+    + 'over weeks (Overlord C52), and M13 compares later runs with the baseline. '
+    + (baselineExists
+      ? 'The baseline is recorded; this run is one more point beside it.'
+      : 'No baseline is recorded yet: this run becomes it if every W1a shadow lane is still in shadow when you record it, and '
+        + 'no W1a lane can go live until it exists.')
+    + ' Nothing waits on this week\'s run but the record itself.';
+  const how = [
+    'On the fleet box, in your own shell and never in a session\'s pane, run history\'s replay quiz driver in its single-arm, '
+      + 'recall-on mode, by hand, as its runbook says. ccrc never runs it.',
+    'Record the run from the same shell: ccrc quiz-record --report <file> --sha <hex>, with the report file and the sha the '
+      + 'driver printed. It refuses inside a session.',
+    'The conditions this record keeps (the W0-28 ruling): the history store is opened read-only, and no session runs a writing '
+      + 'form of `ccrc history`; no history marker is written (steer, agents-on and the rest stay yours); the driver runs by '
+      + 'your hand; and the baseline is never a W2 result, a PASS or a measured benefit of recall: a row holds the score and '
+      + 'its interval only.',
+  ];
+  return { title, why, how };
+}
+
+/** A read the lane made: its value, or why it failed (never folded into a value). */
+export type QuizRead<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly detail: string };
+
+/** What the lane read before it decides: whether the record path ships, this week, when each recorded run was recorded,
+ *  whether a baseline exists, and whether this week's item was ever raised (in any state). */
+export interface QuizLaneFacts {
+  readonly recordReady: boolean;
+  readonly week: { readonly key: string; readonly start: number };
+  readonly recordedAts: QuizRead<readonly number[]>;
+  readonly baseline: LaneArmBaseline;
+  readonly itemRaised: QuizRead<boolean>;
+}
+
+/** Why a pass raised nothing: the record path is absent, a read failed, a run is already recorded this week, or this week's
+ *  item was already raised. */
+export type QuizLaneHold = 'record-path-absent' | 'unmeasured' | 'recorded' | 'raised';
+export type QuizLaneVerdict =
+  | { readonly kind: 'hold'; readonly why: QuizLaneHold }
+  | { readonly kind: 'raise'; readonly item: ReturnType<typeof quizItemText> };
+
+/** THE LANE'S RULE: one item a week, only while the record path ships, only when no run was recorded this week and no item
+ *  for this week was ever raised; any failed read raises nothing. */
+export function quizLaneVerdict(f: QuizLaneFacts): QuizLaneVerdict {
+  if (!f.recordReady) return { kind: 'hold', why: 'record-path-absent' };
+  if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok) return { kind: 'hold', why: 'unmeasured' };
+  if (f.recordedAts.value.some((at) => at >= f.week.start)) return { kind: 'hold', why: 'recorded' };
+  if (f.itemRaised.value) return { kind: 'hold', why: 'raised' };
+  return { kind: 'raise', item: quizItemText(f.week.key, f.baseline.exists) };
 }

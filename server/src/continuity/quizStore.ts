@@ -7,7 +7,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
 import { tx } from '../coord/tx.js';
-import { W1A_ARM_ROWS, quizBaseline, type QuizArmed, type QuizReport, type W1aArmRow } from './quiz.js';
+import type { CoordStore } from '../coord/store.js';
+import { itemRaisedWithTitle } from '../coord/ledgersStore.js';
+import { QUIZ_ITEM_PROGRAMME, W1A_ARM_ROWS, quizBaseline, type QuizArmed, type QuizReport, type W1aArmRow } from './quiz.js';
+import type { QuizLanePort } from './quizLane.js';
 
 /** What the writer records: the report as `validQuizReport` read it, who recorded it, and when. */
 export interface QuizRunInsert {
@@ -99,4 +102,24 @@ export function quizBaselineRead(db: DatabaseSync): QuizBaselineRead {
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** The quiz lane's port (`quizLane.ts#QuizLanePort`) over the store, built once in the composition root. */
+export function quizLanePortOf(coord: Pick<CoordStore, 'db' | 'raiseItem'>, recordReady: boolean): QuizLanePort {
+  return {
+    recordReady,
+    recordedAts: () => {
+      const runs = quizRuns(coord.db);
+      return runs.ok ? { ok: true, value: runs.rows.map((r) => r.recordedAt) } : runs;
+    },
+    baseline: () => quizBaselineRead(coord.db),
+    itemRaised: (titles) => {
+      try {
+        return { ok: true, value: titles.some((t) => itemRaisedWithTitle(coord.db, QUIZ_ITEM_PROGRAMME, 'ccrc', t)) };
+      } catch (e) {
+        return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    raise: (input, now) => coord.raiseItem(input, now, 'ccrc'),
+  };
 }

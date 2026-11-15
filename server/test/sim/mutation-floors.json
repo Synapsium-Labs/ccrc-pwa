@@ -59,5 +59,7 @@
   "server/src/continuity/anchor.ts#anchorGeneration": 1,
   "server/src/continuity/anchor.ts#anchorAnswer": 1,
   "server/src/continuity/quiz.ts#quizBaseline": 1,
-  "server/src/continuity/quiz.ts#validQuizReport": 1
+  "server/src/continuity/quiz.ts#validQuizReport": 1,
+  "server/src/continuity/quiz.ts#quizLaneVerdict": 1,
+  "server/src/continuity/quiz.ts#quizWeek": 1
 }

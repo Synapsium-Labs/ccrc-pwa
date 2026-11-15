@@ -97,7 +97,69 @@ const QUIZ_REPORT_SET: MutantSet<Quiz> = {
   },
 };
 
+export const QUIZ_LANE_KEY = 'server/src/continuity/quiz.ts#quizLaneVerdict';
+export const QUIZ_WEEK_KEY = 'server/src/continuity/quiz.ts#quizWeek';
+const MON = Date.UTC(2026, 10, 16);
+const DAY = 86_400_000;
+type Facts = Parameters<Quiz['quizLaneVerdict']>[0];
+
+const QUIZ_LANE_SET: MutantSet<Quiz> = {
+  modulePath: QUIZ_TS,
+  mutants: [
+    // L1, the ruling's (ask 434): the record path's gate dropped.
+    { id: 'L1', old: "if (!f.recordReady) return { kind: 'hold', why: 'record-path-absent' };", new: '' },
+    { id: 'L2', old: "if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok) return", new: "if (!f.recordedAts.ok || !f.baseline.ok) return" },
+    { id: 'L3', old: "if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok) return", new: "if (!f.recordedAts.ok || !f.itemRaised.ok) return" },
+    { id: 'L4', old: 'f.recordedAts.value.some((at) => at >= f.week.start)', new: 'f.recordedAts.value.some((at) => at > f.week.start)' },
+    { id: 'L5', old: "if (f.itemRaised.value) return { kind: 'hold', why: 'raised' };", new: '' },
+    { id: 'L6', old: "return { kind: 'raise', item: quizItemText(f.week.key, f.baseline.exists) };", new: "return { kind: 'raise', item: quizItemText(f.week.key, true) };" },
+    { id: 'L7', old: 'f.recordedAts.value.some((at) => at >= f.week.start)', new: 'f.recordedAts.value.length > 0' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const facts = (over: Partial<Facts> = {}): Facts => ({
+      recordReady: true, week: { key: '2026-W47', start: MON }, recordedAts: { ok: true, value: [] }, baseline: { ok: true, exists: false },
+      itemRaised: { ok: true, value: false }, ...over,
+    });
+    return {
+      'held while the record path is absent': () => { expect(m.quizLaneVerdict(facts({ recordReady: false }))).toEqual({ kind: 'hold', why: 'record-path-absent' }); },
+      'each failed read holds': () => {
+        expect(m.quizLaneVerdict(facts({ itemRaised: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
+        expect(m.quizLaneVerdict(facts({ baseline: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
+        expect(m.quizLaneVerdict(facts({ recordedAts: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
+      },
+      'a run recorded at the week\'s first ms counts': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON] } }))).toEqual({ kind: 'hold', why: 'recorded' }); },
+      'a run of last week does not': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON - 1] } })).kind).toBe('raise'); },
+      'raised once': () => { expect(m.quizLaneVerdict(facts({ itemRaised: { ok: true, value: true } }))).toEqual({ kind: 'hold', why: 'raised' }); },
+      'the baseline title before one exists': () => { expect(m.quizLaneVerdict(facts())).toEqual({ kind: 'raise', item: m.quizItemText('2026-W47', false) }); },
+    };
+  },
+};
+
+const QUIZ_WEEK_SET: MutantSet<Quiz> = {
+  modulePath: QUIZ_TS,
+  mutants: [
+    { id: 'W1', old: 'const dow = (d.getUTCDay() + 6) % 7;', new: 'const dow = d.getUTCDay();' },
+    { id: 'W2', old: 'const thursday = new Date(start + 3 * 86_400_000);', new: 'const thursday = new Date(start);' },
+    { id: 'W3', old: 'const week = 1 + Math.floor(', new: 'const week = Math.floor(' },
+    { id: 'W4', old: "String(week).padStart(2, '0')", new: 'String(week)' },
+    { id: 'W5', old: 'const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());', new: 'const midnight = now;' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'a Monday starts its week': () => { expect(m.quizWeek(MON)).toEqual({ key: '2026-W47', start: MON }); },
+      'a Sunday ends it': () => { expect(m.quizWeek(MON + 7 * DAY - 1)).toEqual({ key: '2026-W47', start: MON }); },
+      'the year turns by the ISO rule': () => {
+        expect(m.quizWeek(Date.UTC(2027, 0, 1, 12)).key).toBe('2026-W53');
+        expect(m.quizWeek(Date.UTC(2027, 0, 4)).key).toBe('2027-W01');
+        expect(m.quizWeek(Date.UTC(2026, 0, 1)).key).toBe('2026-W01');
+      },
+    };
+  },
+};
+
 export const QUIZ_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [QUIZ_BASELINE_KEY]: QUIZ_BASELINE_SET as MutantSet<never>,
   [QUIZ_REPORT_KEY]: QUIZ_REPORT_SET as MutantSet<never>,
+  [QUIZ_LANE_KEY]: QUIZ_LANE_SET as MutantSet<never>,
+  [QUIZ_WEEK_KEY]: QUIZ_WEEK_SET as MutantSet<never>,
 };
