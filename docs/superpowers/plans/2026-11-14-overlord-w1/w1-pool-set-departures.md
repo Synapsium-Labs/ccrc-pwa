@@ -35,8 +35,8 @@ against the real module by `pool-rule-core.test.ts` and `pool-set-spelling.test.
 
 | Decider | Mutants | Killed | Floor set |
 |---|---|---|---|
-| `shared/poolrule.ts#poolRule` | 15 | 15 | 1 |
-| `shared/poolset.ts#poolSetSpelling` | 10 | 10 | 1 |
+| `shared/poolrule.ts#poolRule` | 17 (15 before review 2120) | 17 | 1 |
+| `shared/poolset.ts#poolSetSpelling` | 13 (10 before review 2120) | 13 | 1 |
 | `shared/poolset.ts#parsePoolSet` | 10 | 10 | 1 |
 
 Mutants named in the plan are among them: an untagged account serving a set that does not admit it (R1), `set-unreadable`
@@ -148,3 +148,41 @@ The PR's first fast run failed three checks the local gate had not run:
   `length - 5` to `length - 7`.
 - **`ccd-docs-helper-redactor.test.ts`** counts the loader's hash calls before the docs front's: three libraries become
   four.
+
+## Review 2120 fix round (the coordinator's rulings, mail 20271)
+
+- **`poolset-spelling-tells-empty-from-unspellable` (F1).** `shared/poolset.ts#poolSetSpelling` answered one `null` for
+  three conditions: the empty set, a set holding a name off `POOL_NAME_RE`, and a spelling over the cap. It now answers
+  `PoolSetSpelled`: `{kind: 'spelled', spelling}`, `{kind: 'empty'}` or `{kind: 'unspellable', why: 'name' | 'over-cap'}`.
+  Only `empty` may later become the clearing `--set poolset=`; a writer that cleared an unspellable set would drop the
+  session to its untagged project. The set mismatch arm's label tells the three apart: the spelling, `-` for the empty
+  set, `?name` and `?over-cap` (`?` is outside the grammar, so no label is also a spelling). The spelling table has a row
+  for each answer, and the mutant set gains L11 to L13 (a bad name or over-cap read as empty, over-cap read as a bad
+  name) and R16 and R17 (the labels collapsed), all killed.
+- **F2, `local LC_ALL=C` pinned.** Two spelling-table rows ascend in bytes but not in en_US collation (`pool-b,poola`,
+  accepted) and the reverse (`poola,pool-b`, malformed). The bash arm runs the whole table again under
+  `LC_ALL=en_US.UTF-8` where `locale -a` lists it, and a structural case holds the line in both function bodies
+  everywhere. Without the line in both functions, from a saved copy: `pool-set-spelling.test.ts` 3 failed, 69 passed (the
+  en_US run, first on `pool-é`, and both structural cases); restored, 72 passed.
+- **F3.** `pool-rule-core.test.ts` now runs `poolRuleCases({ poolRule })` against the real module, as the header of
+  `sim/poolSetSets.ts` and this note said it did. M3 (only the account's first pool asked): `pool-rule-core.test.ts`
+  1 failed ("an account in two pools is served by a set naming the second only"), 97 passed; restored, green.
+- **F4, case G.** `pureMoveVerdict`'s new-code arm also refuses a region that assigns, at its top level, a variable the
+  base `ccd/ccd` or a base library assigns (with or without a `declare`-family prefix); FIXTURE rows for a plain global
+  and a `declare`d one. Without the variable arm, from a saved copy: `ccd-split-pin.test.ts` 1 failed, 16 passed. The
+  wrapper-plus-renamed-body shapes (B, H) stay outside the pin's reach, named as a residual in the slug's entry in the
+  split plan.
+- **F5.** `local IFS=' '` in `_poolset_parse` and `_acctorder_valid`. A case runs the table, and `_acctorder_valid` on a
+  repeat and on two ids, under `IFS` set to `,`, `-`, `a`, `:` and a newline. Before the line: `pool-set-spelling.test.ts`
+  3 failed (that case and the two structural ones); with it, green.
+- **F6.** A structural case lifts the element class from `shared/roster.ts#ACCOUNT_ID_RE.source` and requires
+  `_acctorder_valid`'s pattern to be exactly that element, comma-joined; `ccd-route-fields.test.ts` accepts a 64-character
+  id.
+- **Nits.** N1: `PoolVerdict` is `ProjectPoolVerdict` plus the set arms, one definition of the project arms. N3: the
+  `set-multi-outside` row's reason no longer claims `pool-ab` sits inside `pool-a,pool-b`. N6: `poolrule.ts`'s header and
+  precedence list name the set's steps. N7: `ccd-lib-load.test.ts` calls the library new code and reads its functions as
+  `POOLSET_DEFINED`.
+- **N2, for the plan's "Rollback below `pool-set`" (carried to the next spec pass).** `shared/api.ts#reviveRoute` rejects
+  a whole cached session whose `route.fields` names a field it does not know, so a server rolled back below A1 after a
+  `poolset` exists drops that session from `state-cache.json` until the live read re-measures it, as `precompact` does
+  today.

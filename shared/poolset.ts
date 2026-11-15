@@ -14,7 +14,10 @@
 // non-ASCII character is refused by the pattern, whatever its length.
 //
 // The EMPTY set has no spelling (open question 3 of the pool-set plan): an empty route value means "clear the field",
-// so `poolSetSpelling` answers null for it and `parsePoolSet` reads the empty string as malformed.
+// so `poolSetSpelling` answers `empty` for it and `parsePoolSet` reads the empty string as malformed. A set the grammar
+// cannot spell (a bad name, or over the cap) is a third answer, `unspellable`, never folded into `empty`: only `empty`
+// may ever become the clearing write, and a writer that cleared an unspellable set would drop the session to its
+// untagged project, the fail-open C46 forbids (departure `poolset-spelling-tells-empty-from-unspellable`).
 import { POOL_NAME_RE } from './roster.js';
 
 /** A session's set (C46): pool names in the operator's order, and the yes or no for accounts in no pool. */
@@ -25,18 +28,26 @@ export const POOL_SET_SPELLING_MAX_BYTES = 1024;
 
 const UNTAGGED_SUFFIX = '+untagged';
 
+/** What `poolSetSpelling` answers: three conditions a writer handles differently, so three arms, never one null. */
+export type PoolSetSpelled =
+  | { readonly kind: 'spelled'; readonly spelling: string }
+  | { readonly kind: 'empty' }
+  | { readonly kind: 'unspellable'; readonly why: 'name' | 'over-cap' };
+
 /**
- * The set's one token, or null. Null for the empty set (no route spelling, see the header) AND for a set holding a
- * name that fails POOL_NAME_RE, which the grammar cannot spell: a caller never receives a spelling that
- * `parsePoolSet` would refuse. Names are sorted ascending by byte order (plain `<` on ASCII strings) and repeats drop.
+ * The set's one token. `empty` for the empty set (no route spelling, see the header); `unspellable` with `name` for a
+ * set holding a name that fails POOL_NAME_RE, and with `over-cap` for a spelling over the cap: a caller never receives
+ * a spelling that `parsePoolSet` would refuse. Names are sorted ascending by byte order (plain `<` on ASCII strings)
+ * and repeats drop.
  */
-export function poolSetSpelling(set: PoolSet): string | null {
+export function poolSetSpelling(set: PoolSet): PoolSetSpelled {
   const names = [...new Set(set.pools)];
-  if (names.some((n) => !POOL_NAME_RE.test(n))) return null;
-  if (names.length === 0 && !set.untagged) return null;
+  if (names.some((n) => !POOL_NAME_RE.test(n))) return { kind: 'unspellable', why: 'name' };
+  if (names.length === 0 && !set.untagged) return { kind: 'empty' };
   names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const spelling = names.join(',') + (set.untagged ? UNTAGGED_SUFFIX : '');
-  return spelling.length > POOL_SET_SPELLING_MAX_BYTES ? null : spelling;
+  if (spelling.length > POOL_SET_SPELLING_MAX_BYTES) return { kind: 'unspellable', why: 'over-cap' };
+  return { kind: 'spelled', spelling };
 }
 
 /** Read one spelling. Anything outside the grammar is `{ ok: false }`; there is no partial answer. */

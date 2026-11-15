@@ -8,8 +8,9 @@
 //     byte for byte. A diff that adds no pointer is a feature, and is not judged here. Nor is one whose new pointers all
 //     name NEW code, a region defining no function the base program defined anywhere (as a new library's does), when it
 //     removes no function from ccd/ccd: the verdict is pure and names them in `newCode` (the coordinator's ruling for the
-//     Overlord W1 pool set, slug new-code-library-is-not-a-move). A region that mixes moved and new code, a pointer with
-//     no region, and a diff that also removes a function from ccd/ccd are still judged in full.
+//     Overlord W1 pool set, slug new-code-library-is-not-a-move). A region that mixes moved and new code, one that
+//     assigns a variable the base assigns, a pointer with no region, and a diff that also removes a function from
+//     ccd/ccd are still judged in full.
 //   * ONE DEFINITION (`duplicateDefinitions`): a feature PR merged across a move that keeps its old copy of a function
 //     defines it twice, and goes red instead of running two definitions (Review Focus 1).
 //   * THE DUMP (`programDump`): `declare -f` and `declare -p` of the sourced program, which sees a swallowed global that
@@ -112,6 +113,10 @@ const moveCalledNewCode: Tree = {
   'ccd/ccd': movedAndEdited['ccd/ccd']!.replace('# @ccd-lib:t_1 — `fb` moved to ccd/lib/t.sh', '# @ccd-lib:t_1 — new code in ccd/lib/t.sh'),
   'ccd/lib/t.sh': movedAndEdited['ccd/lib/t.sh']!,
 };
+// A "new" region that reassigns a global ccd/ccd assigned at the base (review 2120 F4, case G): the library loads at
+// ccd's foot, so its value wins. Judged in full, as is one that reassigns a `declare`d global; a NEW variable is not.
+const newCodeOverridingAGlobal: Tree = { ...newCodeLibrary, 'ccd/lib/n.sh': lib('n', ['n_1', 'X=2\n' + FN]) };
+const newCodeOverridingADeclare: Tree = { ...newCodeLibrary, 'ccd/lib/n.sh': lib('n', ['n_1', '_M=([k]=w)\n' + FN]) };
 // One bash comment and one `#` line of heredoc data, for the comments-only row (Task 3).
 const COMMENTED: Tree = {
   'ccd/ccd': SHEBANG + 'fa() {\n  # see line 12 for why\n  echo a\n}\nfh() {\n  cat <<EOF\n# data, not a comment: line 12\nEOF\n}\n',
@@ -153,6 +158,12 @@ describe('the pure-move pin (fixtures)', () => {
     expect(beside?.pure).toBe(false);
     expect(beside?.differing).toContain('fb');
     expect(pureMoveVerdict(base, moveCalledNewCode)).toEqual({ pure: false, differing: ['fb'] });
+    // A region that assigns a variable the base assigns is not new code (review 2120 F4, case G).
+    for (const [name, t] of [['a global', newCodeOverridingAGlobal], ['a declared global', newCodeOverridingADeclare]] as const) {
+      const v = pureMoveVerdict(base, t);
+      expect(v?.newCode, name).toBeUndefined();
+      expect(v?.pure, name).toBe(false);
+    }
     // A new pointer with no region anywhere stays judged: `fb` left ccd/ccd and went nowhere.
     const vanished: Tree = { 'ccd/ccd': movedByteForByte['ccd/ccd']! };
     expect(pureMoveVerdict(base, vanished)?.pure).toBe(false);

@@ -32,11 +32,11 @@ const TRAIN_MOVED = ['_pr_train_py', 'cmd_pr_train_prove', '_ws_train_record', '
  *  stales this list. */
 const LEASE_LIB = CCD_LEASE_LIB;
 const LEASE_MOVED: string[] = [...fs.readFileSync(LEASE_LIB, 'utf8').matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
-/** The fourth library (the Overlord's W1), the pool set. It defines no function yet, only two bounds, so the "defined" checks
- *  read its variables (`[[ -v … ]]`), named from the file's own plain assignments so that growing it never stales this list;
- *  a function added later is picked up too. */
+/** The fourth library (the Overlord's W1), the pool set: NEW code, no function moved from ccd/ccd. It defines two
+ *  functions and two bounds, so the "defined" checks read both its functions and its variables (`[[ -v … ]]`), each named
+ *  from the file's own definitions and plain assignments so that growing it never stales these lists. */
 const POOLSET_LIB = CCD_POOLSET_LIB;
-const POOLSET_MOVED: string[] = [...fs.readFileSync(POOLSET_LIB, 'utf8').matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
+const POOLSET_DEFINED: string[] = [...fs.readFileSync(POOLSET_LIB, 'utf8').matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
 const POOLSET_VARS: string[] = [...fs.readFileSync(POOLSET_LIB, 'utf8').matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1]!);
 const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 
@@ -76,7 +76,7 @@ function driver(name: string, body: string): string {
   fs.writeFileSync(file, `${body}\n`, { mode: 0o644 });
   return file;
 }
-const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED, ...POOLSET_MOVED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done; for v in ${POOLSET_VARS.join(' ')}; do [[ -v $v ]] && echo "has $v"; done`;
+const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED, ...POOLSET_DEFINED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done; for v in ${POOLSET_VARS.join(' ')}; do [[ -v $v ]] && echo "has $v"; done`;
 function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err: string } {
   const r = spawnSync('bash', [driver('sourced.sh', SOURCED), ccd],
     { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(extra), { systemd: true, tmux: true, net: true }) });
@@ -198,7 +198,7 @@ describe('a faithful copy loads', () => {
     const r = sourced(plant());
     expect(r.err).toBe('');
     expect(r.out).toContain('rc=0');
-    for (const f of [...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED, ...POOLSET_MOVED, ...POOLSET_VARS]) expect(r.out, f).toContain(`has ${f}`);
+    for (const f of [...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED, ...POOLSET_DEFINED, ...POOLSET_VARS]) expect(r.out, f).toContain(`has ${f}`);
   });
 });
 

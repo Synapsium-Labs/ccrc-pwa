@@ -308,7 +308,7 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   },
   {
     name: 'set-multi-outside', accountPool: 'pool-ab', set: SET(['pool-a', 'pool-b'], false), expect: 'mismatch',
-    why: 'a pool in neither name of a two-name set is refused; "pool-ab" also sits inside the joined spelling "pool-a,pool-b"',
+    why: 'a pool in neither name of a two-name set is refused; "pool-ab" shares a prefix with "pool-a", the first name',
   },
   {
     name: 'set-untagged-account-not-admitted', accountPool: null, set: SET(['pool-a'], false), expect: 'mismatch',

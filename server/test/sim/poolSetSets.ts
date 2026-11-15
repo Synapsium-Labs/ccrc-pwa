@@ -23,6 +23,7 @@ const wordOf = (v: { ok: boolean; reason?: string }): string =>
 
 const tagged = (...pools: [string, ...string[]]): AccountPoolWire => ({ state: 'tagged', pools, origin: 'central' });
 const untagged: AccountPoolWire = { state: 'untagged', origin: 'central' };
+const spelled = (spelling: string) => ({ kind: 'spelled', spelling });
 
 // ---------- poolRule ----------
 
@@ -53,6 +54,15 @@ export function poolRuleCases(m: Pick<PoolRuleModule, 'poolRule'>): Record<strin
         .toStrictEqual({ ok: false, reason: 'pool-mismatch', side: 'set', account: { untagged: true }, set: 'pool-a' });
       expect(rule(tagged('pool-a'), { state: 'set', set: { pools: [], untagged: false } }))
         .toStrictEqual({ ok: false, reason: 'pool-mismatch', side: 'set', account: { pool: 'pool-a' }, set: '-' });
+    },
+    'a set with no spelling is labelled by why, three labels apart (review 2120 F1)': () => {
+      const label = (pools: string[], u: boolean) => {
+        const v = rule(tagged('pool-a'), { state: 'set', set: { pools, untagged: u } });
+        return v.ok === false && v.reason === 'pool-mismatch' && v.side === 'set' ? v.set : JSON.stringify(v);
+      };
+      expect(label([], false)).toBe('-');
+      expect(label(['Pool-B'], false)).toBe('?name');
+      expect(label(POOL_SET_AT_CAP_SPELLING.split(','), true)).toBe('?over-cap');
     },
     'a bad set is undecidable on the SET side over every account state, an untagged one included': () => {
       const accounts: AccountPoolWire[] = [untagged, tagged('pool-a'), { state: 'unreadable' }, { state: 'stale' }, { state: 'malformed' }];
@@ -107,8 +117,10 @@ const RULE_SET: MutantSet<PoolRuleModule> = {
     { id: 'R7 only the first of the account\'s pools is asked', old: 'account.pools.some((p) => set.pools.includes(p))', new: '[account.pools[0]].some((p) => set.pools.includes(p))' },
     { id: 'R8 the empty set serves', old: 'account.pools.some((p) => set.pools.includes(p))', new: 'account.pools.some((p) => set.pools.length === 0 || set.pools.includes(p))' },
     { id: 'R9 a failed account is not undecidable under a set', old: "  if (projectPool.state === 'set') {\n    if (account.state === 'unreadable' || account.state === 'malformed' || account.state === 'stale') {\n      return { ok: false, reason: 'pool-undecidable', side: 'account', state: account.state };\n    }\n", new: "  if (projectPool.state === 'set') {\n    if (account.state === 'stale') return { ok: true, why: 'in-set' };\n" },
-    { id: 'R10 the set is named by a second spelling', old: "poolSetSpelling(set) ?? '-'", new: "set.pools.join(',') || '-'" },
-    { id: 'R11 the empty set has a spelling of its own', old: "poolSetSpelling(set) ?? '-'", new: 'poolSetSpelling(set) ?? \'\'' },
+    { id: 'R10 the set is named by a second spelling', old: "spelling.kind === 'spelled' ? spelling.spelling\n", new: "spelling.kind === 'spelled' ? set.pools.join(',')\n" },
+    { id: 'R11 the empty set has a spelling of its own', old: "spelling.kind === 'empty' ? '-'", new: "spelling.kind === 'empty' ? ''" },
+    { id: 'R16 an unspellable set reads as the empty one', old: "spelling.kind === 'empty' ? '-' : `?${spelling.why}`", new: "'-'" },
+    { id: 'R17 the two unspellable reasons read alike', old: "`?${spelling.why}`", new: "'?'" },
     { id: 'R12 an untagged account is named by a pool', old: "account: { untagged: true }, set: spelled", new: "account: { pool: '' }, set: spelled" },
     { id: 'R13 the set mismatch names the project side', old: "reason: 'pool-mismatch', side: 'set', account: { pool: account.pools[0] }", new: "reason: 'pool-mismatch', side: 'project', account: { pool: account.pools[0] }" },
     { id: 'R14 an unreadable account decides before an untagged project', old: "  if (projectPool.state === 'untagged') return { ok: true, why: 'untagged-project' };", new: "  if (account.state === 'unreadable') return { ok: false, reason: 'pool-undecidable', side: 'account', state: 'unreadable' };\n  if (projectPool.state === 'untagged') return { ok: true, why: 'untagged-project' };" },
@@ -122,25 +134,34 @@ const RULE_SET: MutantSet<PoolRuleModule> = {
 export function poolSetSpellingCases(m: Pick<PoolSetModule, 'poolSetSpelling'>): Record<string, SuiteCase> {
   return {
     'every row of the spelling table spells as it says': () => {
-      for (const c of POOL_SET_SPELL_CASES) expect(m.poolSetSpelling(c.set), `${c.name}: ${c.why}`).toBe(c.out);
+      for (const c of POOL_SET_SPELL_CASES) expect(m.poolSetSpelling(c.set), `${c.name}: ${c.why}`).toStrictEqual(c.out);
     },
     'the spelling sorts ascending by byte order, and sorting is not by length': () => {
-      expect(m.poolSetSpelling({ pools: ['pool-b', 'pool-a'], untagged: false })).toBe('pool-a,pool-b');
-      expect(m.poolSetSpelling({ pools: ['pool-ab', 'pool-b', 'pool-a'], untagged: false })).toBe('pool-a,pool-ab,pool-b');
-      expect(m.poolSetSpelling({ pools: ['b', 'aa', 'a'], untagged: true })).toBe('a,aa,b+untagged');
+      expect(m.poolSetSpelling({ pools: ['pool-b', 'pool-a'], untagged: false })).toStrictEqual(spelled('pool-a,pool-b'));
+      expect(m.poolSetSpelling({ pools: ['pool-ab', 'pool-b', 'pool-a'], untagged: false })).toStrictEqual(spelled('pool-a,pool-ab,pool-b'));
+      expect(m.poolSetSpelling({ pools: ['b', 'aa', 'a'], untagged: true })).toStrictEqual(spelled('a,aa,b+untagged'));
     },
     'repeats drop, and the input is not mutated': () => {
       const pools = ['pool-b', 'pool-a', 'pool-b'];
-      expect(m.poolSetSpelling({ pools, untagged: false })).toBe('pool-a,pool-b');
+      expect(m.poolSetSpelling({ pools, untagged: false })).toStrictEqual(spelled('pool-a,pool-b'));
       expect(pools).toStrictEqual(['pool-b', 'pool-a', 'pool-b']);
     },
     'the cap: exactly 1,024 bytes spells, 1,025 does not': () => {
       const pools = POOL_SET_AT_CAP_SPELLING.split(',');
+      const overCap = { kind: 'unspellable', why: 'over-cap' };
       expect(POOL_SET_AT_CAP_SPELLING.length).toBe(1024);
-      expect(m.poolSetSpelling({ pools, untagged: false })).toBe(POOL_SET_AT_CAP_SPELLING);
-      expect(m.poolSetSpelling({ pools: [...pools.slice(0, -1), 'n2050'], untagged: false })).toBeNull();   // 1,025 bytes
-      expect(m.poolSetSpelling({ pools: [...pools, 'n206'], untagged: false })).toBeNull();
-      expect(m.poolSetSpelling({ pools, untagged: true })).toBeNull();
+      expect(m.poolSetSpelling({ pools, untagged: false })).toStrictEqual(spelled(POOL_SET_AT_CAP_SPELLING));
+      expect(m.poolSetSpelling({ pools: [...pools.slice(0, -1), 'n2050'], untagged: false })).toStrictEqual(overCap);   // 1,025 bytes
+      expect(m.poolSetSpelling({ pools: [...pools, 'n206'], untagged: false })).toStrictEqual(overCap);
+      expect(m.poolSetSpelling({ pools, untagged: true })).toStrictEqual(overCap);
+    },
+    'the empty set, a bad name and an over-cap set are three answers, never one (review 2120 F1)': () => {
+      const answers = [
+        m.poolSetSpelling({ pools: [], untagged: false }),
+        m.poolSetSpelling({ pools: ['Pool-A'], untagged: false }),
+        m.poolSetSpelling({ pools: POOL_SET_AT_CAP_SPELLING.split(','), untagged: true }),
+      ];
+      expect(answers).toStrictEqual([{ kind: 'empty' }, { kind: 'unspellable', why: 'name' }, { kind: 'unspellable', why: 'over-cap' }]);
     },
   };
 }
@@ -151,11 +172,14 @@ const SPELL_SET: MutantSet<PoolSetModule> = {
     { id: 'L1 no sort', old: '  names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));\n', new: '' },
     { id: 'L2 sorted descending', old: '(a < b ? -1 : a > b ? 1 : 0)', new: '(a < b ? 1 : a > b ? -1 : 0)' },
     { id: 'L3 repeats kept', old: '[...new Set(set.pools)]', new: '[...set.pools]' },
-    { id: 'L4 the empty set spells', old: '  if (names.length === 0 && !set.untagged) return null;\n', new: '' },
-    { id: 'L5 an unspellable name spells', old: '  if (names.some((n) => !POOL_NAME_RE.test(n))) return null;\n', new: '' },
-    { id: 'L6 no cap', old: 'return spelling.length > POOL_SET_SPELLING_MAX_BYTES ? null : spelling;', new: 'return spelling;' },
-    { id: 'L7 the cap one early', old: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES ? null', new: 'spelling.length >= POOL_SET_SPELLING_MAX_BYTES ? null' },
-    { id: 'L8 the cap one late', old: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES ? null', new: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES + 1 ? null' },
+    { id: 'L4 the empty set spells', old: "  if (names.length === 0 && !set.untagged) return { kind: 'empty' };\n", new: '' },
+    { id: 'L5 an unspellable name spells', old: "  if (names.some((n) => !POOL_NAME_RE.test(n))) return { kind: 'unspellable', why: 'name' };\n", new: '' },
+    { id: 'L6 no cap', old: "  if (spelling.length > POOL_SET_SPELLING_MAX_BYTES) return { kind: 'unspellable', why: 'over-cap' };\n", new: '' },
+    { id: 'L7 the cap one early', old: "spelling.length > POOL_SET_SPELLING_MAX_BYTES) return { kind", new: "spelling.length >= POOL_SET_SPELLING_MAX_BYTES) return { kind" },
+    { id: 'L8 the cap one late', old: "spelling.length > POOL_SET_SPELLING_MAX_BYTES) return { kind", new: "spelling.length > POOL_SET_SPELLING_MAX_BYTES + 1) return { kind" },
+    { id: 'L11 a bad name reads as the empty set', old: "return { kind: 'unspellable', why: 'name' };", new: "return { kind: 'empty' };" },
+    { id: 'L12 over the cap reads as the empty set', old: "return { kind: 'unspellable', why: 'over-cap' };", new: "return { kind: 'empty' };" },
+    { id: 'L13 over the cap reads as a bad name', old: "return { kind: 'unspellable', why: 'over-cap' };", new: "return { kind: 'unspellable', why: 'name' };" },
     { id: 'L9 the untagged suffix dropped', old: "(set.untagged ? UNTAGGED_SUFFIX : '')", new: "''" },
     { id: 'L10 the untagged suffix always', old: "(set.untagged ? UNTAGGED_SUFFIX : '')", new: 'UNTAGGED_SUFFIX' },
   ],
@@ -210,8 +234,8 @@ const PARSE_SET: MutantSet<PoolSetModule> = {
     { id: 'P2 repeats allowed', old: '!(pools[i - 1]! < n)', new: 'pools[i - 1]! > n' },
     { id: 'P3 descending required', old: '!(pools[i - 1]! < n)', new: '!(pools[i - 1]! > n)' },
     { id: 'P4 the byte cap dropped', old: ' || spelling.length > POOL_SET_SPELLING_MAX_BYTES', new: '' },
-    { id: 'P5 the byte cap one early', old: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES) return', new: 'spelling.length >= POOL_SET_SPELLING_MAX_BYTES) return' },
-    { id: 'P6 the byte cap one late', old: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES) return', new: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES + 1) return' },
+    { id: 'P5 the byte cap one early', old: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES) return { ok', new: 'spelling.length >= POOL_SET_SPELLING_MAX_BYTES) return { ok' },
+    { id: 'P6 the byte cap one late', old: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES) return { ok', new: 'spelling.length > POOL_SET_SPELLING_MAX_BYTES + 1) return { ok' },
     { id: 'P7 the name pattern dropped', old: '    if (!POOL_NAME_RE.test(n)) return { ok: false };\n', new: '' },
     { id: 'P8 the suffix never read', old: 'spelling.endsWith(UNTAGGED_SUFFIX)', new: 'false' },
     { id: 'P10 the suffix alone is malformed', old: 'if (head.length === 0) return { ok: true, set: { pools: [], untagged: true } };', new: 'if (head.length === 0) return { ok: false };' },

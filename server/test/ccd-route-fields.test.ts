@@ -216,6 +216,9 @@ describe('the pool set route fields: poolset and acctorder', () => {
     expect(route(`--session ${ID} --set acctorder=claude-a,claude-b`).status).toBe(0);
     expect(h.reg(ID, 'acctorder')).toBe('claude-a,claude-b');
     expect(route(`--session ${ID} --set acctorder=lane-not-on-the-roster`).status, 'shape only, open question 9').toBe(0);
+    const id64 = 'a'.repeat(64);
+    expect(route(`--session ${ID} --set acctorder=${id64},claude-a`).status, 'a 64-character id is ACCOUNT_ID_RE\'s longest').toBe(0);
+    expect(h.reg(ID, 'acctorder')).toBe(`${id64},claude-a`);
     for (const bad of ['claude-a,claude-a', 'claude a', 'claude/a', 'claude-a,', ',claude-a', `${'a'.repeat(65)}`]) {
       const r = route(`--session ${ID} --set 'acctorder=${bad}'`);
       expect(r.status, bad).not.toBe(0);

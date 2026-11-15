@@ -13,6 +13,7 @@ import type { ProjectPoolWire } from '../../shared/api.js';
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
 import type { AccountPoolWire } from '../../shared/poolrule.js';
 import { POOL_RULE_CASES, POOL_RULE_PROJECT_CASES, POOL_RULE_SET_CASES, wireFor } from './fixtures/poolRule.js';
+import { poolRuleCases } from './sim/poolSetSets.js';
 
 const taggedAccount = (name: string): AccountPoolWire =>
   ({ state: 'tagged', pools: [name], origin: 'central' });
@@ -310,4 +311,13 @@ describe('shared/poolrule.ts is the pure L0 module its ring requires', () => {
     expect(code(), 'poolrule.ts names a reply — an L0 decision does not answer HTTP')
       .not.toMatch(/\breply\b|\bFastify|\bapp\s*\./);
   });
+});
+
+// The poolRule suite cases are written once in `sim/poolSetSets.ts`; they run here against the real module, so a pull
+// request that touches `shared/poolrule.ts` alone reds on a mutant this file's own rows miss (review 2120 F3: the
+// account in two pools), and `sim/mutation-floors.test.ts` runs the same cases against each mutant.
+describe('the poolRule mutation suite cases pass on the real module', () => {
+  for (const [name, fn] of Object.entries(poolRuleCases({ poolRule }))) {
+    it(name, () => { fn(); });
+  }
 });

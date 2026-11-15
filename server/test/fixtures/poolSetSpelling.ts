@@ -2,12 +2,14 @@
 // `parsePoolSet` and `poolSetSpelling` (`shared/poolset.ts`) are driven through it by `pool-set-spelling.test.ts`; a
 // LATER pull request of the plan (Task 2) drives bash `_poolset_parse` (`ccd/lib/pool-set.sh`) over the same rows, so
 // the two spellings cannot drift. Pool names are the fixture names `pool-a`, `pool-b` and `pool-ab` only.
-import type { PoolSet } from '../../../shared/poolset.js';
+import type { PoolSet, PoolSetSpelled } from '../../../shared/poolset.js';
 
 /** Spelling in; the set it reads as, or `'malformed'`. */
 export interface ParseCase { name: string; spelling: string; out: PoolSet | 'malformed'; why: string }
-/** Set in; its spelling, or `null` (no spelling). */
-export interface SpellCase { name: string; set: PoolSet; out: string | null; why: string }
+/** Set in; its spelling, or which of the two ways it has none: the empty set, or one the grammar cannot spell. */
+export interface SpellCase { name: string; set: PoolSet; out: PoolSetSpelled; why: string }
+
+const SPELLED = (spelling: string): PoolSetSpelled => ({ kind: 'spelled', spelling });
 
 const S = (pools: readonly string[], untagged: boolean): PoolSet => ({ pools, untagged });
 const name32 = `a${'b'.repeat(31)}`;            // the longest pool name POOL_NAME_RE allows
@@ -56,18 +58,22 @@ export const POOL_SET_PARSE_CASES: readonly ParseCase[] = [
   { name: 'upper-case suffix', spelling: 'pool-a+UNTAGGED', out: 'malformed', why: 'the suffix is exact' },
   { name: 'a plus without the word', spelling: 'pool-a+', out: 'malformed', why: 'the suffix is exact' },
   { name: 'a pool named for the suffix word', spelling: 'untagged', out: S(['untagged'], false), why: '`untagged` is a valid pool name; only `+untagged` is the suffix' },
+  { name: 'ascending in bytes, not in a locale\'s collation', spelling: 'pool-b,poola', out: S(['pool-b', 'poola'], false), why: '`-` (0x2d) sorts before `a` in bytes; en_US collation ignores the dash and puts `poola` first, so only `local LC_ALL=C` keeps bash bytewise (review 2120 F2)' },
+  { name: 'descending in bytes, ascending in a locale\'s collation', spelling: 'poola,pool-b', out: 'malformed', why: 'the other side of the row above: bytes decide, never the locale' },
 ];
 
 export const POOL_SET_SPELL_CASES: readonly SpellCase[] = [
-  { name: 'one name', set: S(['pool-a'], false), out: 'pool-a', why: 'the smallest named set' },
-  { name: 'sorted', set: S(['pool-b', 'pool-a'], false), out: 'pool-a,pool-b', why: 'the spelling sorts: one set has one spelling' },
-  { name: 'sorted by byte order, a prefix first', set: S(['pool-ab', 'pool-a'], false), out: 'pool-a,pool-ab', why: 'a prefix sorts before its extension' },
-  { name: 'drops repeats', set: S(['pool-a', 'pool-b', 'pool-a'], false), out: 'pool-a,pool-b', why: 'a set holds a name once' },
-  { name: 'untagged suffix', set: S(['pool-b'], true), out: 'pool-b+untagged', why: 'the yes is the suffix' },
-  { name: 'untagged alone', set: S([], true), out: '+untagged', why: 'no names, the yes' },
-  { name: 'the empty set has no spelling', set: S([], false), out: null, why: 'open question 3: an empty route value means clear' },
-  { name: 'a name the grammar cannot spell', set: S(['Pool-A'], false), out: null, why: 'a spelling `parsePoolSet` would refuse is never handed out' },
-  { name: 'one bad name among good ones', set: S(['pool-a', 'bad name'], true), out: null, why: 'all or nothing' },
-  { name: 'at the cap', set: { pools: [...ascending(204), 'n205'], untagged: false }, out: AT_CAP, why: 'exactly POOL_SET_SPELLING_MAX_BYTES is spelled' },
-  { name: 'past the cap', set: { pools: ascending(250), untagged: false }, out: null, why: 'a spelling over POOL_SET_SPELLING_MAX_BYTES is never handed out' },
+  { name: 'one name', set: S(['pool-a'], false), out: SPELLED('pool-a'), why: 'the smallest named set' },
+  { name: 'sorted', set: S(['pool-b', 'pool-a'], false), out: SPELLED('pool-a,pool-b'), why: 'the spelling sorts: one set has one spelling' },
+  { name: 'sorted by byte order, a prefix first', set: S(['pool-ab', 'pool-a'], false), out: SPELLED('pool-a,pool-ab'), why: 'a prefix sorts before its extension' },
+  { name: 'sorted by bytes, never by a locale', set: S(['poola', 'pool-b'], false), out: SPELLED('pool-b,poola'), why: '`-` sorts before `a` in bytes (review 2120 F2)' },
+  { name: 'drops repeats', set: S(['pool-a', 'pool-b', 'pool-a'], false), out: SPELLED('pool-a,pool-b'), why: 'a set holds a name once' },
+  { name: 'untagged suffix', set: S(['pool-b'], true), out: SPELLED('pool-b+untagged'), why: 'the yes is the suffix' },
+  { name: 'untagged alone', set: S([], true), out: SPELLED('+untagged'), why: 'no names, the yes' },
+  { name: 'the empty set has no spelling', set: S([], false), out: { kind: 'empty' }, why: 'open question 3: an empty route value means clear, and only this answer may become one' },
+  { name: 'a name the grammar cannot spell', set: S(['Pool-A'], false), out: { kind: 'unspellable', why: 'name' }, why: 'a spelling `parsePoolSet` would refuse is never handed out, and it is not the empty set' },
+  { name: 'one bad name among good ones', set: S(['pool-a', 'bad name'], true), out: { kind: 'unspellable', why: 'name' }, why: 'all or nothing' },
+  { name: 'a bad name in an otherwise empty-looking set', set: S([''], false), out: { kind: 'unspellable', why: 'name' }, why: 'an empty NAME is a bad name, never the empty set' },
+  { name: 'at the cap', set: { pools: [...ascending(204), 'n205'], untagged: false }, out: SPELLED(AT_CAP), why: 'exactly POOL_SET_SPELLING_MAX_BYTES is spelled' },
+  { name: 'past the cap', set: { pools: ascending(250), untagged: false }, out: { kind: 'unspellable', why: 'over-cap' }, why: 'a spelling over POOL_SET_SPELLING_MAX_BYTES is never handed out, and it is not the empty set' },
 ];
