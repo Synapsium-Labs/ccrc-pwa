@@ -14,7 +14,7 @@ import {
 } from '../../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
 import { DocsBanners } from '../docs/DocsBanners';
-import { DocsHead, soonUntil, type FreshChipState } from '../docs/DocsHead';
+import { DOCS_COMPACT_QUERY, DocsHead, soonUntil, type FreshChipState } from '../docs/DocsHead';
 import { DocsFailureView } from '../docs/DocsFailureView';
 import { DocsIndexView } from '../docs/DocsIndexView';
 import { DocsLeaf } from '../docs/DocsLeaf';
@@ -24,6 +24,8 @@ import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
 import { createFetchQueue } from '../docs/fetchQueue';
 import { createExportAssets } from '../docs/export/exportAssets';
 import { ExportBodyContext, type ExportBody } from '../docs/exportBody';
+import { ReaderBarContext, type ReaderBar, type ReaderBarSlot } from '../docs/readerBar';
+import { readerChromeFor } from '../docs/reader/policy';
 import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
 import { docsLocation } from '../docs/docsLinks';
 import {
@@ -37,6 +39,7 @@ import { HighlighterContext, type HighlighterContextValue } from '../lib/highlig
 import type { HighlightStore } from '../lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
+import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '@ccrc/ui';
 import '../docs/docs.css';
 
@@ -187,6 +190,11 @@ export function DocsScreen(p: {
   const [exportBody, setExportBody] = useState<ExportBody | null>(null);
   const [pageStore, setPageStore] = useState<HighlightStore | null>(null);
   const [plainAt, setPlainAt] = useState<string | null>(null);
+  // The one bar (the library 1.1 take-up plan, refinement (i)): a frame mounted at the compact width is on ccrc's bar,
+  // and once it is ready its handle comes back here for the head. A width change moves the next mount, never this one.
+  const [readerBar, setReaderBar] = useState<ReaderBar | null>(null);
+  const compactWidth = useMediaQuery(DOCS_COMPACT_QUERY);
+  const barSlot = useMemo<ReaderBarSlot>(() => ({ chrome: readerChromeFor(compactWidth), publish: setReaderBar }), [compactWidth]);
   // Leaving the page brings the reader back, on a later return too (refinement (a)); `setTrail`'s effect has this form.
   useEffect(() => { setPlainAt((at) => (at === null || at === here ? at : null)); }, [here]);
 
@@ -333,6 +341,7 @@ export function DocsScreen(p: {
           <DocsHead
             page={page} visit={visit} tree={tree} leafImage={leafImage} exportBody={exportBody} pageStore={pageStore}
             exportAssets={exportAssets} plainView={plainAt === here} onPlainView={() => setPlainAt(here)}
+            readerBar={readerBar}
           />
         )}
         {note !== null && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
@@ -340,7 +349,9 @@ export function DocsScreen(p: {
           <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
         )}
         <ExportBodyContext value={setExportBody}>
-          <HighlighterContext value={withPublish}>{body}</HighlighterContext>
+          <ReaderBarContext value={barSlot}>
+            <HighlighterContext value={withPublish}>{body}</HighlighterContext>
+          </ReaderBarContext>
         </ExportBodyContext>
       </div>
     </DocsAssetContext>
