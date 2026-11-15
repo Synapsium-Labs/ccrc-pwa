@@ -5,11 +5,12 @@
  * The agent op `overlord-history` runs `ccrc history`'s three read verbs (search, describe, expand) over every project,
  * in a worker thread of the agent's process. This file is the op's L0 vocabulary: the request, its ONE reader
  * (`readOverlordHistoryRequest`, called by the agent's `validateReq` arm and, from PR B1, the server's door), the answer,
- * and its ONE reader (`readOverlordHistoryAnswer`, called by the server's adapter). It imports nothing.
+ * and its ONE reader (`readOverlordHistoryAnswer`, called by the server's adapter).
  *
  * - The request names one target (question 6): `all`, one `project`, or one `session` id's family, every generation.
  *   It carries `agents` (the CLI's `--agents`) and the verb's own arguments. `regex`, and any argument spelling
- *   `--regex`, is refused (ruled F3, question 16): from the wire a regex search would be a child process.
+ *   `--regex`, is refused (ruled F3, question 16): from the wire a regex search would be a child process. A bare `--`
+ *   is refused too (`separator`, review 2126 F3): after it every word is a search word, which no read needs.
  * - The reader ignores keys it does not know (absence permits): a newer server's extra key never makes an older agent
  *   refuse.
  * - The answer is one discriminated outcome (question 5), always on `ResOk`. A `rows` answer carries exactly
@@ -50,24 +51,29 @@ export interface OverlordHistoryRequest {
 
 /** Why the reader refused a request. A closed word, never a message. */
 export type OverlordHistoryRequestRefusal =
-  | 'not-object' | 'oversize' | 'bad-verb' | 'bad-target' | 'bad-project' | 'bad-session' | 'bad-agents' | 'bad-args' | 'regex';
+  | 'not-object' | 'oversize' | 'bad-verb' | 'bad-target' | 'bad-project' | 'bad-session' | 'bad-agents' | 'bad-args' | 'regex'
+  | 'separator';
 const REQUEST_REFUSAL_MAP: Record<OverlordHistoryRequestRefusal, true> = {
   'not-object': true, oversize: true, 'bad-verb': true, 'bad-target': true, 'bad-project': true, 'bad-session': true,
-  'bad-agents': true, 'bad-args': true, regex: true,
+  'bad-agents': true, 'bad-args': true, regex: true, separator: true,
 };
 /** Every `OverlordHistoryRequestRefusal`, derived from the type. */
 export const OVERLORD_HISTORY_REQUEST_REFUSALS = Object.keys(REQUEST_REFUSAL_MAP) as OverlordHistoryRequestRefusal[];
 
-/** The request's bound, in UTF-8 bytes of its JSON. The server's door answers a larger body 413 before any agent is asked. */
+/** The request's bound, in UTF-8 bytes of its body's JSON (the agent measures the frame less its envelope keys `t`, `id`
+ *  and `op`). The server's door answers a larger body 413 before any agent is asked. */
 export const OVERLORD_HISTORY_REQUEST_MAX_BYTES = 8192;
 /** The most arguments a request carries, and the longest one. */
 export const OVERLORD_HISTORY_ARGS_MAX = 32;
 export const OVERLORD_HISTORY_ARG_MAX_CHARS = 1024;
-/** A project name or session id: the registry id grammar (lib.mjs's idOk), at most this long. */
+/** A project name or session id: the registry id grammar (lib.mjs's idOk, at most its SPOOL_ID_MAX), a hand copy that
+ *  overlord-read.test.ts checks against lib both ways. */
 const NAME_RE = /^[A-Za-z0-9._-]{1,224}$/;
 /** Arguments the target and the flags own, which the args list may not spell: the scope is the target's, `--agents`
- *  is the flag's and `--json` is the op's. `--regex` is refused with its own word. */
-const SCOPE_ARGS: ReadonlySet<string> = new Set(['--session', '--project', '--workspace', '--agents', '--json']);
+ *  is the flag's and the JSON form is the op's. `--regex` is refused with its own word. A hand copy of lib.mjs's
+ *  COMMON_READ_OPTIONS, which overlord-read.test.ts checks against lib both ways. */
+export const OVERLORD_HISTORY_SCOPE_ARGS: readonly string[] = Object.freeze(['--session', '--project', '--workspace', '--agents', '--json']);
+const SCOPE_ARGS: ReadonlySet<string> = new Set(OVERLORD_HISTORY_SCOPE_ARGS);
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const nameOk = (v: unknown): v is string => typeof v === 'string' && NAME_RE.test(v) && v !== '.' && v !== '..';
@@ -99,12 +105,13 @@ export function readOverlordHistoryRequest(raw: unknown):
   if (typeof agents !== 'boolean') return no('bad-agents');
   const args = raw['args'] ?? [];
   if (!Array.isArray(args) || args.length > OVERLORD_HISTORY_ARGS_MAX) return no('bad-args');
-  for (const a of args) {
-    if (typeof a !== 'string' || a.length > OVERLORD_HISTORY_ARG_MAX_CHARS) return no('bad-args');
-    if (a === '--regex' || a.startsWith('--regex=')) return no('regex');
-    if (SCOPE_ARGS.has(a)) return no('bad-args');
-  }
-  return { ok: true, request: { verb: verb as OverlordHistoryVerb, target, agents, args: [...(args as string[])] } };
+  for (const a of args) if (typeof a !== 'string' || a.length > OVERLORD_HISTORY_ARG_MAX_CHARS) return no('bad-args');
+  const words = args as string[];
+  // `regex` first, wherever it stands: a `--` before it does not make it a search word here.
+  if (words.some((a) => a === '--regex' || a.startsWith('--regex='))) return no('regex');
+  if (words.includes('--')) return no('separator');
+  if (words.some((a) => SCOPE_ARGS.has(a))) return no('bad-args');
+  return { ok: true, request: { verb: verb as OverlordHistoryVerb, target, agents, args: [...words] } };
 }
 
 /** The scope record's `id`: one canonical string per target, so two spellings of one target never read as two. */
@@ -147,16 +154,29 @@ export const HISTORY_REASON_WORDS = Object.keys(HISTORY_REASON_MAP) as HistoryRe
  *  `not-indexed` exit 6 from a verb; `recall-off` exit 8 (unreachable: the read consults no session's marker, question
  *  7); `no-store` exit 9; `store-absent` an absent store; `internal` any failure the op masks. */
 export type OverlordHistoryOwnWord = 'not-indexed' | 'recall-off' | 'no-store' | 'store-absent' | 'internal';
-const OWN_WORD_MAP: Record<OverlordHistoryOwnWord, true> = {
-  'not-indexed': true, 'recall-off': true, 'no-store': true, 'store-absent': true, internal: true,
-};
-/** Every `OverlordHistoryOwnWord`, derived from the type. */
+/** The outcomes that carry an own word. */
+type OwnWordOutcome = 'verb-refused' | 'store-refused' | 'failed';
+/** Each own word and the ONE outcome that carries it (review 2126 F6: the answer reader's own-word branches read this map,
+ *  so a word added here is read back, never `off-shape`). */
+const OWN_WORD_MAP = {
+  'not-indexed': 'verb-refused', 'recall-off': 'store-refused', 'no-store': 'store-refused', 'store-absent': 'store-refused',
+  internal: 'failed',
+} as const satisfies Record<OverlordHistoryOwnWord, OwnWordOutcome>;
+/** Every `OverlordHistoryOwnWord`, derived from the map. */
 export const OVERLORD_HISTORY_OWN_WORDS = Object.keys(OWN_WORD_MAP) as OverlordHistoryOwnWord[];
+/** Whether `v` is one of the op's own words. */
+export function isOverlordHistoryOwnWord(v: unknown): v is OverlordHistoryOwnWord {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(OWN_WORD_MAP, v);
+}
+/** The own words one outcome carries, derived from the map. */
+type OwnWordsOf<O extends OwnWordOutcome> = { [W in OverlordHistoryOwnWord]: (typeof OWN_WORD_MAP)[W] extends O ? W : never }[OverlordHistoryOwnWord];
+/** Whether `word` is an own word that `outcome` carries. */
+const ownWordOf = (outcome: OwnWordOutcome, word: unknown): boolean => isOverlordHistoryOwnWord(word) && OWN_WORD_MAP[word] === outcome;
 
-/** A verb's refusal: history's word, or `not-indexed`. */
-export type OverlordVerbRefusedWord = HistoryReasonWord | 'not-indexed';
-/** The store's refusal: history's word, or one of the op's three store words. */
-export type OverlordStoreRefusedWord = HistoryReasonWord | 'recall-off' | 'no-store' | 'store-absent';
+/** A verb's refusal: history's word, or its own word (`not-indexed`). */
+export type OverlordVerbRefusedWord = HistoryReasonWord | OwnWordsOf<'verb-refused'>;
+/** The store's refusal: history's word, or one of the op's store words. */
+export type OverlordStoreRefusedWord = HistoryReasonWord | OwnWordsOf<'store-refused'>;
 
 /** The outcome's discriminant (Table 2's agent half). */
 export type OverlordHistoryOutcome =
@@ -190,7 +210,7 @@ export type OverlordHistoryAnswer =
   | { readonly outcome: 'busy' }
   | { readonly outcome: 'too-large'; readonly bytes: number }
   | { readonly outcome: 'deadline' }
-  | { readonly outcome: 'failed'; readonly word: 'internal' };
+  | { readonly outcome: 'failed'; readonly word: OwnWordsOf<'failed'> };
 
 /** The whole answer's bound, in UTF-8 bytes of its JSON, measured inside the worker before it posts. The verbs already
  *  keep their output within `lib.mjs#OUTPUT_CAP`; this is the backstop. */
@@ -243,16 +263,15 @@ export function readOverlordHistoryAnswer(raw: unknown): OverlordHistoryAnswer |
   switch (outcome) {
     case 'rows': return rowsOf(raw) ?? 'off-shape';
     case 'verb-refused':
-      return has(HISTORY_REASON_MAP, word) || word === 'not-indexed' ? { outcome, word: word as OverlordVerbRefusedWord } : 'off-shape';
+      return has(HISTORY_REASON_MAP, word) || ownWordOf(outcome, word) ? { outcome, word: word as OverlordVerbRefusedWord } : 'off-shape';
     case 'store-refused':
-      return has(HISTORY_REASON_MAP, word) || word === 'recall-off' || word === 'no-store' || word === 'store-absent'
-        ? { outcome, word: word as OverlordStoreRefusedWord } : 'off-shape';
+      return has(HISTORY_REASON_MAP, word) || ownWordOf(outcome, word) ? { outcome, word: word as OverlordStoreRefusedWord } : 'off-shape';
     case 'request-refused':
       return has(REQUEST_REFUSAL_MAP, word) ? { outcome, word: word as OverlordHistoryRequestRefusal } : 'off-shape';
     case 'busy': return { outcome };
     case 'deadline': return { outcome };
     case 'too-large': return count(raw['bytes']) ? { outcome, bytes: raw['bytes'] as number } : 'off-shape';
-    case 'failed': return word === 'internal' ? { outcome, word } : 'off-shape';
+    case 'failed': return ownWordOf(outcome, word) ? { outcome, word: word as OwnWordsOf<'failed'> } : 'off-shape';
     default: return 'off-shape';
   }
 }

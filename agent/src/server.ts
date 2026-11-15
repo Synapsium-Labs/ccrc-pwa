@@ -1043,9 +1043,12 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       } satisfies TestboxAdminReq;
     }
     case 'overlord-history': {
-      // The ONE reader (shared/overlordHistory.ts). It ignores the envelope's own keys as it ignores any key it does not
-      // know; a refusal is a HistoryReqRefusal carrying its word, and a request that passes is retyped field by field.
-      const read = readOverlordHistoryRequest(msg);
+      // The ONE reader (shared/overlordHistory.ts), handed the request's body: the frame less its envelope keys, so its
+      // byte bound measures what the server's door bounds (review 2126 F5). A key the reader does not know stays in the
+      // body (it ignores it, and refuses `regex`). A refusal is a HistoryReqRefusal carrying its word, and a request that
+      // passes is retyped field by field.
+      const { t: _t, id: _id, op: _op, ...body } = msg;
+      const read = readOverlordHistoryRequest(body);
       if (!read.ok) return { historyRefused: read.refusal, id };
       return { t: 'req', id, op: 'overlord-history', ...read.request } satisfies OverlordHistoryReq;
     }

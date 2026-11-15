@@ -12,27 +12,31 @@
 //      not consulted (question 7: this read is not that session's recall);
 //   3. its belt is store-only (ruled F4): the pairs the sweep recorded in redact_hashes, never a secret file, so it
 //      imports neither cli.mjs nor sweep.mjs and never reaches loadSecrets.
-// It opens the store with openReader alone (read-only, query_only) and calls no writing form. Its answer is
-// shared/overlordHistory.ts' OverlordHistoryAnswer: a `rows` answer carries exactly {exit, items, shown, total, scope}
-// (ruled R3), every other outcome a closed word. Every answer passes redactFinalJson with the store-only belt. Every throw
-// is caught: a store error is readFailure's word, anything else `internal`; a message reaches stderr only through
-// errLine, which the agent drains and discards.
+// It opens the store through read-context.mjs#openAdmitted, the CLI read paths' own sequence (review 2126 F7), whose
+// handle is openReader's (read-only, query_only), and calls no writing form (overlord-read-scope.test.ts pins its calls).
+// Its answer is shared/overlordHistory.ts' OverlordHistoryAnswer: a `rows` answer carries exactly {exit, items, shown,
+// total, scope} (ruled R3), every other outcome a closed word. Every answer built after the request's re-check passes
+// redactFinalJson with the store-only belt; the constant answers (a request word, `internal`) carry no text to mask.
+// Every throw is caught: a store error is readFailure's word, anything else `internal`; a message reaches stderr only
+// through errLine, which the agent drains and discards.
 import {
-  EXIT, SCHEMA_ADDED, historyPaths, decideCliStore, decideStatusRead, idOk, makePairIndex, redactFinalJson,
-  parseReadArgs, parseGrepArgs, parseDescribeArgs, expandArgsOf,
+  EXIT, SCHEMA_ADDED, idOk, makePairIndex, redactFinalJson, parseReadArgs, parseGrepArgs, parseDescribeArgs, expandArgsOf,
 } from './lib.mjs';
-import { openReader, userVersion } from './store.mjs';
 import { familiesOf, transcriptsOf, scopeJsonOf, runGrep, runDescribe, runExpand } from './recall.mjs';
-import { measureReach, cliFactsOf, readFailure, recordedPairsOf, NO_PAIRS } from './read-context.mjs';
+import { openAdmitted, readFailure, recordedPairsOf, NO_PAIRS } from './read-context.mjs';
 
-/** SQLite's busy timeout on the read handle, below the agent's deadline (20 s, agent/src/historyOp.ts), so a locked store
- *  refuses before the deadline rather than at lib.mjs#BUSY_TIMEOUT_MS (30 s) (ruled R5). It bounds lock waits only. */
+/** SQLite's busy timeout on the read handle, below the agent's deadline (20 s, agent/src/historyOp.ts), so the read's
+ *  first wait on a locked store refuses before the deadline rather than at lib.mjs#BUSY_TIMEOUT_MS (30 s) (ruled R5). It
+ *  bounds each lock wait, not the read: a read that waits more than once, or runs one long statement, is bounded by the
+ *  agent's deadline alone, and its slot frees only on the worker's exit. */
 export const OVERLORD_READ_BUSY_TIMEOUT_MS = 15_000;
 /** The whole answer's bound, in UTF-8 bytes of its JSON: shared/overlordHistory.ts' OVERLORD_HISTORY_ANSWER_MAX_BYTES,
  *  which this plain module cannot import (overlord-read.test.ts checks the two are equal). */
 export const OVERLORD_READ_ANSWER_MAX_BYTES = 65_536;
 
-/** The CLI verb each request verb runs, with its argument parser and runner (each run* with json: true). */
+/** The CLI verb each request verb runs, with its argument parser and runner. Each run* takes `json: true`, so the op
+ *  appends no `--json` to the request's arguments (review 2126 F3: a trailing value-taking option would take it as its
+ *  value, and after a `--` it would be a search word). */
 const VERBS = Object.freeze({
   search: (rc, argv) => {
     const g = parseGrepArgs(argv, rc.nowMs);
@@ -117,31 +121,18 @@ async function readIn(home, request, nowMs) {
   if (sel === null) return refused('request-refused', 'bad-target');
   if (!Array.isArray(request.args) || request.args.some((a) => typeof a !== 'string')) return refused('request-refused', 'bad-args');
   if (request.args.some((a) => a === '--regex' || a.startsWith('--regex='))) return refused('request-refused', 'regex');
-  const argv = [...request.args, '--json'];
+  if (request.args.includes('--')) return refused('request-refused', 'separator');
+  const argv = [...request.args];
   if (!parseReadArgs(CLI_VERB[request.verb], argv).ok) return finished(refused('verb-refused', 'bad-args'), NO_PAIRS);
-  const P = historyPaths(home);
-  const reach = await measureReach(home, '');
-  const d = decideCliStore(cliFactsOf(reach));
-  if (!d.read) {
-    const word = storeWord(d.exit, d.reason);
+  // The admitted store, opened by the CLI's own sequence with the empty role, no store-id fallback and the busy timeout.
+  const admitted = await openAdmitted(home, '', () => null, OVERLORD_READ_BUSY_TIMEOUT_MS);
+  if (!admitted.ok) {
+    const word = storeWord(admitted.exit, admitted.reason);
     return finished(word === null ? FAILED : refused('store-refused', word), NO_PAIRS);
   }
-  let db;
-  try {
-    db = openReader(P.dbFile);
-  } catch (e) {
-    const f = readFailure(e, null, null, null);
-    return finished(f === null ? FAILED : refused('store-refused', f.reason), NO_PAIRS);
-  }
+  const { db, storeId, version } = admitted;
   let idx = NO_PAIRS;
   try {
-    db.exec(`PRAGMA busy_timeout = ${OVERLORD_READ_BUSY_TIMEOUT_MS}`);
-    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
-    const storeId = meta === undefined ? null : meta.v;
-    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
-    const version = userVersion(db);
-    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
-    if (rd.reason !== undefined) return finished(refused('store-refused', rd.reason), idx);
     idx = makePairIndex(recordedPairsOf(db));
     const families = familiesOf(db, sel);
     const agents = request.agents === true;

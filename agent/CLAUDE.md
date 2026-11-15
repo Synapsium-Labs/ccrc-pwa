@@ -131,9 +131,10 @@ get wrong when editing `src/whitelist.ts`.
   `env: {}` and both streams drained, one slot per agent process freed only on the worker's `exit`, and a 20 s deadline.
   The read opens `~/.ccrc/history/` only, read-only (`openReader`), OUTSIDE the read whitelist; it opens no other file
   under `~/.ccrc` (no `ccrc.env`, no token) and no secret file anywhere, and its belt is the store's recorded pairs
-  alone. `validateReq` reads it through `readOverlordHistoryRequest` (`shared/overlordHistory.ts`), which refuses
-  `--regex`; every answer, a refusal or a failure included, is `ok: true`, and a thrown message never reaches the wire
-  or the log. `test/overlord-history-op.test.ts` pins the slot and the masking.
+  alone. `validateReq` reads the frame's body (the frame less `t`, `id` and `op`, so the byte bound is the body's)
+  through `readOverlordHistoryRequest` (`shared/overlordHistory.ts`), which refuses `--regex` and a bare `--`; every
+  answer, a refusal or a failure included, is `ok: true`, and a thrown message never reaches the wire or the log. A
+  closed link terminates its read's worker. `test/overlord-history-op.test.ts` pins the slot, the close and the masking.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.
