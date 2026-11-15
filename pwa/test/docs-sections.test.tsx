@@ -103,14 +103,21 @@ describe('the project, section and leaf pages over a four- or six-section tree',
   });
 
   it('a vision page over a four-section tree says the fleet box does not serve it', async () => {
-    open('/docs/demo/vision', fakeLoaders({ tree: okTree(fourSectionTree()) }));
+    const f = fakeLoaders({ tree: okTree(fourSectionTree()) });
+    open('/docs/demo/vision', f);
     expect(await screen.findByText(/The fleet box does not serve this section yet/)).toBeInTheDocument();
     expect(screen.queryByText('Nothing is listed here.')).toBeNull();
+    // No file read goes out for a section the box does not serve (`file` is the loader that asks ccd's docs-show).
+    expect(f.file).not.toHaveBeenCalled();
+    expect(f.raster).not.toHaveBeenCalled();
   });
 
   it('a vision leaf over a four-section tree says the same, not Not in this listing', async () => {
-    open('/docs/demo/vision/a.md', fakeLoaders({ tree: okTree(fourSectionTree()) }));
+    const f = fakeLoaders({ tree: okTree(fourSectionTree()) });
+    open('/docs/demo/vision/a.md', f);
     expect(await screen.findByText(/The fleet box does not serve this section yet/)).toBeInTheDocument();
     expect(screen.queryByText(/Not in this listing/)).toBeNull();
+    expect(f.file).not.toHaveBeenCalled();
+    expect(f.raster).not.toHaveBeenCalled();
   });
 });
