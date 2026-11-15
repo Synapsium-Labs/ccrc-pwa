@@ -281,6 +281,25 @@ describe('GET /api/accounts', () => {
     ]);
   });
 
+  // Overlord W1 serviceability: the two account facts ride the roster wire, SET ones only. A fact nobody set is
+  // ABSENT (never `null`), because an older server omits both and absence reads as "not set".
+  it('carries fableBilling and continuity for an account that has them, and omits both for one that has neither', async () => {
+    const { roster } = await getPayloadWithRoster(
+      seedLimits({ claude: { five: 2, seven: 3 } }),
+      { version: 1, accounts: [
+        { id: 'lane-a', label: 'A', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan',
+          telemetry: 'anthropic', fableBilling: 'credits', continuity: { recordedAt: 1760000000 } },
+        { id: 'lane-b', label: 'B', configDirSuffix: '.claude-b', exec: { kind: 'generated' }, homeAble: true, hue: 'green',
+          telemetry: 'anthropic' },
+      ] });
+    const a = roster.find((r) => r.id === 'lane-a')!;
+    const b = roster.find((r) => r.id === 'lane-b')!;
+    expect(a.fableBilling).toBe('credits');
+    expect(a.continuity).toEqual({ recordedAt: 1760000000 });
+    expect(Object.prototype.hasOwnProperty.call(b, 'fableBilling')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(b, 'continuity')).toBe(false);
+  });
+
   // T7-R2: the RESOLVED field must follow the CENTRAL edge, not the declared
   // roster field, the moment a `pool_edges` row exists for an account —
   // `NewSessionSheet.tsx:186-188` computing its crossing warning from the

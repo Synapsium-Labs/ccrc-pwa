@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly nineteen import lines: sixteen types, and three values from import-free L0 siblings (D-3021)', () => {
+  it('shared/api.ts has exactly twenty import lines: seventeen types, and three values from import-free L0 siblings (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -175,10 +175,13 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // The list of what ccrc types (Overlord W1, the vocabulary piece) a nineteenth, `IDLE_COMPACT_NUDGE_PROMPT` and
     // `RESUME_PROMPT_PREFIX`, values from the import-free injected-prompts.mjs, which `shared/api.ts` re-exports so no
     // importer changes (`single-definition/injected-prompts.test.ts` and `time-ports.test.ts` hold that it reads nothing).
+    // The account facts (Overlord W1 serviceability A) a twentieth, `RosterFactsWire`, a type from the import-free
+    // rosterFacts.ts, which `RosterWire` extends as it extends `RosterKindWire`.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
       "import type { Hue, RosterKindWire } from './roster.js';",
+      "import type { RosterFactsWire } from './rosterFacts.js';",
       "import type { AccountPoolWire } from './poolrule.js';",
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",

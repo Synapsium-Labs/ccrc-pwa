@@ -23,6 +23,7 @@ import {
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
+import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
@@ -1515,7 +1516,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const rosterWireOf = (accountEdges: ReturnType<typeof readAccountPoolEdges>): RosterWire[] =>
     deps.cfg.roster.accounts.map((a) => ({
       id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
-      pool: a.pool,
+      pool: a.pool, ...rosterFactsWireOf(a),
       ...rosterKindOf(a),
       // T7-R2 (D-3076): the RESOLVED membership (central
       // beats declared beats untagged, design §5.6) — `pool` above is the

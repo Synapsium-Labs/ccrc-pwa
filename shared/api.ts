@@ -9,6 +9,7 @@
 // the parallel reason: this file carries their shapes but does not redefine
 // them.
 import type { Hue, RosterKindWire } from './roster.js';
+import type { RosterFactsWire } from './rosterFacts.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
@@ -4242,7 +4243,7 @@ export type ProjectPlacement =
  * owns the actual colours and resolves each hue per theme, so shipping a hex
  * here would freeze one theme's palette into the wire.
  */
-export interface RosterWire extends RosterKindWire {
+export interface RosterWire extends RosterKindWire, RosterFactsWire {
   id: Wrapper;
   /** Jargon-free, for a human — the one place a wrapper name is translated
    *  (plan: "Move to another account", never "swap wrapper"). */
