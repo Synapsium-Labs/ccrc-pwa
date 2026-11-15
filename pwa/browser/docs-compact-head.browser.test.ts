@@ -1342,8 +1342,14 @@ describe('the desk head (desk-nav Part B)', () => {
         const b = a.getBoundingClientRect();
         const cs = getComputedStyle(a);
         const off = Number.parseFloat(cs.outlineOffset) + Number.parseFloat(cs.outlineWidth);
-        return { inset: off <= 0.5, inside: b.left >= nav.left - 0.5 && b.right <= nav.right + 0.5, style: cs.outlineStyle };
+        return {
+          text: a.textContent ?? '', inset: off <= 0.5, inside: b.left >= nav.left - 0.5 && b.right <= nav.right + 0.5,
+          style: cs.outlineStyle,
+        };
       });
+      // The class alone holds for any crumb: with the first one out of the Tab order, Tab lands on a later one (review
+      // 1725 F4, Task C25). Its words name it, as the deeper cases' first Tab stop does.
+      expect(ring.text, 'the first Tab stop after back is the first crumb').toBe(DOCS_HEAD_TEXT.index);
       expect(ring.style, 'a ring is drawn').not.toBe('none');
       expect(ring.inset, 'the ring is drawn inside the crumb').toBe(true);
       expect(ring.inside, 'the crumb is wholly inside the crumbs').toBe(true);

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
-import { ALL, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
+import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
 // D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). APPENDED, for the reason the blocks above
@@ -650,9 +650,11 @@ describe('idle-compact-nudge: the kill switch has no writer, and the prompt is s
     expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module — it could write the marker`)
       .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
   });
-  it("the nudge prompt's sentence is spelled on a code line in shared/api.ts alone", () => {
+  // Its home moved to the list of what ccrc types (Overlord W1, the vocabulary piece); `shared/api.ts` re-exports it.
+  it("the nudge prompt's sentence is spelled on a code line in shared/injected-prompts.mjs alone", () => {
     const needle = 'Continue with your open tasks.';
-    expect(ALL.filter((f) => stallCode(f).includes(needle)).map(rel).sort()).toEqual(['shared/api.ts']);
+    expect([...ALL, ...ALL_MJS].filter((f) => stallCode(f).includes(needle)).map(rel).sort())
+      .toEqual(['shared/injected-prompts.mjs']);
   });
 });
 
