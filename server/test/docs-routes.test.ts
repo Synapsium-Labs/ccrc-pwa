@@ -1558,6 +1558,63 @@ describe('FR1 review F5: a read whose every requester left is taken from Fastify
   });
 });
 
+describe('W5b-1 review: a history GET whose client left while it queued is dequeued and its socket ended (the F5 shape)', () => {
+  it('a queued history GET whose response closes unfinished is dequeued, its reply hijacked and its raw response destroyed, and no hook runs for it', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown): void => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const b = blocker<CcdResult>();
+      const rec = scripted(() => b.exec());
+      const late: string[] = [];
+      let captured: import('fastify').FastifyReply | undefined;
+      const { app, docs } = await open({
+        run: rec.run,
+        verbs: ['caps', DOCS_CAP, DOCS_LOG_CAP],
+        root: (root) => {
+          root.addHook('onRequest', async (req, reply) => {
+            if (req.headers['x-test-capture'] !== undefined) captured = reply;
+          });
+          root.addHook('onSend', async (req, _reply, payload) => {
+            if (req.headers['x-test-capture'] !== undefined) late.push('onSend');
+            return payload;
+          });
+          root.addHook('onResponse', async (req) => {
+            if (req.headers['x-test-capture'] !== undefined) late.push('onResponse');
+          });
+        },
+      });
+      const lane = nodeLanes(docs).read;
+      const at = (p: string): string => docsApi.history('demo', { ...REAL_LOG_ASK, path: p });
+      const held = ['a.md', 'b.md'].map((p) => app.inject({ url: at(p), headers: PWA_HEADERS }));
+      await until(() => rec.calls.length === 2, 'two docs-log execs');
+      const third = app.inject({ url: at('c.md'), headers: { ...PWA_HEADERS, 'x-test-capture': '1' } });
+      third.then(() => undefined, () => undefined);
+      await until(() => lane.load().queued === 1 && captured !== undefined, 'the third read queued');
+      const reply = captured as import('fastify').FastifyReply;
+      expect(reply.sent).toBe(false);
+      expect(reply.raw.destroyed).toBe(false);
+      // The client's response closes unfinished while its socket is still open: the requester has gone.
+      reply.raw.emit('close');
+      await until(() => lane.load().queued === 0, 'the read dequeued');
+      await until(() => reply.sent, 'the reply taken from Fastify');
+      expect(reply.raw.destroyed).toBe(true);
+      b.release(0, faultRes());
+      b.release(1, faultRes());
+      await Promise.all(held);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(rec.calls).toHaveLength(2);
+      expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-log', 'docs-log']);
+      expect(late).toEqual([]);
+      expect(unhandled).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
+
 describe('W5b-1 T10: GET /api/docs/:project/history (rich-docs spec G4, M9.8)', () => {
   const url = docsApi.history('demo', REAL_LOG_ASK);
   const logs = (ccd: () => string[][]) => verb(ccd(), 'docs-log');
