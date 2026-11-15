@@ -9,6 +9,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { LandingControlRead } from '../src/coord/radar.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
+import { landingBindingOf } from '../src/coord/landingLine.js';
 import { nextLandingNoticeOf, type NextLandingFacts, type NextLandingRun } from '../src/coord/landingNext.js';
 import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { CONTROL_BASE_SHA, CONTROL_HEAD_SHA, CONTROL_NOW, controlRead, landingFactsOf, landingStoreOver } from './landingFixture.js';
@@ -437,5 +438,90 @@ describe('applyLandingControl: failure is atomic and the fence stands until a du
     coord.db.prepare("UPDATE landing_entries SET pr = 0").run();
     expect(apply()).toEqual({ kind: 'failure', failure: { error: 'landing-projection-unreadable', recovery: 'repair' } });
     expect(cueMails()).toHaveLength(0);
+  });
+});
+
+// ---- fix round 1, R2: the real-store and mail halves of M12 and M13 --------------------------------------------------
+describe('applyLandingControl: an unhealthy selected head holds the line, and a later clean entry queues nothing (M12)', () => {
+  const HEAD_B = 'f'.repeat(40);
+  /** PR 7 (a merging run) is the selected head; PR 8, pinned a minute later, is a clean no-run entry behind it. */
+  const twoEntries = (): { first: number; second: number } => {
+    atMerging();
+    expect(coord.writeLandingAuthority({ kind: 'entry', project: P, pr: 8, pinnedSha: HEAD_B, handoffCommit: HC, setBy: 'creator-a' }, Date.now() + 60_000)).toMatchObject({ ok: true });
+    const entries = landingFactsOf(coord, P).entries;
+    return { first: entries.find((e) => e.pr === 7)!.id, second: entries.find((e) => e.pr === 8)!.id };
+  };
+  type Head = Probe['doc']['heads'][number];
+  const headsOf = (...heads: Head[]): LandingControlRead => {
+    const c = controlAt(); const probe = c.probe as Probe;
+    return controlRead({ probe: { ok: true, doc: { ...probe.doc, heads } }, health: c.health });
+  };
+  const h7: Head = { pr: 7, head: CONTROL_HEAD_SHA, branch: 'ws/alpha', id: null, base: { state: 'clean' } };
+  const h8: Head = { pr: 8, head: HEAD_B, branch: 'ws/beta', id: null, base: { state: 'clean' } };
+
+  it('control: with both heads clean, the selected head (PR 7) is the one that is cued, never PR 8', () => {
+    const { first } = twoEntries();
+    expect(landingBindingOf(landingFactsOf(coord, P), headsOf(h7, h8), CONTROL_NOW)).toMatchObject({ mode: 'ready', entryId: first, pr: 7 });
+    expect(apply(headsOf(h7, h8))).toMatchObject({ kind: 'queued' });
+    expect(cueMails().map((m) => m.toId)).toEqual(['coordinator-a']);
+  });
+
+  const CASES = [
+    ['a stale selected head: the probed head differs from the pinned sha', headsOf({ ...h7, head: 'e'.repeat(40) }, h8), 'head-mismatch'],
+    ['a selected head the probe does not list at all', headsOf(h8), 'head-mismatch'],
+    ['a selected head whose composition conflicts with the base', headsOf({ ...h7, base: { state: 'conflict', paths: ['x'], pathsCut: false } }, h8), 'composition-not-clean'],
+  ] as const;
+  it.each(CASES)('%s: the binding names the selected entry as held, not the later clean one', (_name, control, reason) => {
+    const { first } = twoEntries();
+    expect(landingBindingOf(landingFactsOf(coord, P), control, CONTROL_NOW)).toEqual({ mode: 'held', reason, entryId: first });
+  });
+
+  it.each(CASES)('%s: through the store, no cue is queued (zero mail, deliveries and observations), twice over', (_name, control, reason) => {
+    twoEntries();
+    expect(apply(control)).toEqual({ kind: 'no-send', reason, holdChanged: false });
+    expect(apply(control)).toEqual({ kind: 'no-send', reason, holdChanged: false });
+    expect(cueMails()).toHaveLength(0);
+    expect(rows('SELECT * FROM mail')).toHaveLength(0);
+    expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
+    expect(cueObservations()).toHaveLength(0);
+  });
+});
+
+describe('applyLandingControl: pending and unmeasured health never move the flag, and hold the mail by themselves (M13)', () => {
+  type HealthDoc = Health['doc'];
+  const healthOf = (over: Partial<HealthDoc>): LandingControlRead => {
+    const c = controlAt(); const health = c.health as Health;
+    return controlRead({ probe: c.probe, health: { ok: true, doc: { ...health.doc, ...over } as HealthDoc } });
+  };
+  const pending = (): LandingControlRead => healthOf({ state: 'unmeasured', why: 'pending', failing: [], pending: ['required-a'] } as Partial<HealthDoc>);
+  const unmeasured = (): LandingControlRead => healthOf({ state: 'unmeasured', why: 'forge-unreachable' } as Partial<HealthDoc>);
+  const absent = (): LandingControlRead => controlRead({ probe: controlAt().probe, health: { ok: false, reason: 'absent' } });
+
+  it('a stored red stays red through pending and unmeasured health: no set, the flag read back true, no cue', () => {
+    atMerging();
+    expect(apply(controlAt(CONTROL_BASE_SHA, 'red'))).toEqual({ kind: 'no-send', reason: 'main-red', holdChanged: true });
+    expect(flags().mainRedHold).toBe(true);
+    for (const control of [pending(), unmeasured(), absent()]) {
+      expect(apply(control)).toEqual({ kind: 'no-send', reason: 'health-unmeasured', holdChanged: false });
+      expect(flags()).toEqual({ operatorPaused: false, mainRedHold: true });
+    }
+    expect(cueMails()).toHaveLength(0);
+    expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
+    // only green clears it, and the head is then cued once
+    expect(apply(controlAt())).toMatchObject({ kind: 'queued', holdChanged: true });
+    expect(flags().mainRedHold).toBe(false);
+    expect(cueMails()).toHaveLength(1);
+  });
+
+  it('with the flag already false, pending and unmeasured health still queue no cue: the binding\'s own health-unmeasured arm holds the mail', () => {
+    atMerging();
+    for (const control of [pending(), unmeasured(), absent()]) {
+      expect(landingBindingOf(landingFactsOf(coord, P), control, CONTROL_NOW)).toMatchObject({ mode: 'held', reason: 'health-unmeasured' });
+      expect(apply(control)).toEqual({ kind: 'no-send', reason: 'health-unmeasured', holdChanged: false });
+      expect(flags()).toEqual({ operatorPaused: false, mainRedHold: false });
+    }
+    expect(cueMails()).toHaveLength(0);
+    expect(rows('SELECT * FROM mail')).toHaveLength(0);
+    expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
   });
 });
