@@ -13,6 +13,8 @@
 //   * THE REGION RULE (`regionProblems`, through `.github/ci/ccd-split.py check-regions`): one implementation, the tool's.
 //   * THE YIELD CHECK (S1, D-8634): the tool refuses a slice any open PR head touches, naming the head; offline, from a
 //     heads file the caller writes, never through gh.
+//   * COMMENTS ONLY (Task 3, D-8048): a diff that changes only `#` lines in `ccd/ccd` leaves `programDump` alone. A
+//     line test cannot tell a bash comment from a `#` line inside a heredoc, which is a function's data; the dump can.
 //   * REAL rows judged from `moveBase` at test time, so a change that lands on main while a move queues sits on both
 //     sides of every comparison and cannot eject it (Review Focus 8). They skip without origin/main, as growth-check does.
 import { describe, it, expect, afterAll } from 'vitest';
@@ -76,6 +78,19 @@ const movedOverThePointer: Tree = {
   'ccd/lib/t.sh': lib('t', ['t_1', FA + '# @ccd-lib:one_1 — `fo` moved to ccd/lib/one.sh\n' + FB_LEAD + FB]),
 };
 const mainAndLibWithSameFn: Tree = { 'ccd/ccd': SHEBANG + FA + FB, 'ccd/lib/t.sh': lib('t', ['t_1', FA]) };
+// One bash comment and one `#` line of heredoc data, for the comments-only row (Task 3).
+const COMMENTED: Tree = {
+  'ccd/ccd': SHEBANG + 'fa() {\n  # see line 12 for why\n  echo a\n}\nfh() {\n  cat <<EOF\n# data, not a comment: line 12\nEOF\n}\n',
+};
+const commentRewritten: Tree = { 'ccd/ccd': COMMENTED['ccd/ccd']!.replace('# see line 12', '# see fh') };
+const heredocRewritten: Tree = { 'ccd/ccd': COMMENTED['ccd/ccd']!.replace('comment: line 12', 'comment: fh') };
+const codeRewritten: Tree = { 'ccd/ccd': COMMENTED['ccd/ccd']!.replace('echo a', 'echo A') };
+/** Does `head` differ from `base` in `#` lines only (a line whose first non-blank byte is `#`)? This decides whether
+ *  the comments-only row judges a diff; the dump decides the verdict, because a `#` line can be heredoc data. */
+const commentLinesOnly = (base: string, head: string): boolean => {
+  const code = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  return base !== head && code(base) === code(head);
+};
 const oneLinerThenAssignment = 'fa() { :; }\nX=1\n';
 const regionHoldingTwoFunctions = 'fa() { :; }; fb() { :; }\n';
 
@@ -110,6 +125,17 @@ describe('the pure-move pin (fixtures)', () => {
     expect(programDump(movedWithOneNewWord)).toBe(programDump(baseWithArray));
     expect(programDump(movedWithBareDeclare)).not.toBe(programDump(baseWithArray));
     expect(programDump(baseWithArray)).toContain('declare -A _M=');
+  });
+
+  it('FIXTURE: a comment edit leaves the dump alone; a `#` line of heredoc data moves it', () => {
+    const was = COMMENTED['ccd/ccd']!;
+    expect(commentLinesOnly(was, commentRewritten['ccd/ccd']!)).toBe(true);
+    expect(programDump(commentRewritten)).toBe(programDump(COMMENTED));
+    // The line test admits it, and the dump refuses it: this is the case the REAL row exists for.
+    expect(commentLinesOnly(was, heredocRewritten['ccd/ccd']!)).toBe(true);
+    expect(programDump(heredocRewritten)).not.toBe(programDump(COMMENTED));
+    expect(commentLinesOnly(was, codeRewritten['ccd/ccd']!)).toBe(false);
+    expect(commentLinesOnly(was, was)).toBe(false);
   });
 
   it('FIXTURE: a region refuses a top-level line, a second definition or a variable', () => {
@@ -278,6 +304,18 @@ describe('the pure-move pin (the real tree)', () => {
     if (b === null) return ctx.skip();
     const verdict = pureMoveVerdict(treeAt(b, REPO), treeAt('HEAD', REPO));
     if (verdict !== null) expect(verdict, 'a diff that adds a pointer moves bytes and changes none').toEqual({ pure: true, differing: [] });
+  });
+
+  it('REAL: a diff that changes only comments in ccd/ccd leaves programDump alone', (ctx) => {
+    const b = resolveBase();
+    if (b === null) return ctx.skip();
+    const before = treeAt(b, REPO);
+    const after = treeAt('HEAD', REPO);
+    const libs = (t: Tree): string => JSON.stringify(Object.entries(t).filter(([rel]) => rel !== 'ccd/ccd').sort());
+    if (libs(before) !== libs(after)) return;   // a library changed too: not a comments-only diff
+    if (!commentLinesOnly(before['ccd/ccd'] ?? '', after['ccd/ccd'] ?? '')) return;
+    expect(programDump(after), 'a `#` line this diff changed in ccd/ccd is heredoc data, not a comment: the program moved')
+      .toBe(programDump(before));
   });
 
   it('REAL: a record added in this diff holds', (ctx) => {
