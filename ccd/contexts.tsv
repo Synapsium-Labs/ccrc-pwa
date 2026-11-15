@@ -944,3 +944,7 @@ _dl_audit_ladder	C4
 _dl_orphan_rung	C4
 _poolset_parse	C1
 _acctorder_valid	C1
+_session_pool_side	C1
+_pool_ok_set	C1
+_pool_set_undecidable_why	C1
+_pool_set_mismatch_why	C1

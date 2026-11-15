@@ -310,7 +310,7 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
-  'continuity_probes', 'continuity_reads', 'portfolio_rank', 'portfolio_rank_revision'] as const;
+  'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -334,6 +334,7 @@ export const tableWriters = (files: readonly string[]): Record<string, string[]>
 
 describe(TABLES_PIN, () => {
   const S = 'server/src/coord/store.ts#CoordStore.';
+  const OUTBOX_REACH = 'server/src/coord/pushOutboxStore.ts#stampReach';
   it('CONTROL: a write in a method is named by it; a read, and a write to another table, are not', async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -362,8 +363,9 @@ describe(TABLES_PIN, () => {
       lifecycle_events: [`${S}ingestJournal`],
       lifecycle_generations: [`${S}ingestJournal`, `${S}retireGeneration`],
       lifecycle_gaps: [`${S}recordGap`],
-      asks: ['correctWithMail', 'declineAsk', 'insertAsk', 'pruneAskQuestions', 'releaseAsk', 'restampAsk', 'settleAsk',
-        'staleAsk', 'takeAskForAnswer', 'untakeAsk'].map((m) => `${S}${m}`),
+      // The push outbox (Overlord W1): `stampReach` is the one writer of `reachedOperatorAt`, on asks and on items.
+      asks: [OUTBOX_REACH, ...['correctWithMail', 'declineAsk', 'insertAsk', 'pruneAskQuestions', 'releaseAsk', 'restampAsk', 'settleAsk',
+        'staleAsk', 'takeAskForAnswer', 'untakeAsk'].map((m) => `${S}${m}`)],
       approvals: ['correctWithMail', 'declineApproval', 'insertApproval', 'lapseApproval', 'markApprovalOperator',
         'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
@@ -380,6 +382,11 @@ describe(TABLES_PIN, () => {
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
       continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
+      // The push outbox (Overlord W1): one writer per move of `OUTBOX_TRANSITIONS`, and the purge of terminal unbound rows.
+      push_outbox: ['armBoundRowInTx', 'claimOutboxRow', 'insertBoundRowInTx', 'insertUnboundRow', 'markOutboxVerdict', 'purgeOutbox',
+        'sealAtBoot', 'silenceOutboxRow'].map((f) => `server/src/coord/pushOutboxStore.ts#${f}`),
+      // The item ledger's raise, its one state move and the level toggle, measured at the push outbox's build; and the reach stamp.
+      operator_items: [...['moveItemInTx', 'raiseItemInTx', 'setBlocking'].map((f) => `server/src/coord/ledgersStore.ts#${f}`), OUTBOX_REACH],
       // The portfolio (Overlord W1): the operator's order and its revision, one writer for both, reached from the rank door.
       portfolio_rank: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],

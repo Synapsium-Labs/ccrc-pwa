@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the fifteen separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These fifteen are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the sixteen separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These sixteen are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -408,8 +408,11 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // Coordinator calls (D-8126 wave A3) bring the thirteenth and fourteenth, both from the coordinator-autonomy design: how long a
     // big call stays the operator's to see before it ages out of the Waiting group, and the furthest ahead a `time:` wake may be
     // set. Each is that design's own week, unrelated to token rotation, and neither imports the token interval.
+    // The push outbox (Overlord W1) brings the fifteenth: how long a terminal unbound outbox row is kept after it settles before
+    // the purge, the retention docs/superpowers/plans/2026-11-14-overlord-w1/w1-push-outbox.md sets, ruled separate by the
+    // coordinator (ask 435). It is unrelated to token rotation, and it does not import the token interval.
     // The portfolio's closed-waves window (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-portfolio.md` Task 1,
-    // "waves closed in 7 and 28 days") is the fifteenth, ruled a separate quantity by the coordinator (ask 437): a reporting
+    // "waves closed in 7 and 28 days") is the sixteenth, ruled a separate quantity by the coordinator (ask 437): a reporting
     // window unrelated to token rotation, and it does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
@@ -427,6 +430,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
+      'shared/push-outbox.ts:OUTBOX_KEEP_MS',
     ]);
   });
 });

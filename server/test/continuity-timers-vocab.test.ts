@@ -76,7 +76,8 @@ describe('the timers vocabulary (C61, C65)', () => {
       expect(ROUTE_REFUSALS, w).toContain(w);
       expect((REFUSAL_STATUS as Readonly<Record<string, number>>)[w], w).toBe(status);
     }
-    // `capability-missing` is the client's word only in W1a (Task 11): not a route refusal.
-    expect(ROUTE_REFUSALS).not.toContain('capability-missing');
+    // `capability-missing` is a route word from W1 (the vocabulary piece, 501); `ccrc-api timer` still answers it on the
+    // client for `timers-v1`.
+    expect(ROUTE_REFUSALS).toContain('capability-missing');
   });
 });

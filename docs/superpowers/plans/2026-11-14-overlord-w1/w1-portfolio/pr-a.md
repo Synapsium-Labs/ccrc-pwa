@@ -5,10 +5,10 @@ departure is a slug; the coordinator mints the numbers.
 
 ## Measured
 
-- **Migration slot.** The portfolio's migration is entry 75. `main` took 74 for the anchor's seed row while this was built,
-  so the branch merged `main` once and took 75 (the coordinator's ruling on ask 436). Two other open W1 pull requests also
-  carry 75; whichever lands first keeps it, and each later one renumbers on the coordinator's word. The header,
-  `coord-db.test.ts`' slot pins and `run-close-switch.test.ts`' count word follow the number.
+- **Migration slot.** The portfolio's migration is entry 76. `main` took 74 for the anchor's seed row while this was built,
+  so the branch first took 75 (the coordinator's ruling on ask 436); the push outbox then landed 75, and the landing merge
+  renumbered this entry to 76 on the coordinator's word. The header, `coord-db.test.ts`' slot pins and
+  `run-close-switch.test.ts`' count word follow the number.
 - **Growth, net lines against the merge base:** `schema.ts` +26, `store.ts` +3, `server.ts` +3, `watch.ts` +6,
   `ledgersRoutes.ts` +37, `shared/refusal.ts` +3. `growth-check` armed is green.
 - **Mutation floors:** `portfolioOrder` (6 mutants), `itemWaitMs` (7) and `portfolioFor` (19), every mutant killed, each
@@ -83,3 +83,13 @@ sides of the mutation floors files after the pool set's piece landed; the migrat
 - **F7.** `LiveAskRead` answers `{ kind: 'unmeasured' } | { kind: 'read'; key: string | null }`, so the compiler makes every
   caller handle the unmeasured case; `FleetWatcher#liveAskKey` and the server's dependency answer that shape.
 - **F9.** The facts read takes no transaction, as `itemsFor` and `readProgrammes` do not.
+
+## The landing merge
+
+On the coordinator's word, after the push outbox (#2838), the vocabulary (#2840) and the history op (#2841) landed, the
+branch merged `main` once more. The push outbox's migration is 75, so the portfolio's is now 76: the schema entry and its
+header, `coord-db.test.ts` (the version pins, the `MIGRATIONS[75]` lines, and the slot pinned as the entry after the push
+outbox's) and `run-close-switch.test.ts` (both tables dropped with the rest, "twenty-three" replayed). The seven-day census
+keeps both new holders, the push outbox's `OUTBOX_KEEP_MS` as the fifteenth and the portfolio's `WEEK_MS` as the
+sixteenth. The floors files, `writers-map` (its table list and expected writers), `time-ports` and `core-vocab`'s
+`HANDLE_HOLDERS` keep both sides.
