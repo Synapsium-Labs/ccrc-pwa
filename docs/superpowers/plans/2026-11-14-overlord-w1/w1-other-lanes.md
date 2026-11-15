@@ -9,7 +9,8 @@ says so and names what guards it instead.
 
 - Every attributed write lane that is not an Overlord door refuses the Overlord's body with `overlord-uses-its-doors`:
   - the five the spec names: peer mail, raising an item, claims, the claimant's question door, coordinator intent;
-  - two more ruled in (fix round 1): the landing writes and the Linear proxy's writes.
+  - three more ruled in: the landing writes and the Linear proxy's writes (fix round 1), and the six plan doors (the
+    coordinator's ruling on fix round 1).
 - Two doors refuse it with `overlord-not-a-coordinator`, so it can never become a programme's claimant:
   - run open, when `claimedBy` names it (C48);
   - the reclaim door and the archive door's hand-over, when the heir is the Overlord's body (ruled in, fix round 1).
@@ -57,7 +58,10 @@ no act row would show it.
   archive door's hand-over (`moveClaims`) calls `reclaimRun`, so it is refused there too.
 - **L4, C5.** `server/src/coord/ledgersRoutes.ts`: the item-raise door passes its lane.
 - **L4, C4.** `server/src/linear/proxyRoutes.ts`: after its attribution step, a write verb asks `refuseOtherLane` with
-  its own lane. `server/src/server.ts` passes the Linear routes their reads.
+  its own lane.
+- **L4, C5.** `server/src/coord/planRoutes.ts`: its shared `door` helper takes a lane from each of its six
+  registrations and, after its attribution, asks `refuseOtherLane`. `server/src/server.ts` builds one reads instance and
+  passes it to the Linear routes and the plan routes.
 - **The console.** `pwa/src/fleet/ResumeSheet.tsx` and `ArchiveSheet.tsx` each gain one sentence for the heir refusal.
 - No new route, no new table, no migration, no new refusal word (both are on `main`), no wire change.
 
@@ -65,7 +69,7 @@ no act row would show it.
 flowchart TD
   M["POST /api/mail (ingress, after check 6)"] --> R["refuseOtherLane, refuse.ts, L4"]
   C["claims, question doors, intent, item raise, landing writes"] --> A["requireAttribution(…, lane), L4"]
-  L["Linear proxy writes, after attribution"] --> R
+  L["Linear proxy writes and plan doors, after attribution"] --> R
   A -->|"attribution passed"| R
   R --> D["decideOtherLane, L1"]
   O["POST /api/runs: gate overlordClaimant"] --> D
@@ -111,7 +115,8 @@ It takes these from sibling plans on `main`:
 - gates and identity (`w1-gates.md`, #2863): the `CallerIdentity` port, `callerStandingOf` and `OVERLORD_DOORS`, which
   this plan does not call (question 3).
 
-Revised in fix round 1 (review 2171). The coordinator's rulings are marked "(ruled)".
+Revised in fix round 1 (review 2171), then once more for the coordinator's ruling on the plan doors. The coordinator's
+rulings are marked "(ruled)".
 
 ## Open questions
 
@@ -182,7 +187,8 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
    mail lane answers through `refuseRoute`, as the claim lanes do, and records nothing. Widening `MAIL_REJECT_CODES`
    (`shared/api.ts`) would put one word in two vocabularies, and the spec stores none. M12 (Table 12) counts the hook's
    denials and `relay-carries-method`, not these refusals. Slug `other-lane-refusals-unrecorded`.
-7. **The lanes and their doors** (the spec names lanes, not routes; landing, Linear and reclaim ruled in, F2 and F5).
+7. **The lanes and their doors** (the spec names lanes, not routes; landing, Linear and reclaim ruled in, F2 and F5;
+   the six plan doors ruled in after fix round 1).
    **Built as:**
 
    | Lane key | Route | Word | Reached through (`via`) |
@@ -200,6 +206,12 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
    | `linearUpdate` | `POST /api/linear/proxy/issues/:id` | `overlord-uses-its-doors` | the Linear proxy, after its attribution |
    | `linearComment` | `POST /api/linear/proxy/issues/:id/comments` | `overlord-uses-its-doors` | the Linear proxy, after its attribution |
    | `linearLink` | `POST /api/linear/proxy/issues/:id/links` | `overlord-uses-its-doors` | the Linear proxy, after its attribution |
+   | `planDeclare` | `POST /api/programmes/:slug/plan` | `overlord-uses-its-doors` | `planRoutes.ts`' `door`, after its attribution |
+   | `planMet` | `POST /api/programmes/:slug/plan/met` | `overlord-uses-its-doors` | `planRoutes.ts`' `door`, after its attribution |
+   | `planTickets` | `POST /api/programmes/:slug/plan/tickets` | `overlord-uses-its-doors` | `planRoutes.ts`' `door`, after its attribution |
+   | `planTicketsMove` | `POST /api/programmes/:slug/plan/tickets/move` | `overlord-uses-its-doors` | `planRoutes.ts`' `door`, after its attribution |
+   | `planEpicsDrop` | `POST /api/programmes/:slug/plan/epics/drop` | `overlord-uses-its-doors` | `planRoutes.ts`' `door`, after its attribution |
+   | `planClose` | `POST /api/programmes/:slug/plan/close` | `overlord-uses-its-doors` | `planRoutes.ts`' `door`, after its attribution |
    | `runOpen` | `POST /api/runs`, when `claimedBy` names the body | `overlord-not-a-coordinator` | `OPEN_RUN_GATES`' `overlordClaimant` |
    | `runReclaim` | `POST /api/runs/:id/reclaim`, and the archive door's hand-over, when the heir is the body | `overlord-not-a-coordinator` | `reclaimRun`'s heir rung |
 
@@ -209,6 +221,12 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
      always a new session, and taking is refused), so the release refusal costs nothing.
    - The Linear proxy's `POST /api/linear/proxy/search` is a read sent as a POST, and stays open. Its other reads are
      `GET`s.
+   - The plan doors (ruled in). Each is attributed (`planRoutes.ts`' `door` calls `opts.attribute`), and then
+     `coord/planPolicy.ts#planCallerVerdict` admits the plan's owner, a worker into its own run's epic, and any
+     attributed caller while the programme has no plan owner (`owner === null`). That last arm let the body declare the
+     plan of a programme that has none, so the refusal comes right after attribution, before the reserved-programme
+     check, the Linear store read and the mutex. `GET /api/programmes/:slug/plan` (`plan show`) is a read and stays
+     open.
    - `runReclaim` is decided on the heir's id, because the reclaim door's caller is the operator: there is no
      attributed caller to ask about. The archive door's hand-over (`moveClaims`, D-8199) reaches the same rung, so a
      hand-over to the body is refused too, and the archive or stop goes no further, as for any refused hand-over.
@@ -222,7 +240,6 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
    |---|---|---|
    | `run-ownership` | `POST /api/runs/:id/end-request`, `POST /api/runs/:id/review-rounds` | Attribution, then the run's own people: `end-request` takes the run's coordinator or worker (`not-yours`), and `review-rounds` the run's `claimedBy` or a claimant of its programme. The body is neither, because run open and reclaim refuse it |
    | `programme-ownership` | `POST /api/items/:id/confirm`, `return`, `withdraw`, `blocking`; `POST /api/programmes/:slug/spec`, `modifications`, `modifications/merged`; `POST /api/coord/programmes/:slug/calls` | Attribution, then `claimsProgramme`. The body can claim no programme: run open and reclaim refuse it (Table 1) |
-   | `plan-ownership` | the six plan doors under `POST /api/programmes/:slug/plan` (declare, `met`, `tickets`, `tickets/move`, `epics/drop`, `close`) | Attribution, then `coord/planPolicy.ts#planCallerVerdict`, which admits the plan's owner, a worker into its own run's epic, **and any attributed caller while the programme has no plan owner** (`owner === null`). So the body could declare the plan of a programme that has none. A residual, stated below |
    | `lease-ownership` | `POST /api/leases/:lease/retain` | `decideRetain` refuses `not-lease-parent` unless the caller is the lease's parent at its incarnation or that parent's coordinator |
    | `child-only` | the approvals request door | `questions.raiseApproval` refuses `not-a-child` for a session with no child marker, which the body is |
    | `hook-group` | the continuity routes file's box-token doors: card, start report, notes, handover, probe, timers | They are the doors the Overlord must reach (§11.2). The census reads them from the continuity routes file, as the box-token census does |
@@ -248,11 +265,9 @@ contradicts. The plan builds every recommendation unless the coordinator or the 
      spec-fixes list, with the question whether to add attribution to the five doors as a later piece (a wire change
      and a coordinator skill corpus change).
 
-   **The plan doors** (measured in this fix round; review 2171 had them under `programme-ownership`). They are attributed
-   (`planRoutes.ts`' `door` calls `opts.attribute`), so each could refuse the body as one row with `via: 'plan-door'`
-   and one argument at `door`. They are not ruled in, so this plan states the residual: while a programme has no plan
-   owner, the body could declare its plan. What holds is the launch profile and the door process's tool list, as at the
-   run doors. Whether they join Table 1 is the coordinator's call (Where things stand).
+   **The plan doors** are in Table 1, not here (ruled after fix round 1). Review 2171 had them under
+   `programme-ownership`, but `planCallerVerdict` admits any attributed caller while a programme has no plan owner, so
+   ownership was no stopper there.
 
    **The ledger mint** (`POST /api/ledger/deviations`) takes an optional `byId` and no attribution, so a refusal by id
    is bypassed by leaving it out. Closing it is a wire change, so it stays in `launch-profile` (F5).
@@ -314,6 +329,11 @@ neither has code on `main`, so their interfaces are read from their plans.
   - The Linear proxy (`server/src/linear/proxyRoutes.ts`, C4, L4): thirteen box-token routes, each `handle(verb, …)`.
     Step 3 reads `byId` and `byUuid` from the query and calls `deps.attribute` (`attributionVerdict` with `byUuid`,
     passed from `server.ts`). `LINEAR_OPS[verb].class` is `write` for `create`, `update`, `comment` and `link`.
+  - The plan doors (`server/src/coord/planRoutes.ts`, C5, L4; a lane source of the box-token census of its own): six
+    box-token `POST` routes, each registered with its path spelled out and its handler built by one closure,
+    `door(work)`. `door` reads the slug, `byId` and `byUuid` from the query, calls `opts.attribute` (`attributionVerdict`
+    with `byUuid`, passed from `server.ts`), refuses the reserved programme, reads the Linear store, and runs the work
+    inside `serial`, where `planCallerVerdict` decides. `plan-routes.test.ts` holds them.
   - `POST /api/runs`: inside `coordMutex`, `coord/openRun.ts#openRunPreconditions` runs `OPEN_RUN_GATES` in order. Its
     `attribution` gate calls the `attribute` fact (`attributionVerdict` with `claimedByUuid`), or, before the
     switch-over, checks that the claimant is listed. `reviewRead`, the first store read, comes next. A refusal is an
@@ -378,18 +398,18 @@ neither has code on `main`, so their interfaces are read from their plans.
   - `server/src/coord/otherLaneReads.ts` is L3: it composes `CoordStore.designationRead()` and `fieldMeasured`, keeps
     every distinction they give (absent apart from unreadable), and writes the episode's log line. It decides nothing.
   - `openRun.ts` stays L1: its new gate reads the reads handed in, and calls the decider.
-  - `refuse.ts`, `routes.ts`, `ledgersRoutes.ts` and `linear/proxyRoutes.ts` stay L4. They hand the reads to the
+  - `refuse.ts`, `routes.ts`, `ledgersRoutes.ts`, `planRoutes.ts` and `linear/proxyRoutes.ts` stay L4. They hand the reads to the
     decider and send its answer. No `if` over a designation field appears in any of them.
   - No port is added beyond `OtherLaneReads`, declared by its consumer. `OpenRunFacts` gains one fact.
 - **One owner each.**
   - The designation's one reader is `designationRead()`. The caller's profile is read only through `fieldMeasured`.
   - The one decider of "this lane refuses this caller" is `otherLaneVerdict`, reached only through `decideOtherLane`.
   - The one table of lanes is `OTHER_LANES`. A new lane is a row, never a second check.
-  - The one L4 sender is `refuseOtherLane` in `refuse.ts`, called by `requireAttribution`, the mail ingress and the
-    Linear proxy. The run-open gate answers through `sendOpenRunRefusal`'s `error` arm, and `reclaimRun` through two new
+  - The one L4 sender is `refuseOtherLane` in `refuse.ts`, called by `requireAttribution`, the mail ingress, the
+    Linear proxy and the plan routes' `door`. The run-open gate answers through `sendOpenRunRefusal`'s `error` arm, and `reclaimRun` through two new
     `ReclaimOutcome` kinds that the reclaim route sends with `refuseRoute`.
   - The one builder of the reads is `otherLaneReadsOf`. `registerCoordRoutes` builds one instance from its own deps,
-    `server.ts` builds one for the Linear proxy, and `reclaimRun` builds one from its `ReclaimDeps`. They share one
+    `server.ts` builds one for the Linear proxy and the plan routes, and `reclaimRun` builds one from its `ReclaimDeps`. They share one
     module-scope episode latch, so an unmeasured episode logs one line in all.
 - **Failure contracts.**
   - An unmeasured designation never passes a caller whose profile reads `overlord` or cannot be read (question 4). The
@@ -441,14 +461,15 @@ neither has code on `main`, so their interfaces are read from their plans.
    box-token or operator-gated, that is in no class of Table 2.
 4. **The refused set.** The bound body, either attempt's pending body and an id still owed its stop are refused; a
    drained past id passes. The recorded difference from `callerStandingOf` (question 3) is sound.
-5. **No false stopper.** Table 2 states, for each door, a stopper that exists on `main`. The five run doors, the
-   ledger mint and the plan doors without an owner are stated as residuals, not as ownership.
+5. **No false stopper.** Table 2 states, for each door, a stopper that exists on `main`. The five run doors and the
+   ledger mint are stated as residuals, not as ownership. The plan doors, whose ownership check admits any caller
+   while a programme has no plan owner, are refused in Table 1.
 
 ## The PR split
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net lines) |
 |---|---|---|---|---|
-| A | 1 to 4 | The characterization suite; `OTHER_LANES`, `otherLaneVerdict` and `decideOtherLane` with their mutant set; the reads; `refuseOtherLane`; the lanes through `requireAttribution`, the mail ingress, `landingWrite` and the Linear proxy; the run-open gate; the reclaim heir rung and its two sentences; the census; the route slicer moved to a test helper | designation A (`designationRead()`, `designationFactOf`, the create's `profile`) and the vocabulary (on `main`) | `server/src/coord/routes.ts` about +26: `requireAttribution`'s lane branch (+4), building the reads (+2), the mail ingress (+3), `landingWrite`'s lane parameter and its two registrations (+1), the run-open reads (+2), the reclaim route's two new cases (+6), the imports (+2), the call sites (0: an argument each), and comments (+6). `server/src/server.ts` about +4 (the Linear proxy's reads). `shared/api.ts` 0. `server/src/coord/store.ts` 0. `server/src/coord/schema.ts` 0 |
+| A | 1 to 4 | The characterization suite; `OTHER_LANES`, `otherLaneVerdict` and `decideOtherLane` with their mutant set; the reads; `refuseOtherLane`; the lanes through `requireAttribution`, the mail ingress, `landingWrite`, the Linear proxy and the plan routes' `door`; the run-open gate; the reclaim heir rung and its two sentences; the census; the route slicer moved to a test helper | designation A (`designationRead()`, `designationFactOf`, the create's `profile`) and the vocabulary (on `main`) | `server/src/coord/routes.ts` about +26: `requireAttribution`'s lane branch (+4), building the reads (+2), the mail ingress (+3), `landingWrite`'s lane parameter and its two registrations (+1), the run-open reads (+2), the reclaim route's two new cases (+6), the imports (+2), the call sites (0: an argument each), and comments (+6). `server/src/server.ts` about +5 (one reads instance, built once with its comment, passed to the Linear proxy and the plan routes). `shared/api.ts` 0. `server/src/coord/store.ts` 0. `server/src/coord/schema.ts` 0 |
 
 The pull request merges `main` once before merge, after designation A has landed (worker clause 16).
 
@@ -463,6 +484,8 @@ For scale, the files that are not growth-checked change by about this much:
 | `server/src/coord/reclaim.ts` | +12 (the heir rung, two `ReclaimOutcome` kinds) |
 | `server/src/coord/ledgersRoutes.ts` | +1 (the deps type gains `lane?`; the raise call gains its key) |
 | `server/src/linear/proxyRoutes.ts` | +6 (`LinearProxyDeps` gains the reads; one call after attribution) |
+| `server/src/coord/planRoutes.ts` | +6 (`PlanRouteOpts` gains the reads; `door` gains a lane and one call after attribution; each registration one argument) |
+| `server/test/plan-routes.test.ts` | +2 (its opts builder gains a reads double that answers `not-designated`) |
 | `server/src/roleOf.ts` | +12, only if question 2 adds `designationFactFrom` |
 | `pwa/src/fleet/ResumeSheet.tsx`, `ArchiveSheet.tsx` | +4 each (one sentence, read from the `error` body) |
 | `server/test/routeRegistrations.ts` | +70, new (moved from `box-token-census.test.ts`) |
@@ -496,7 +519,7 @@ Each case pins:
 - the status, and the body as the exact bytes fastify sent;
 - the side effects:
   - the `mail_rejections` and `mail_deliveries` row counts;
-  - the claim rows, the item rows, the question row's state;
+  - the claim rows, the item rows, the question row's state, the stored plan and its owner;
   - the run rows, the hold and each run's `claimedBy`;
   - the landing line's entries and order;
   - the Linear fetch double's calls;
@@ -516,6 +539,10 @@ The cases, per door:
 - **`POST /api/landing/entries` and `/order`:** a coordinator's entry and order write; a stale uuid; a malformed body.
 - **The four Linear write routes:** a coordinator's create, update, comment and link; a stale uuid. And `search`, which
   stays open.
+- **The six plan doors:** for each, the plan owner's call; a call by another session while the programme has a plan
+  owner (`planCallerVerdict`'s refusal); a call by a plain session while it has none (admitted today, the arm the
+  ruling closes for the body only); a stale uuid. `tickets` also by a worker into its own run's epic. And
+  `GET /api/programmes/:slug/plan`, which stays open.
 - **`POST /api/runs`:** a coordinator opens a work run, and a review run of its own work run; a stale `claimedByUuid`;
   no `claimedByUuid` before and after the switch-over.
 - **`POST /api/runs/:id/reclaim`:** the operator moves a dead coordinator's programme to a live coordinator; an heir
@@ -553,7 +580,8 @@ import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { OverlordRefusal } from '../../../shared/refusal.js';
 
 /** How a lane reaches the check. The census reads this column. */
-export type OtherLaneVia = 'attribution' | 'ingress' | 'landing-write' | 'linear-proxy' | 'open-run-gate' | 'reclaim-heir';
+export type OtherLaneVia =
+  | 'attribution' | 'ingress' | 'landing-write' | 'linear-proxy' | 'plan-door' | 'open-run-gate' | 'reclaim-heir';
 
 /** The write lanes that refuse the Overlord's body (§3.5, H10, C48; Table 1). A new lane is a row. */
 export const OTHER_LANES = {
@@ -570,6 +598,12 @@ export const OTHER_LANES = {
   linearUpdate:      { route: 'POST /api/linear/proxy/issues/:id', word: 'overlord-uses-its-doors', via: 'linear-proxy' },
   linearComment:     { route: 'POST /api/linear/proxy/issues/:id/comments', word: 'overlord-uses-its-doors', via: 'linear-proxy' },
   linearLink:        { route: 'POST /api/linear/proxy/issues/:id/links', word: 'overlord-uses-its-doors', via: 'linear-proxy' },
+  planDeclare:       { route: 'POST /api/programmes/:slug/plan', word: 'overlord-uses-its-doors', via: 'plan-door' },
+  planMet:           { route: 'POST /api/programmes/:slug/plan/met', word: 'overlord-uses-its-doors', via: 'plan-door' },
+  planTickets:       { route: 'POST /api/programmes/:slug/plan/tickets', word: 'overlord-uses-its-doors', via: 'plan-door' },
+  planTicketsMove:   { route: 'POST /api/programmes/:slug/plan/tickets/move', word: 'overlord-uses-its-doors', via: 'plan-door' },
+  planEpicsDrop:     { route: 'POST /api/programmes/:slug/plan/epics/drop', word: 'overlord-uses-its-doors', via: 'plan-door' },
+  planClose:         { route: 'POST /api/programmes/:slug/plan/close', word: 'overlord-uses-its-doors', via: 'plan-door' },
   runOpen:           { route: 'POST /api/runs', word: 'overlord-not-a-coordinator', via: 'open-run-gate' },
   runReclaim:        { route: 'POST /api/runs/:id/reclaim', word: 'overlord-not-a-coordinator', via: 'reclaim-heir' },
 } as const satisfies Record<string, { route: string; word: OverlordRefusal; via: OtherLaneVia }>;
@@ -662,6 +696,7 @@ on `main`.
     after a measured read ends the episode.
   - `refuseOtherLane` answers `false` and sends the word's status for `refuse`, and `true` for both passes.
   - `linearLaneOf`: each write verb maps to its row; `search` and every read map to null.
+  - The six `plan-door` rows refuse the bound body with `overlord-uses-its-doors`, like every other row.
   - `OTHER_LANES` is total: every key has a route, a word that `isOverlordRefusal` accepts, and a `via`. No two rows
     share a route.
   - `REFUSAL_STATUS` gives every row's word 403, and `unmeasured` 502.
@@ -700,9 +735,15 @@ on `main`.
   OtherLane`; the raise door passes `'itemRaise'`)
 - Modify: `server/src/linear/proxyRoutes.ts` (`LinearProxyDeps` gains `otherLaneReads: OtherLaneReads`; after step 3's
   attribution, `const lane = linearLaneOf(verb)`, and a non-null lane calls `refuseOtherLane`)
-- Modify: `server/src/server.ts` (the Linear proxy's deps get `otherLaneReads: otherLaneReadsOf({ coord: deps.coord,
-  io: deps.io, cfg: deps.cfg })`, or, with no coord store, a reads object whose designation answers `unmeasured`, so
-  a profile `overlord` caller is still refused)
+- Modify: `server/src/coord/planRoutes.ts` (`PlanRouteOpts` gains `otherLaneReads: OtherLaneReads`; `door(work)`
+  becomes `door(lane, work)` and, right after `opts.attribute` passes, `if (!(await refuseOtherLane(reply, lane, id,
+  opts.otherLaneReads))) return reply;`; the six registrations pass `'planDeclare'`, `'planMet'`, `'planTickets'`,
+  `'planTicketsMove'`, `'planEpicsDrop'` and `'planClose'`)
+- Modify: `server/test/plan-routes.test.ts` (its opts builder passes a reads double that answers `not-designated`; no
+  assertion changes)
+- Modify: `server/src/server.ts` (one `const otherLaneReads = otherLaneReadsOf({ coord: deps.coord, io: deps.io, cfg:
+  deps.cfg })`, or, with no coord store, a reads object whose designation answers `unmeasured`, so a profile
+  `overlord` caller is still refused; the Linear proxy's deps and `registerPlanRoutes`' opts each take it)
 - Create: `server/test/overlord-other-lanes-routes.test.ts`
 
 **The L4 pieces:**
@@ -717,6 +758,9 @@ on `main`.
   where the census can read it.
 - The Linear proxy: the refusal comes after attribution and before the validator, the egress check, the rate service
   and any call to Linear, so a refused write sends nothing to Linear and writes no journal line.
+- The plan doors: the refusal comes in `door`, after attribution and before the reserved-programme check, the Linear
+  store read and `serial`, so a refused plan write reads no plan, takes no mutex and writes nothing. `PlanRouteOpts`
+  takes the reads as a required field, so no registration of the plan routes can leave them out.
 - Every other door changes one argument, so its handler grows by no line.
 
 The order inside each lane is unchanged up to attribution. The refusal comes right after attribution, before the lane's
@@ -729,7 +773,10 @@ own ownership, run, id or incarnation checks, so the answer names its cause (`ov
     its route. Nothing is written:
     - no `mail_rejections` row and no delivery (`peerMail`, question 6);
     - no claim, item, question move, landing entry or order, or applier change;
-    - no call to the Linear fetch double and no Linear journal line.
+    - no call to the Linear fetch double and no Linear journal line;
+    - no plan row, plan owner, ticket, met mark or close written, and no Linear store read (`plan` doors).
+  - Each plan door, called by the bound body on a programme with no plan owner (the arm `planCallerVerdict` admits
+    today): 403 `overlord-uses-its-doors`. A plain session on the same programme: admitted, as Task 1 pinned.
   - The same, called by a `designate` attempt's pending body, a `rebind` attempt's pending body, and an id on
     `stopsOwed`.
   - The bound body with a stale uuid: today's `stale-uuid`, recorded on the mail lane. The check does not run before
@@ -748,7 +795,8 @@ own ownership, run, id or incarnation checks, so the answer names its cause (`ov
 - [ ] **Step 4: Run** this suite and these, unedited and green:
   - `overlord-other-lanes-pin` (Task 1), `coord-attribution`, `question-doors-pin`, `question-doors-posture`;
   - `mail-routes`, `mail-ingress-one-read`, `mail-peer-quota`, `claims-routes`, `coordinator-intent-route`,
-    `ledgers-coordinator-routes`, and the landing-write and Linear proxy suites;
+    `ledgers-coordinator-routes`, `plan-routes` (its opts builder's one added field aside), and the landing-write and
+    Linear proxy suites;
   - `box-token-census`, `auth-gate`, `coord-pause-route`, `refusal-status`;
   - `growth-check` armed, and both `tsc` runs.
 - [ ] **Step 5: Red check.** Each change below reds a case. Revert each.
@@ -757,8 +805,10 @@ own ownership, run, id or incarnation checks, so the answer names its cause (`ov
   - Call `refuseOtherLane` before check 6 in the mail ingress: the stale-uuid case's recorded row.
   - Make `refuseOtherLane` answer `true` on `refuse`: every refusal case.
   - Move the Linear proxy's call after the validator: the no-fetch assertion on a refused write with a bad body.
-- [ ] **Step 6: Commit.** `feat(overlord): mail, items, claims, the claimant's doors, intent, landing and Linear writes
-  refuse the Overlord (H10)`
+  - Pass `'planMet'` from the `/plan/close` registration: the plan-close case.
+  - Move the plan `door`'s call inside `serial`: the no-Linear-store-read assertion.
+- [ ] **Step 6: Commit.** `feat(overlord): mail, items, claims, the claimant's doors, intent, landing, Linear and plan
+  writes refuse the Overlord (H10)`
 
 ### Task 4: Run open and reclaim refuse the Overlord as a claimant, and the census
 
@@ -817,12 +867,16 @@ imports and definitions, and it stays green (slug `route-slicer-shared`).
    `deps.requireAttribution(` with that key as the last argument, exactly once.
 2. **Every `landing-write` lane passes its key at its registration**: the handler of its route calls
    `landingWrite(req, reply, '<kind>', '<key>')` once, and `landingWrite` passes its `lane` to `requireAttribution`.
-3. **No key at the wrong door.** Every key passed to `requireAttribution`, `landingWrite` or `refuseOtherLane` in those
-   files sits in the handler of the route its row names.
+3. **No key at the wrong door.** Every key passed to `requireAttribution`, `landingWrite`, `door` or `refuseOtherLane`
+   in those files and in `coord/planRoutes.ts` sits in the handler of the route its row names.
 4. **The ingress lane.** The `peerMail` row's handler calls `refuseOtherLane(reply, 'peerMail', fromId, …)` once,
    after the text of check 6 (`stale-uuid`) and before check 7 (`unknown-recipient`).
-5. **The Linear lanes.** The `linear-proxy` rows are exactly `LINEAR_OPS`' verbs of class `write`, each by its route
-   in `LINEAR_PROXY_ROUTES`; `handle` calls `linearLaneOf(verb)` and `refuseOtherLane` once, after `deps.attribute`.
+5. **The Linear and plan lanes.**
+   - The `linear-proxy` rows are exactly `LINEAR_OPS`' verbs of class `write`, each by its route in
+     `LINEAR_PROXY_ROUTES`; `handle` calls `linearLaneOf(verb)` and `refuseOtherLane` once, after `deps.attribute`.
+   - The `plan-door` rows are exactly the `POST` routes `coord/planRoutes.ts` registers, each of whose handlers is
+     `door('<key>', …)` with its own row's key. `door` calls `refuseOtherLane` once, after `opts.attribute` and before
+     `serial`. A seventh plan write door is red until it has a row.
 6. **The claimant lanes.** `OPEN_RUN_GATES` holds `overlordClaimant` directly after `attribution`, and `openRun.ts`
    calls `decideOtherLane('runOpen'` exactly once. `reclaim.ts` calls `decideOtherLane('runReclaim'` exactly once,
    after the heir's registry read (rung 3) and before `heir-is-a-worker`.
@@ -830,7 +884,7 @@ imports and definitions, and it stays green (slug `route-slicer-shared`).
    place:
    - a Table 1 row's route;
    - `NOT_REFUSED`, a hand-kept map from route to its class (`run-ownership`, `programme-ownership`, `lease-ownership`,
-     `child-only`, `plan-ownership`, `launch-profile`), each with a one-line reason;
+     `child-only`, `launch-profile`), each with a one-line reason;
    - `hook-group`: the continuity routes file's box-token lanes, as the box-token census computes them from that file;
    - `operator-gated`: the box-token census's `UNGATED` and `SESSION_ONLY` sets and the other session-gated doors it
      names (`KICKOFF`, `ARCHIVE`, `DIGEST_CORRECT`, `LEDGER_OPERATOR_DOORS`, `UPDATE_DOORS`, `TOKEN_DOORS`,
@@ -874,6 +928,7 @@ imports and definitions, and it stays green (slug `route-slicer-shared`).
   - Move `overlordClaimant` after `reviewRead`: the gate-order table, and census assertion 6.
   - Move the heir rung after the old claimant's measurement: the "no pane measured" assertion, and census assertion 6.
   - Drop `link` from the Linear rows: census assertion 5.
+  - Drop the `planEpicsDrop` row: census assertion 5, and assertion 7 (an unclassified door).
   - Register a new box-token `POST` door, and a new session-gated door, in a scratch copy read by the census:
     assertion 7, each.
 - [ ] **Step 7: Commit.** `feat(overlord): run open and reclaim refuse the Overlord as a claimant, and a census holds
@@ -897,7 +952,7 @@ The coordinator passes these to the index's next fix round.
   - what it ships: "`OTHER_LANES`, `otherLaneVerdict` and `decideOtherLane` (C5, L1) with their reads (L3) and one
     sender in `refuse.ts`; `overlord-uses-its-doors` on peer mail (every send by the Overlord's body), item raise,
     claims (take and release), the claimant's question door (rule and release), coordinator intent (set and clear),
-    the landing writes and the Linear proxy's writes; `overlord-not-a-coordinator` at run open and at the reclaim and
+    the landing writes, the Linear proxy's writes and the six plan doors; `overlord-not-a-coordinator` at run open and at the reclaim and
     archive hand-over heir; the refused set is the bound body, either pending body and an id still owed its stop; an
     unreadable designation refuses only a caller whose profile reads `overlord` or cannot be read; a census that
     classifies every write door";
@@ -905,12 +960,12 @@ The coordinator passes these to the index's next fix round.
 - **Lane H's file list:** `server/src/coord/otherLanes.ts` and `otherLaneReads.ts`; `refuseOtherLane` in
   `server/src/refuse.ts`; `requireAttribution`, `landingWrite`, the mail ingress and the reclaim route in
   `server/src/coord/routes.ts`; `ledgersRoutes.ts`' raise door; `server/src/linear/proxyRoutes.ts`' write verbs and
-  their deps in `server.ts`; `server/src/coord/openRun.ts`' gate table; `server/src/coord/reclaim.ts`' heir rung;
+  `server/src/coord/planRoutes.ts`' `door`, with their reads in `server.ts`; `server/src/coord/openRun.ts`' gate table; `server/src/coord/reclaim.ts`' heir rung;
   `pwa/src/fleet/ResumeSheet.tsx` and `ArchiveSheet.tsx`; `server/test/routeRegistrations.ts` (shared with the
   box-token census).
 - **"Where lanes meet":**
   - `server/src/coord/routes.ts`: about +26 for lane H, and the doors change one argument each;
-  - `server/src/server.ts`: about +4 for lane H (the Linear proxy's reads);
+  - `server/src/server.ts`: about +5 for lane H (one reads instance for the Linear proxy and the plan routes);
   - `server/src/coord/openRun.ts` and `reclaim.ts`: lane H adds one gate and one rung. No other W1 piece edits them;
   - `server/src/roleOf.ts`: lane H adds `designationFactFrom` only if designation A ships no narrowing (question 2).
     Designation A owns the file's designation input;
@@ -930,7 +985,8 @@ The coordinator passes these to the index's next fix round.
     coordinator-corpus change, is a ruling for a later piece (question 8);
   - A5's "every other write lane" against §3.5's five lanes, with Table 2's classes; the ledger mint takes no identity;
   - the reclaim door and the archive hand-over as paths to C48's "it can never become a coordinator", now refused;
-  - Table 11.6's "Door or lane" cells for both words gain the landing writes, the Linear writes and reclaim;
+  - Table 11.6's "Door or lane" cells for both words gain the landing writes, the Linear writes, the plan doors and
+    reclaim;
   - Table 11.1e's "the deny set is the guard": `OVERLORD_DENY_RULES` is not on `main` and no W1 piece creates it, so in
     W1 the guard is the launch profile's deny rules (sandbox A);
   - "peer mail" means every send by the Overlord's body, run mail included (question 5);
@@ -955,14 +1011,13 @@ the numbers.
   `overlord` or cannot be read, and lets other callers through with one logged line per episode (ruled, question 4).
 - **`overlord-run-refusal-is-an-error-word`**: `overlord-not-a-coordinator` travels as an `error` word through
   `refuseRoute`, at run open and at reclaim, not as a `RunRefuseCode` or `ReclaimRefuseCode` `refused` word.
-- **`landing-and-linear-lanes`**: the landing writes and the Linear proxy's writes refuse with
-  `overlord-uses-its-doors`, which the spec does not list (ruled, question 7).
+- **`landing-linear-and-plan-lanes`**: the landing writes, the Linear proxy's writes and the six plan doors refuse
+  with `overlord-uses-its-doors`, which the spec does not list (ruled, question 7). The plan doors' own check admits
+  any attributed caller while a programme has no plan owner, so ownership did not stop the body there.
 - **`reclaim-refuses-the-overlord-as-heir`**: the reclaim door and the archive door's hand-over refuse an heir that is
   the Overlord's body, with `overlord-not-a-coordinator`, which the spec does not list (ruled, question 7).
 - **`write-doors-classified`**: every write door outside Table 1 is held by a census to one class of Table 2, with the
   five run doors and the ledger mint as stated residuals (question 8).
-- **`plan-doors-open-without-an-owner`**: the plan doors admit any attributed caller while a programme has no plan
-  owner, so they are classed `plan-ownership` with that residual, not `programme-ownership` (question 8).
 - **`run-doors-carry-no-identity`**: §3.5's dispatch-door sentence is false on `main`; the five run doors stay guarded
   only by the launch profile and the door process's tool list (ruled, question 8).
 - **`one-designation-narrowing`**: only if designation A ships no shared narrowing from the read to the fact. This
@@ -989,13 +1044,13 @@ the numbers.
   - F4: an unreadable designation refuses only a caller whose profile reads `overlord` or cannot be read;
   - F5: the landing writes and the Linear proxy's writes refuse now; every other door has its measured class;
   - F6 to F9: the `operator-gated` class, question 9's edges, the census's real sources, and attribution as freshness.
+- From the coordinator's ruling on fix round 1: the six plan doors join Table 1 and refuse the body with
+  `overlord-uses-its-doors`, one row and one argument each, with their pin and census rows; the residual is gone.
 
 **Waiting on the operator:** nothing.
 
 **Waiting on the coordinator:**
 - The recommendations of questions 2 and 3.
-- Whether the six plan doors join Table 1 (question 8): today any attributed caller may declare the plan of a
-  programme with no plan owner. One row each and one argument at `planRoutes.ts`' `door`, inside the estimates.
 - The index changes above.
 
 **Needs before it starts:** designation A merged (`designationRead()`, its `CoordStore` delegate, `designationFactOf`
