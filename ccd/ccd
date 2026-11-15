@@ -1583,7 +1583,7 @@ SPAWN_EFFORT="high"             # --effort on the spawn argv of a session whose 
                                 # the coordinator row's effort, never ultracode (coordinator clause 19,
                                 # pinned by routing-references.test.ts). It rides `--effort` (session only), never a settle
                                 # keystroke: the plain `/effort <level>` form is saved as the ACCOUNT's default. A session WITH an
-                                # effort field has that field on the argv instead (`_spawn_start`, routing spec §5.2). An Anthropic or a Codex lane (D-8631); a lane that is neither takes none.
+                                # effort field has that field on the argv instead (`_spawn_start`, routing spec §5.2). It applies on an Anthropic or a Codex lane (D-8631); any other lane takes none.
                                 # ultracode DOES have `--settings` keys (measured Claude Code
                                 # 2.1.270, D-2809) — the old premise here (no settings.json key)
                                 # was wrong; `/effort ultracode` was measured NOT to persist a
@@ -26646,8 +26646,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # backend the lane's settings.json materialiser owns the subagent (spec
     # §5.2 "Non-Anthropic lanes"). `--effort` is composed on the Anthropic arm and, since D-8631,
     # on a Codex lane's (the else branch); a Codex lane's workflow only under the `codex-lane-workflows`
-    # marker. What a lane did not compose — `effort` and `workflow` on a lane that is neither, `subagent` on any
-    # other lane — is stamped INERT by field name, and the record says so rather than pretending.
+    # marker. What a lane did not compose — `effort` and `workflow` on a lane that is neither, `workflow` on a Codex
+    # lane without that marker, `subagent` on any non-Anthropic lane — is stamped INERT by field name, and the record says so.
     if _is_anthropic_backend "$wrapper"; then
       [[ -n "$rsub" ]] && routeenv="CLAUDE_CODE_SUBAGENT_MODEL=$rsub"
       # `--settings` BEFORE `--effort` in `routeflags` — deliberately, not
