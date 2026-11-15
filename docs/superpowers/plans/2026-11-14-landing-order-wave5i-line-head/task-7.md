@@ -83,7 +83,8 @@ are green at this tip (G1). This paragraph records the state at the reviewed tip
 task 1: node-modules-install, gate-literal. task 2: probe-reasons, health-ancestors. task 3: shared-api-import, flag-not-gate
 (and the rewrite of row C17 to the Amendment A behaviour). task 4: subjects-whole-union, tests-beyond-the-list,
 no-verdict-for-terminal-rows. task 5: port-member-deferred (superseded: task 6 added the member), control-tx-takes-port,
-run-absent-word (withdrawn in fix round 2), facts-literals, related-selection-substituted, control-tx-module. Fix round 2: order-reads-stored-words, retreat-reads-stored-word, control-tx-handle-holder, facts-state-words (see `fix-round-2.md`). task 6: new-l1-view-file, shared-landing-line-untouched.
+run-absent-word (withdrawn in fix round 2), facts-literals, related-selection-substituted, control-tx-module. task 6: new-l1-view-file, shared-landing-line-untouched.
+Fix round 2: order-reads-stored-words, retreat-reads-stored-word, control-tx-handle-holder, facts-state-words (see `fix-round-2.md`).
 Task 7: none beyond the above; the census scan treats `Date.parse` as no clock read (`landed.ts` is unchanged).
 
 ## Limitations

@@ -235,13 +235,20 @@ merge-base of `origin/main` and HEAD as already fetched (no fetch) is `2b082b91f
 |---|---|---|---|---|---|
 | `landingControlTx.ts` (new) | absent (0), both bases | 47 | +47 | 47 | +47 |
 | `store.ts` vs `2b082b91f` | 5352 | 5401 | +49 | 5402 | +50 |
-| `store.ts` vs `a6b87cf79` | 5341 | 5401 | +60 | 5402 | +61 |
+| `store.ts` vs `a6b87cf79` (a later tip against an older base, not the ruling's figure) | 5341 | 5401 | +60 | 5402 | +61 |
+| `store.ts` at `9210e7a37` vs `a6b87cf79` (the figure the review and the ruling quote) | 5341 | 5390 | +49 | n/a | n/a |
 
 `landingControlTx.ts` is +47, not +48. The review's `store.ts` pairing "5341 to 5390 against a6b87cf79" is the figure at `9210e7a37` and
 `194f39ed4` (both measured: 5390, +49 vs `a6b87cf79`, +38 vs `2b082b91f`); at the reviewed tip the file stands at 5401, which is +49
 against the current merge-base `2b082b91f` (the review's second pair). R1's one added line in `CoordStore.advanceLanding` (`c93a33136`)
 makes HEAD 5402, +50 against `2b082b91f`. `store.ts` therefore grows (the header sentence "so the store does not grow" was wrong, A7,
-and is corrected in `af7410dbc`); the rule passes only through the new-file waiver.
+and is corrected in `af7410dbc`); the rule passes only through the new-file waiver. Why that passes at +50, over GROWTH_LIMIT 40,
+checked in the code: the header of `server/test/growthCheck.ts` (D-8563) says a new file waives a listed file's growth only when
+`rings/ring.ts` gives it the grown file's ring and the spec's context table, read at the merge-base, the grown file's context
+(`ringHomes`, used by `growthOver`). Measured with `ringHomes(root, '2b082b91f', 'HEAD')`: `store.ts` and `landingControlTx.ts` both
+answer `{ ring: 'L3', context: 'C5' }`, and `landingControlTx.ts` is added in this PR's diff. `store.ts` is listed (not frozen or capped):
+it is in neither `server/test/growth-frozen/` (one other file) nor `server/test/growth-caps/`, and no `growth-waivers/` entry names it,
+so a waiver does count and the new-file waiver is the only one in play. If `landingControlTx.ts` left this PR, `store.ts` at +50 would be over.
 `GROWTH_CHECK=1 timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/growth-check.test.ts --maxWorkers=2` at HEAD: rc 0, 1 file,
 95 passed. The test prints neither a merge-base nor a per-file figure, so the figures above are mine, not read from its output.
 `fix-round-1.md` R5's table cell for `landingControlTx.ts` is corrected to +47.
@@ -257,7 +264,7 @@ and is corrected in `af7410dbc`); the rule passes only through the new-file waiv
   `landingOrder(facts.entries, CLEAR, undefined, facts.stateWords)` call); `landingOrder` (optional fourth argument, R4); `landingViewOf`
   (optional fifth argument, passed `read.facts.stateWords` by the landing read route in `routes.ts`); and the landing write path in
   `store.ts` (`CoordStore.advanceLanding`), which finds the stored word of the current entry and passes it to `decideLandingWrite` as
-  `storedState` (R1). `landingNext.ts` reaches it only through `landingBindingOf`. No other reader.
+  `storedState` (R1). `landingNext.ts` and `landingReadView.ts` reach it only through `landingBindingOf` (the latter passes `{ ...facts, flags }`). No other reader.
 - **Publication** in the central plan and spec interface blocks is the coordinator's, not this PR's. The slug is in `task-7.md`'s list
   with `order-reads-stored-words`, `retreat-reads-stored-word` and `control-tx-handle-holder`.
 
