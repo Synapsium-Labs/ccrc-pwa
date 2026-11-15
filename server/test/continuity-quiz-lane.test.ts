@@ -20,6 +20,8 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { loadConfig } from '../src/config.js';
+import { parsedFile } from './scan/symbols.js';
+import { nameWrites } from './scan/parse.js';
 import { fakeTime } from './fakeTime.js';
 import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { W1A_ARM_ROWS } from '../src/continuity/quiz.js';
@@ -235,9 +237,9 @@ describe('the wiring (review 2121 F3)', () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  it('the composition root builds deps.quiz over the coord store, gated by QUIZ_RECORD_READY', () => {
-    const src = readFileSync(path.join(SRC, 'index.ts'), 'utf8');
-    expect(src).toMatch(/^deps\.quiz = quizLanePortOf\(coord, QUIZ_RECORD_READY\);$/m);
+  it('the composition root builds deps.quiz over the coord store, gated by QUIZ_RECORD_READY (read through the parser: ARCH-06)', () => {
+    const writes = nameWrites(parsedFile('server/src/index.ts')).filter((w) => w.name === 'deps' && w.member === 'quiz');
+    expect(writes.map((w) => w.value)).toEqual(['quizLanePortOf(coord, QUIZ_RECORD_READY)']);
   });
 });
 
