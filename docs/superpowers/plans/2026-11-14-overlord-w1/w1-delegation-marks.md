@@ -45,8 +45,10 @@ exists, and no other W1 piece has to land first. Their readers come in W3 and W4
 - **PR B, asks (Tasks 5 and 6), after PR A.**
   - `askMarkable` joins the L1 file. The store gains the read of the asks the operator has, and the waiting view gains
     two optional lists of them.
-  - The door's `ask` arm. The question row draws the boxes when its session's ask is listed, and Recently cleared gains
-    the asks the operator answered.
+  - The door's `ask` arm. The question row draws the boxes when the server reads its session's listed ask as live,
+    through the live-ask port the portfolio already uses (`liveAsk`, by `askKey`). Recently cleared gains the listed
+    asks that are not live: released, declined or answered by the operator, inside 48 hours of their last change of
+    state (question 3, review 2176 F8).
 
 W1 builds no reader of the marks beyond the waiting view. The evaluation rules for `unsure` (§9.2.1, §9.5, H43, §7.2,
 M1), the briefing order and the S1 feed are each built by the W3 or W4 piece that owns them, from the records this
@@ -59,14 +61,20 @@ piece keeps ("Index changes").
 - §9.2.1 and C70 (Table 13a): the principle (details to the Overlord, higher-level decisions with the operator), the
   two marks, which rows carry them, that they grant nothing and are never answers, what each feeds, where they live
   and their one writer;
-- the binding amendments for `unsure`: §6.3's H34 (`U`), §6.5's arming bullet and M1 paragraph, §6.9's H43, §7.2's
-  evidence, §9.5 ("An unsure answer is not the reference", and the consistency pairs), and §12's M1;
+- the binding amendments for `unsure`: §6.3's H34 (`U`), §6.5's arming bullet and M1 paragraph, §6.6's counting
+  bullet, §6.9's H42 and H43, §7.2's evidence, §7.5's arming bullet, §9.5 ("An unsure answer is not the reference",
+  and the consistency pairs), §9.6's spot-checks, I15, §12's M1 and M18, and "Where things stand"'s W3 line;
+- the mark a gate reads: the one standing at the reveal of the Overlord's recommendation, or, with no reveal, when
+  the row left Recently cleared (the coordinator's ruling on review 2176 F1);
+- the wipe: it removes the marks and keeps `unsure_excluded`, the ids of the answers that were marked unsure, so they
+  stay out of every gate; §9.4's rules 11 and 12, §7.6's replayed wipe and Table 11.1a (the ruling on F4);
 - §9.5.1, the proposal on tech detail, which nothing applies until the operator approves it;
 - §2's R21 row, the Status line, "In short", §4's "Waiting on you stays where it is", §6.5's routine answers, §7.2's
   proposal bullet, §9.2's S1 feed and Figure 7, Table 9.2a's `stated` row, and §9.5's blind-sample bullets;
 - Table 11.1a's row `answer_marks`, Table 11.1e's row "The operator's answer marks", and Table 14's W1 row;
-- "Where things stand": R21 under Agreed; the §9.5.1 proposal first under Waiting on you, then C70 and the classifier
-  question; three Later rows;
+- "Where things stand": R21 under Agreed; the §9.5.1 proposal first under Waiting on you, then the account pools,
+  then C70 and the classifier question; three Later rows;
+- the `authority` row of the act log, whose `delegated` no longer calls "You decide" an answer mark (F3);
 - Appendix B, Table B6.
 
 The index is `docs/superpowers/plans/2026-11-14-overlord-w1.md` (#2814, on `main`). It has no row for this piece: the
@@ -87,10 +95,10 @@ each question says which. The plan builds every recommendation unless the coordi
    `server/src/coord/` the word "delegation" already names the delegation broker's leases, journals and adoption
    (`delegation-*.ts`, `delegationLeaseDoor.ts`, `delegationAdoptStep.ts`), in the same context, C5. One context keeps
    one word for one thing.
-   **Recommendation, built here:** "answer marks" in code, in the spec and in this plan, named `could-answer` and
-   `unsure`. The console's labels are the operator's words. This file keeps the name the brief gave it, so that the
-   index finds it. If the coordinator rules "delegation mark", the rename touches names only: the table, the door's
-   path, two modules, the wire types, the component and the spec's §9.2.1.
+   **Ruled (the coordinator, fix round 1):** "answer marks" in code, in the spec and in this plan, named `could-answer`
+   and `unsure`. The console's labels are the operator's words. This file keeps the name the brief gave it, so that
+   the index finds it. The spec's act-log `authority` row no longer calls "You decide" "the operator's answer mark"
+   (review 2176 F3), so the phrase names one thing.
 2. **Two booleans or one three-way choice?** (The first addendum's question; slug `two-independent-marks`.)
    **Recommendation, built here: two booleans.** They are independent facts with different readers. The operator can be
    sure of an answer and still hand the question over, because it is routine, or unsure and still keep it. A three-way
@@ -111,9 +119,14 @@ each question says which. The plan builds every recommendation unless the coordi
    **Recommendation, built here:**
    - PR A: a `decide` or `value` item the operator was shown, while it is open or in Recently cleared, on its row, its
      cleared row and its page. That is before the answer and after it, as the first addendum asks.
-   - PR B: an ask that reached the operator. That is the newest ask of its child whose state is `released` or
-     `declined`, on the question row of that child (before the answer), or an ask the operator answered (`answeredBy` is
-     `ASK_OPERATOR_PRINCIPAL`) inside the window, on a new cleared row (after it).
+   - PR B: an ask that reached the operator, following today's ask states exactly (review 2176 F8, measured under
+     "What exists today"). That is an ask in `released` or `declined`, or one the operator answered (`answeredBy` is
+     `ASK_OPERATOR_PRINCIPAL`), while it is live or within 48 hours of its last change of state. Live means its child's
+     newest hook state is waiting on this ask's own `askKey`, read through the live-ask port the portfolio already uses.
+     A live ask's boxes sit on its child's question row (before the answer). Every other listed ask is a row of
+     Recently cleared (after it). PR B assumes no state move the code does not make: a `declined` ask the operator
+     answers in the pane stays `declined`, and a `released` ask whose dialog has gone stays `released`. Each is
+     listed until 48 hours after its `releasedAt`.
    - No box on a `do` or `secret` item, a root session's own ask or a permission prompt. Spec Table 6.1a leaves the
      last two out of the Overlord's tier too. The spec's Later list carries them.
 4. **What tells a detail from a higher-level question in W1?** (The third addendum's question; slug
@@ -128,9 +141,10 @@ each question says which. The plan builds every recommendation unless the coordi
    makes an unsure answer no yardstick: never a hit, a miss or an agreeing blind answer. The spec delta states that rule
    at each place that reads the operator's answer as the reference. Their code (`askOrAct`'s cell record, the gates of
    §9.5, grant evidence, consistency pairs, M1) does not exist before W3. **Recommendation:** W1 keeps what those
-   readers need: every change with its time, so that a gate can read "the mark that stood when the row left Recently
-   cleared, and never one set after the outcome" (§9.2.1). Each W3 piece builds its own rule. "Index changes" names
-   them.
+   readers need: every change with its time, so that a gate can read the mark that stood when the Overlord's
+   recommendation was revealed, or, with no reveal, when the row left Recently cleared (§9.2.1, the coordinator's ruling
+   on review 2176 F1). A mark set after the reveal is kept and shown and changes no gate. Each W3 piece builds its own
+   rule. "Index changes" names them.
 6. **A mark on a cleared row?** (The brief's question.) **Yes**, inside the Recently cleared window, `CLEARED_WINDOW_MS`
    (48 hours, `shared/ledgers.ts`). The operator often sees a question's kind best once it is answered, and the first
    addendum asks for a mark "before or after answering". Past the window, and on a withdrawn or dismissed item, the
@@ -231,6 +245,15 @@ Measured on `main` at `dbf90dbfc` (2026-11-15).
   - The operator's answer path (`questions.ts`, through `takeAskForAnswer`, which takes `held` or `released`) settles it
     `answered` with `answeredBy` = `ASK_OPERATOR_PRINCIPAL` (`settleAsk`). A parent's answer records the parent's id.
   - No writer deletes an ask row. `pruneAskQuestions` blanks `question` and `options` after the retention.
+  - **A `released` or `declined` ask never leaves that state** (review 2176 F8, measured). `staleAsk` moves only `held`
+    and `answering`, and `releaseAsk` and `declineAsk` move only `held`. `takeAskForAnswer` refuses `declined`, and the
+    operator's answer path reads `heldAskFor` (`state IN ('held','released')`). So a `declined` ask the operator
+    answers in the pane is pressed unrecorded and stays `declined`, and a `released` ask whose dialog has gone stays
+    `released`. `releasedAt` is the last change of state of both, and `answeredAt` that of an answered ask.
+  - **The live signal exists.** `server/src/coord/ports.ts#LiveAskRead`, adapted by `FleetWatcher#liveAskKey`, answers
+    the `askKey` of the ask a child's newest hook state is waiting on, `null`, or `unmeasured`. The portfolio reads it
+    for a `released` or `declined` ask that is its child's newest row (`portfolioStore.ts#portfolioFacts`), and
+    `LedgerOperatorDeps.liveAsk` already carries it to the ledger routes.
   - `GET /api/asks` (in `server/src/coord/routes.ts`) takes a session or the box token, and is masked.
 - **The operator doors** (`registerLedgerOperatorRoutes`, deps `LedgerOperatorDeps`):
   - Every door is session-gated by the auth gate when it is armed, and none is in `EXEMPT`.
@@ -245,9 +268,10 @@ Measured on `main` at `dbf90dbfc` (2026-11-15).
   - `server/src/auth/gate.ts`' header: "all 238 routes".
 - **The store.** `server/src/coord/schema.ts#MIGRATIONS` holds 77 entries (the replay quiz's `continuity_quiz_runs` is
   77). `server/test/coord-db.test.ts` pins `COORD_SCHEMA_VERSION` and `MIGRATIONS.length` at 77 in two cases, and finds
-  each recent table's slot by its DDL. `server/test/run-close-switch.test.ts` drops every table from migration 55 by
-  hand. Its comment names each migration, and its count word reads "twenty-three" (a build re-measures it, since the
-  replay quiz's migration 77 left the word as it was).
+  each recent table's slot by its DDL. `server/test/run-close-switch.test.ts` takes the database back to version 53
+  by hand and replays migrations 54 to 77, 24 of them. Its comment names each migration, and its count word reads
+  "twenty-three", one short, because the replay quiz's migration 77 left the word as it was. PR A sets it to the count
+  it then replays.
 - **Other sites a new coord file touches:** `server/test/single-definition/core-vocab.test.ts#HANDLE_HOLDERS` (a file
   that holds the `coord.db` handle), `server/test/single-definition/time-ports.test.ts#TIME_PORT_FILES`, and
   `writers-map.test.ts`' `TABLES`.
@@ -260,9 +284,10 @@ Measured on `main` at `dbf90dbfc` (2026-11-15).
   - `pwa/src/ledgers/waitingView.ts` (L1) exports `isWaitingView` and `isGoalsFor`.
   - `WaitingScreen.tsx` draws `ItemRow` (open), `QuestionButton` (questions) and `ClearedTrail` with `ClearedRow`. A
     row's open control is a button, and `RowActs` adds the row's own controls.
-  - **No optimistic action exists.** `WaitingRoutes.tsx#ItemRoute`'s tick and dismiss await the call and then
-    `refetchWaiting`. A refusal rejects with an `ApiError`, which `ItemView.tsx`'s `run` wrapper shows through
-    `refusalText`.
+  - **No optimistic action exists in `pwa/src/ledgers`.** `WaitingRoutes.tsx#ItemRoute`'s tick and dismiss await the
+    call and then `refetchWaiting`. A refusal rejects with an `ApiError`, which `ItemView.tsx`'s `run` wrapper shows
+    through `refusalText`. Elsewhere `pwa/src/fleet/PoolList.tsx` is optimistic, and `useMarkerToggle.ts` sets the
+    opposite rule for a switch: it waits for the server. Task 4 says why a mark may be optimistic.
   - `pwa/src/lib/api.ts` (growth-checked) holds `tickItem` and `dismissItem`.
 - **Contexts.** `server/src/coord/**` is C5, and so is `pwa/src/ledgers/**` (the 08-10 spec's context table). A
   `pwa/src/ledgers/*Words.ts` file is L1. A component is L4.
@@ -273,7 +298,8 @@ Measured on `main` at `dbf90dbfc` (2026-11-15).
   - `shared/answerMarks.ts` is L0 and imports nothing but types. Each literal union carries its `Record<X, true>` map
     (`rings/wire-totality.test.ts`).
   - `server/src/coord/answerMarks.ts` is L1: pure, with no `fs`, no store and no clock, and `now` as an argument. It
-    imports `shared/` only.
+    imports values from `shared/` only. Its two row types, `ItemRow` and `AnswerMarkRecord`, come in by `import type`,
+    which is erased. If a ring scan reads one as an outward import, the type moves into `shared/answerMarks.ts`.
   - `server/src/coord/answerMarkStore.ts` is L3: synchronous SQL over the store's database, keeping every distinction
     it reads. No repository and no async wrapper over `CoordStore`, which gains one-line delegates only.
   - The door is L4 and decides nothing. Whether a row is markable is `itemMarkable`'s or `askMarkable`'s, and the view
@@ -355,7 +381,7 @@ flowchart LR
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net lines) |
 |---|---|---|---|---|
 | A | 1 to 4 | The vocabulary and the parser; `itemMarkable` and `markViewOf`; `answer_marks` with its writer and read; the door with its item arm; `ItemView.answerMarks`; the two boxes on item rows, cleared item rows and the item page; `not-markable` with its Table 11.6 row | nothing: **ready to build** | `schema.ts` +23 (one migration with its comment); `store.ts` +3 (two delegates, one import); `pwa/src/lib/api.ts` +6 (one call); `server.ts` 0; `shared/api.ts` 0 |
-| B | 5 and 6 | `askMarkable`; the read of the asks the operator has; `WaitingView.asks` and `asksCleared`; the door's ask arm; the boxes on question rows and on cleared asks | PR A | `store.ts` +1 (one delegate); `schema.ts` 0; `pwa/src/lib/api.ts` 0; `shared/api.ts` 0 |
+| B | 5 and 6 | `askMarkable`; the read of the asks the operator has, live through the portfolio's `liveAsk` port or inside 48 hours of their last change of state; `WaitingView.asks`; the door's ask arm; the boxes on live question rows and on cleared asks; `unknown-ask` in the console's sentences | PR A | `store.ts` +1 (one delegate); `schema.ts` 0; `pwa/src/lib/api.ts` 0; `shared/api.ts` 0 |
 
 Each pull request merges `main` once before merge and re-measures its migration slot (the index's "Where lanes meet").
 Migration numbers are taken at build time, never here.
@@ -370,7 +396,8 @@ For scale, the files that are not growth-checked change by about this much:
 | `server/src/coord/ledgersRoutes.ts` | +55 | +30 |
 | `shared/ledgers.ts` | +3 | +4 |
 | `shared/refusal.ts` | +3 | |
-| `pwa/src/lib/refusalWords.ts` | +3 | |
+| `pwa/src/lib/refusalWords.ts` | +3 | +2 |
+| `server/src/coord/portfolioStore.ts` | | 0 (one `export`) |
 | `pwa/src/ledgers/answerMarkWords.ts` | +60, new | +10 |
 | `pwa/src/ledgers/AnswerMarkBox.tsx` | +85, new | |
 | `pwa/src/ledgers/WaitingScreen.tsx` | +16 | +35 |
@@ -401,6 +428,8 @@ The index (#2814) should carry these. The coordinator passes them to the index's
   - `ledgersRoutes.ts` gains lane M: the door in the operator registration, and the marks in `viewOfItem` and
     `waitingViewOf`. Lane E's `pushBlocking`, lane P's goals doors and lane H's item-raise refusal are other functions;
   - `shared/refusal.ts` gains lane M's `not-markable` in `LEDGER_ROUTE_REFUSALS`;
+  - `server/src/coord/portfolioStore.ts` (the portfolio's lane) gains one `export` on `NEWEST_ASK` in PR B, so the ask
+    read shares the newest-ask rule;
   - `pwa/src/lib/api.ts` gains lane M's one call;
   - `pwa/src/ledgers/WaitingScreen.tsx` is lane M's alone in W1. Lane E's response controls sit on the row's detail
     page and the digest (the index's lane E list), so the second to land merges `main` once.
@@ -410,11 +439,13 @@ The index (#2814) should carry these. The coordinator passes them to the index's
   11.6 row lands with PR A.
 - **Later pieces that read the marks** (each piece's own plan, not W1):
   - W3, step one: the briefing order by `could-answer` and `unsure` marks, and the marks on the arming item; the
-    `unsure` rule in each record of agreement: `askOrAct`'s cell record (H34's `U`), H43's hits and misses, the gates of
-    Table 9.5a with their left-out counts, the consistency pairs, and M1 (§12);
+    `unsure` rule in each record of agreement: `askOrAct`'s cell record (H34's `U`), H42's records, H43's hits and
+    misses, the gates of Table 9.5a with their left-out counts, the consistency pairs, I15, and M1 and M18 (§12). Each
+    reads the mark that stood at the reveal, or, with no reveal, when the row left Recently cleared (§9.2.1);
   - W3, step two: the marks and the left-out unsure answers on a grant proposal (§7.2);
   - W3, if the operator approves §9.5.1: detail cells earned on measured outcomes and gated on calibrated confidence;
-  - W4: the S1 feed, and the wipe and export of the marks (§9.2.1, §9.4);
+  - W4: the S1 feed, and the wipe and export of the marks, with `unsure_excluded`, the ids the wipe keeps, and the
+    replayed wipe (§9.2.1, §9.4, §7.6);
   - home C or W4's About you: showing the marks (question 8).
 
 ---
@@ -548,8 +579,9 @@ message.
   - the two marks of one row are independent: ticking `unsure` leaves `could-answer` as it was, and the read answers
     both;
   - marks on `item:3` and `ask:3` are separate rows;
-  - a record written by hand with `kind: 'approval'`, and one with `mark: 'sure'` (standing in for a newer build), are
-    skipped and counted `unreadable`;
+  - a record written by hand with `mark: 'sure'` (standing in for a newer build) on a row the read asks for is skipped
+    and counted `unreadable`. A record with `kind: 'approval'` is never selected, because the read is keyed by kind, so
+    the case asserts that it changes neither the answer nor the count (review 2176 F12);
   - a read on a closed database answers `{ ok: false }`, never an empty map;
   - **the history** (question 5): the records of one mark come back in order with their times, so the value that stood
     at any instant can be read;
@@ -570,7 +602,14 @@ message.
 
 **Files:**
 - Modify: `server/src/coord/ledgersRoutes.ts`:
-  - `viewOfItem` gains a `marks` argument and attaches `answerMarks` when `itemMarkable` says markable;
+  - `viewOfItem` gains a `marks` argument and attaches `answerMarks` when `itemMarkable` says markable. Of its eight
+    callers (review 2176 F13):
+    - `waitingViewOf` and `GET /api/items/:id` pass the marks they read (below);
+    - the coordinator's box-token read, `GET /api/programmes/:slug/items`, passes none, so its items carry no
+      `answerMarks`: a coordinator never sees the operator's marks, and an unsure mark least of all;
+    - the operator's tick, act, decline, dismiss and secret responses each read the one item's marks after their move
+      and pass them, so the item they answer carries its marks as the next `waiting` frame will. An item the move took
+      off the list (dismissed, or past the window) carries none, as the view would;
   - `waitingViewOf` reads `answerMarksOf('item', ids)` once, for every item in `items` and `cleared`, and passes each
     item its marks. On `{ ok: false }` every markable item carries `{ state: 'unmeasured', detail }` for both marks;
   - `GET /api/items/:id` passes its one item's marks the same way;
@@ -628,7 +667,9 @@ The door does no `await` between its read and its write.
       before a tick, and the ticked mark `marked` after it;
     - a `do` or `secret` item carries no `answerMarks`;
     - `GET /api/items/:id` on an item past the window carries no `answerMarks`;
-    - with the mark read made to throw, `GET /api/waiting` still answers its items, each with both marks `unmeasured`.
+    - with the mark read made to throw, `GET /api/waiting` still answers its items, each with both marks `unmeasured`;
+    - `GET /api/programmes/:slug/items` with the box token carries no `answerMarks` on a marked item;
+    - a tick's response carries the ticked item's marks, and a dismiss's response carries none.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement** the handler, the view's marks, the word, the census edits and the Table 11.6 row.
 - [ ] **Step 4: Run** this suite, `test/box-token-census.test.ts`, `test/auth-gate.test.ts`, `test/secret-mask.test.ts`,
@@ -678,11 +719,16 @@ The door does no `await` between its read and its write.
 `<label>`), its own control beside the row's button. The row draws nothing when `answerMarksOf` answers
 `unsupported`.
 1. A tap sets `pending` to the new value and calls `api.setAnswerMark`.
-2. On success it keeps `pending` until the store's view carries that mark at that value (the door's `waiting` frame),
-   then clears it, so the box never flickers back. The answer's own `answerMark` covers a frame that is lost: the box
-   takes it when the call resolves.
+2. **One settle rule** (review 2176 F14). When the call resolves, `pending` clears and the box keeps the answer's own
+   `answerMark` as `settled`. From then on it shows the newer of `settled` and the view's mark, by `at`, and drops
+   `settled` once the view's mark is at least as new. A `never` has no time, so a view of `never` loses to a `settled`
+   record. So the box never flickers back, and a lost `waiting` frame changes nothing.
 3. On a refusal or a failure it clears `pending`, so the box shows the server's value again, and shows the reason
    beside it through `refusalText(err, LEDGER_REFUSAL_TEXT)`.
+
+**Why a mark may be optimistic** when a switch may not (`useMarkerToggle.ts` waits for the server): a mark confers
+nothing and changes nothing the box does, a refusal leaves nothing behind, and the operator can untick at once. A
+switch changes what the fleet does, so it must not look set before it is.
 4. The first time either box is used on a device it shows `ANSWER_MARK_EXPLAINER` once, under a per-device
    `localStorage` key. Every read and write of the key is wrapped in `try`/`catch`, and the box works without storage.
 
@@ -692,6 +738,7 @@ The door does no `await` between its read and its write.
   - `answer-mark-box.test.tsx`, with `api.setAnswerMark` stubbed:
     - a tap checks the box at once and disables it while the call is pending;
     - a resolved call leaves it checked, and a later view carrying `marked` keeps it checked and enabled;
+    - a view frame older than the resolved answer (an earlier `at`, or `never`) does not uncheck it;
     - a rejected call with `not-markable` unchecks it again and shows the sentence;
     - a rejected network call unchecks it again;
     - ticking `unsure` sends `mark: 'unsure'` and leaves the `could-answer` box as it was;
@@ -720,53 +767,82 @@ The door does no `await` between its read and its write.
 
 ### Task 5: The asks the operator has, in the view and at the door
 
+This task follows today's ask states exactly ("What exists today", review 2176 F8). A `released` or `declined` ask never
+leaves that state, so it is listed while it is live or within 48 hours of its last change of state, and never on the
+strength of a state move the code does not make.
+
 **Files:**
 - Modify: `shared/answerMarks.ts` (`AskMarkRow` and its `how` map)
-- Modify: `shared/ledgers.ts` (`WaitingView` gains `asks?: AskMarkRow[]` and `asksCleared?: AskMarkRow[]`)
+- Modify: `shared/ledgers.ts` (`WaitingView` gains `asks?: AskMarkRow[]`)
 - Modify: `server/src/coord/answerMarks.ts` (`askMarkable`)
 - Modify: `server/src/coord/answerMarkStore.ts` (`askMarkTargets`, the read of the asks the operator has)
+- Modify: `server/src/coord/portfolioStore.ts` (export `NEWEST_ASK`, the newest-ask rule, so the read uses it rather
+  than spelling it again)
 - Modify: `server/src/coord/store.ts` (one delegate)
-- Modify: `server/src/coord/ledgersRoutes.ts` (`waitingViewOf` carries the two lists, with their marks; the door's
-  `ask` arm)
+- Modify: `server/src/coord/ledgersRoutes.ts` (`waitingViewOf` carries `asks`, with their marks; the door's `ask` arm)
 - Modify: `server/test/sim/answerMarkSets.ts`, `server/test/sim/mutation-floors.json`
 - Modify: `server/test/answer-marks.test.ts`, `server/test/answer-mark-store.test.ts`,
   `server/test/answer-mark-routes.test.ts`
 
-**The wire.** `AskMarkRow = { id, childId, program: string | null, question, how, at, answerMarks }`:
+**The wire.** `AskMarkRow = { id, childId, program: string | null, question, how, at, live, answerMarks }`:
 - `how` says how the ask reached the operator: `declined` (its parent handed it over), `lapsed` (released with no
   `releaseReason`: the parent's window ran out), `released-at-mint` (minted `released`, with the reason carried as
   `reason`), or `answered` (the operator answered it). A row in any other state is not listed.
-- `at` is `releasedAt`, or `answeredAt` for `answered`.
+- `at` is the ask's last change of state: `releasedAt`, or `answeredAt` for `answered`.
+- `live` is `true` when the ask is its child's newest row and the live-ask port reads the child's hook state waiting
+  on this ask's own `askKey`; `false` when it reads another key or none, or the ask is not its child's newest;
+  `'unmeasured'` when the port answers `unmeasured`. An `answered` row is never live.
 - `question` is the ask's first line, which a child wrote. It rides the masked GET and the masked frame, as item
   titles do. After the retention it is empty, and the row is still listed.
 
-**The decider.** `askMarkable(row, newestOfChild: boolean, now)` answers `markable`, or `not-markable` with a reason:
-- `released` or `declined`, and the newest ask of its child: markable. An older one: `not-listed`;
-- `answered` with `answeredBy` the operator and `answeredAt >= now - CLEARED_WINDOW_MS`: markable. Older:
+**The decider.** `askMarkable(row, live: boolean | 'unmeasured', now)` answers `markable`, or `not-markable` with a
+reason:
+- `released` or `declined`: markable when `live` is `true`, or when `releasedAt >= now - CLEARED_WINDOW_MS`.
+  Otherwise `past-window`. An `unmeasured` live read counts as not live, so only the window applies;
+- `answered` with `answeredBy` the operator: markable when `answeredAt >= now - CLEARED_WINDOW_MS`, otherwise
   `past-window`. Answered by its parent: `not-shown`;
 - `held`: `not-shown`. `answering`, `stale`, `unknown` or a state this build does not know: `not-listed`.
 
-**The read.** `askMarkTargets(db, now)` answers `{ open, cleared }`:
-- `open`: the newest row of each child (`MAX(id)` per `childId`) whose state is `released` or `declined`;
-- `cleared`: rows answered by the operator inside the window, newest first;
-- each joined to `runs` through `runId` for the programme (`null` with no run row).
+**The read.** `askMarkTargets(db, now, liveAsk)` answers the listed asks, newest first:
+- one statement selects the `released` and `declined` asks with `releasedAt` inside the window or that are their
+  child's newest row (`NEWEST_ASK`), and the asks the operator answered inside the window;
+- for each `released` or `declined` ask that is its child's newest row it asks `liveAsk(childId)` once and compares
+  the key with the row's `askKey`, as `portfolioFacts` does;
+- it drops every row `askMarkable` would not call markable, so a newest row past the window that is not live is read
+  and not listed. That read is bounded by the number of children, never by time;
+- each row is joined to `runs` through `runId` for the programme (`null` with no run row).
 
 The view attaches each row's marks through `answerMarksOf('ask', ids)`, with the same unmeasured arm as items.
 
+**The door's ask arm.** `coord.askById(id)`: absent is `unknown-ask` (404), and an unreadable row is the existing
+`ask-unreadable` (503) with its detail, as `GET /api/asks` answers it, never an absent row. For a `released` or
+`declined` ask that is its child's newest row, it asks `deps.liveAsk(row.childId)`. Then `askMarkable(row, live, now)`,
+then the same record, frame and answer as the item arm. The door does no `await` between its read and its write.
+
 - [ ] **Step 1: Failing tests:**
-  - `askMarkable` over every state, the newest-of-child rule, the parent's answer and the window's edges;
-  - **the agreement:** over one fixture set of asks, `askMarkTargets` lists exactly the asks `askMarkable` calls
-    markable;
+  - `askMarkable` over every state, with `live` `true`, `false` and `'unmeasured'`, the parent's answer and the
+    window's two edges;
+  - **the states the code keeps:** a `declined` ask the operator answered in the pane (left `declined`, as the code
+    leaves it) is listed until 48 hours after its `releasedAt` and then not; a `released` ask whose dialog has gone
+    (the port reads another key) is listed only inside the window;
+  - **the dialog, not the child:** a child's older released ask, while the child now waits on a permission prompt or
+    on a newer ask, reads `live: false`, so its boxes never sit on the child's current question row;
+  - a live ask past the window is listed and markable, and the same ask with the port answering `unmeasured` is not;
+  - **the agreement:** over one fixture set of asks and one stub port, `askMarkTargets` lists exactly the asks
+    `askMarkable` calls markable;
   - the read joins the programme, and gives `null` for a run row that is absent;
-  - the door: a tick of either mark on a released ask answers `marked`; a held ask is `not-markable` (`not-shown`); an
-    absent ask is 404 `unknown-ask`; an ask answered by its parent is `not-markable`;
-  - `GET /api/waiting` carries `asks` and `asksCleared` with both marks.
+  - the door: a tick of either mark on a live released ask answers `marked`; a declined ask inside the window answers
+    `marked`; one past the window is `not-markable` (`past-window`); a held ask is `not-markable` (`not-shown`); an
+    absent ask is 404 `unknown-ask`; an ask answered by its parent is `not-markable` (`not-shown`);
+  - `GET /api/waiting` carries `asks` with `live` and both marks.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the three suites, `test/single-definition/*.test.ts`, `test/rings/*.test.ts`,
-  `test/sim/mutation-floors.test.ts`, `test/secret-mask.test.ts` and the three `tsc` runs. Green.
+- [ ] **Step 4: Run** the three suites, `test/portfolio*.test.ts`, `test/single-definition/*.test.ts`,
+  `test/rings/*.test.ts`, `test/sim/mutation-floors.test.ts`, `test/secret-mask.test.ts` and the three `tsc` runs.
+  Green.
 - [ ] **Step 5: Red check.** Each change below reds a case. Restore each from a saved copy.
-  - Drop the newest-of-child rule: an older released ask becomes markable, and its case reds.
+  - Read `live` by child alone, without comparing `askKey`: the older-ask case reds.
+  - Drop the window bound for an ask that is not live: the declined-in-the-pane case reds.
   - Accept the parent's answer as the operator's: its case reds.
 - [ ] **Step 6: Commit.** `feat(marks): the asks the operator has, their marks and the door's ask arm (Overlord W1,
       R21)`
@@ -774,25 +850,34 @@ The view attaches each row's marks through `answerMarksOf('ask', ids)`, with the
 ### Task 6: The boxes on question rows and on cleared asks
 
 **Files:**
-- Modify: `pwa/src/ledgers/answerMarkWords.ts` (`askMarksFor(sessionId, asks)`, the join of a question row to its open
-  ask, by `childId`)
-- Modify: `pwa/src/ledgers/ledgerWords.ts` (`clearedTrail` and `clearedGroups` take a union of cleared items and cleared
-  asks, newest first, grouped by programme as today)
+- Modify: `pwa/src/ledgers/answerMarkWords.ts` (`askMarksFor(sessionId, asks)`, the join of a question row to its live
+  ask)
+- Modify: `pwa/src/ledgers/ledgerWords.ts` (`clearedTrail` and `clearedGroups` take a union of cleared items and the
+  listed asks that are not live, newest first, grouped by programme as today)
 - Modify: `pwa/src/ledgers/WaitingScreen.tsx` (`QuestionButton`'s row draws the two boxes when `askMarksFor` finds the
-  session's ask; `ClearedTrail` draws a cleared ask row, "answered" with its age, with its boxes)
+  session's live ask; `ClearedTrail` draws a cleared ask row, with its `how` in words and its age, with its boxes)
+- Modify: `pwa/src/lib/refusalWords.ts` (`LEDGER_REFUSAL_TEXT` gains `unknown-ask`, which the door can now answer:
+  "This question is no longer on record, so it cannot be marked.")
 - Modify: `pwa/test/answer-mark-words.test.ts`, `pwa/test/ledger-words.test.ts`, `pwa/test/waiting-screen.test.tsx`
 
+`askMarksFor` takes only a row whose `childId` is the session's id and whose `live` is `true`. The server compared the
+row's `askKey` with the dialog the child is waiting on, so the boxes name the question the row shows, never an older ask
+of the same child.
+
 - [ ] **Step 1: Failing tests:**
-  - `askMarksFor` finds the row by `childId`, answers nothing for a session with no listed ask (a root session's own
-    ask, a permission prompt, an ask still held), and nothing when the view has no `asks` field (an older server);
-  - the cleared trail orders items and asks together by their time, and groups them by programme;
-  - the screen draws both boxes on a question row whose session has a listed ask, and on a cleared ask, and none on a
-    question row whose session has none.
+  - `askMarksFor` finds the session's live ask, and answers nothing for a session with no listed ask (a root session's
+    own ask, an ask still held), for one whose listed ask is not live (its dialog has gone, or it now shows a
+    permission prompt) and when the view has no `asks` field (an older server);
+  - the cleared trail orders items and asks that are not live together by their time, and groups them by programme;
+  - the screen draws both boxes on a question row whose session has a live ask, and on a cleared ask, and none on a
+    question row whose session has none;
+  - `unknown-ask` has its sentence.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** these suites, the waiting suites of Task 4, pwa's `tsc`, and the server's single-definition and
   rings suites. Green.
-- [ ] **Step 5: Red check.** Draw the boxes on every question row: the root-ask case reds. Restore from a saved copy.
+- [ ] **Step 5: Red check.** Draw the boxes on every question row of a session with a listed ask, live or not: the
+  permission-prompt case reds. Restore from a saved copy.
 - [ ] **Step 6: Commit.** `feat(marks): the answer-mark boxes on question rows and on cleared asks (Overlord W1, R21)`
 
 **PR B ends here.** Its body states the rows that carry no box and why (question 3), the floor, and that nothing changes
@@ -821,17 +906,24 @@ coordinator mints numbers.
 - **`not-markable-word`**: one new ledger word, `not-markable`, with its Table 11.6 row in PR A (question 13).
 - **`answer-mark-absent-is-unsupported`**: an absent `answerMarks` means "this server cannot mark", never "never marked"
   (question 14).
+- **`ask-marks-follow-todays-ask-states`**: PR B lists an ask while it is live, read through the portfolio's `liveAsk`
+  port, or within 48 hours of its last change of state, because a `released` or `declined` ask never leaves that
+  state (question 3, review 2176 F8). The first draft held each child's newest released ask open with no bound and
+  joined it to a question row by child alone.
+- **`coordinator-read-carries-no-marks`**: the coordinator's box-token item read carries no marks, and each operator
+  response carries the marks of the item it answers (Task 3, review 2176 F13).
 
 ## Where things stand
 
 **Agreed:**
 - The operator's ruling R21 (2026-11-15, five sentences), and the coordinator's defaults in the brief and its addenda,
   built as questions 2 to 16 state.
+- The coordinator's rulings on review 2176: the name stays "answer marks" (question 1); a gate reads the mark standing
+  at the reveal; a wipe keeps the ids of the answers that were marked unsure; PR B follows today's ask states.
 - The spec delta in this plan's pull request: §9.2.1 and C70, the amendments that make an unsure answer no yardstick,
   and the proposal of §9.5.1.
 
 **Waiting on the coordinator:**
-- Question 1: the name, "answer marks" or "delegation marks".
 - The index changes above, for the index's fix round.
 
 **Waiting on the operator** (the spec's "Waiting on you"):
