@@ -1701,6 +1701,226 @@ The highlighting case uses the table's exact label/href/command. Test normal and
 - [ ] **Step 8: Push** the workspace branch and open the ONE pull request with the scanned body (`gh pr create --body-file`).
 - [ ] **Step 9:** Measure the fingerprint (`handoffCommit === branchTip`, the PR number, `prPhase: 'open'`), wait for the PR's CI run on that exact tip (its `test (server)` runs the full suite; read the `CodeQL` check itself, not only its Analyze jobs), list mail, then send the wave-done.
 
+## Results
+
+Measured at the merged tip `626fe04ea`, with `main` at `416b8f942`. Results are written before the Results commit, so that commit is the tip. Every local run went through `ccrc test`, in the foreground, one at a time.
+
+### Suites
+
+| Suite | Where | Result |
+|---|---|---|
+| `pwa` unit, whole (14 pieces) | local, `626fe04ea` | 530 files passed; 15713 tests passed, 2 skipped; no type errors |
+| `pwa` typecheck | local, `626fe04ea` | `TSC-OK` |
+| PWA browser suite, complete (20 pieces; one split in two) | local, `626fe04ea`, Chrome for Testing 156.0.8078.4 | 97 files: in the pieces, 96 files passed and 1 failed. Tests: 3573 passed, 1 failed, 1 expected fail, 52 skipped. The failing file, `lanes-row`, then passed alone, 89 of 89 (see "Named, without a number"). |
+| `server`, whole | CI, run 43648206715 at `cc8516673` (D-8144) | 12 Linux shards, 1502 files: the same 1502 as the tree at that tip, all passed |
+| `server`, after this merge | the PR's CI on the exact tip (D-8144) | recorded in the wave-done mail |
+| Mutation table, end state (54 rows) | local, `626fe04ea` | 54 of 54 red, each with named failing cases; 54 restores sha-matched; `git status --porcelain` unchanged |
+
+The CI run's caveats (D-8144):
+- Some tests were skipped on the CI runner: `platform-hazards` 6 of 12, `ccrc-test-wrapper` 3 of 171 and `ccrc-install-landing` 1 of 37.
+- The macOS legs failed three shards, in `platform-hazards`, `siwc-trial` and `delegation-rig-w0`. None of these files is in this diff, the legs are advisory by standing ruling, and the coordinator measured `main`'s own daily full runs on 2026-11-13 and 2026-11-14 as red on macOS too.
+- The local server runs at `63b383b34` are kept as history: 1472 files, of which 18 were red or interrupted. Their manifest is in the run's evidence, and the CI run passed all 18.
+
+### E17 and the arm
+
+`E17-READING does-not-hold`, `E17-BLOCKS 2`: block 1 reads `does not hold` (217 ms all six together) and block 2 reads `holds` (192 ms). Arm B with a block applies: the Docs reader keeps drawing Mermaid on request (refinement (b)), and arm A's assertions typecheck but are not run.
+
+### Figures (Task 7) beside Task 1's BASE
+
+| Figure | BASE | End |
+|---|---|---|
+| refined 412 x 915, title from the screen top (limit 61) | 125 (compact head) | **56** (one bar); the console's part 48 (limit 48); `frameBar` false; `aaOverTitle` false |
+| instrument 412 x 915 | 125 | 56 |
+| refined 599 x 915 | 125 | 56 |
+| refined 412 x 915, details panel open | 402.5 | 286.5 |
+| refined 412 x 915, widened to 1280 x 915 / turned to 915 x 412 | — | one bar kept, `frameBar` false, 165 (screenTop 109) |
+| refined 412 x 915, ready swap (refinement (f), "the frame does not move") | — | frame top 48 under option 1's row with "Formatting…", 48 under the one bar at ready |
+| 600 x 960 (refined, refined mouse), 768 x 1024, 1280 x 800 (refined, refined desk and touch, instrument desk), 915 x 412 touch | 233, 201, 213, 306/306/322, 310, 342 | the same, 0 px each |
+
+The one bar's own figures at 412 x 915:
+- The bar is 396 x 44 with a 1 px divider.
+- Up one level, Quick jump and Contents are each 44 x 44, and the title is 264 x 44.
+- The reading line is 2 px tall, its bottom at 44, running 0 to 396 of 396.
+- Quick jump and Contents toggle the frame's tools.
+- A focused title or tool keeps its whole 2 px ring above the reading line. With the title pressed, the line paints over it.
+
+```
+L11-FIGURE refined 412x915 {"head":"one-bar","screenTop":0,"frameTop":48,"titleInFrame":8,"frameScroll":0,"above":56,"frameBar":false,"aaOverTitle":false}
+L11-FIGURE instrument 412x915 {"head":"one-bar","screenTop":0,"frameTop":48,"titleInFrame":8,"frameScroll":0,"above":56,"frameBar":false,"aaOverTitle":false}
+L11-FIGURE refined 599x915 {"head":"one-bar","screenTop":0,"frameTop":48,"titleInFrame":8,"frameScroll":0,"above":56,"frameBar":false,"aaOverTitle":false}
+L11-FIGURE refined 412x915 panel-open {"head":"one-bar","screenTop":0,"frameTop":278.5,"titleInFrame":8,"frameScroll":0,"above":286.5,"frameBar":false,"aaOverTitle":false}
+L11-FIGURE refined 412x915-then-1280x915 {"head":"one-bar","screenTop":109,"frameTop":157,"titleInFrame":8,"frameScroll":0,"above":165,"frameBar":false,"aaOverTitle":false}
+L11-FIGURE refined 412x915-then-915x412 {"head":"one-bar","screenTop":109,"frameTop":157,"titleInFrame":8,"frameScroll":0,"above":165,"frameBar":false,"aaOverTitle":false}
+L11-FIGURE refined 412x915 swap [{"head":"compact","top":48,"formatting":true},{"head":"one-bar","top":48,"formatting":false}]
+L11-FIGURE refined 412x915 bar {"bar":{"w":396,"h":44,"bottom":44},"divider":"1px","buttons":[{"name":"Up one level","text":"‹","w":44,"h":44,"bottom":43.5},{"name":"title","text":"specsPath identity designPage details (never fetched)","w":264,"h":44,"bottom":43.5},{"name":"Quick jump","text":"","w":44,"h":44,"bottom":43.5},{"name":"Contents","text":"","w":44,"h":44,"bottom":43.5}],"read":{"w":0,"h":2,"bottom":44}}
+L11-FIGURE refined 412x915 reading-line {"top":{"read":0,"bar":396},"end":{"read":396,"bar":396}}
+L11-FIGURE refined 412x915 tools {"contents":"toggles","jump":"toggles"}
+L11-FIGURE refined 412x915 pressed-title {"focusVisible":false,"lineOnTop":true,"ground":"color(srgb 0.919177 0.921294 0.919529)"}
+L11-FIGURE refined 412x915 text-row {"bar":{"w":396,"h":44},"divider":"1px","buttons":[{"name":"Up one level","w":44,"h":44},{"name":"Share","w":44,"h":44},{"name":"Export","w":44,"h":44},{"name":"Page details (never fetched)","w":44,"h":44}],"lines":[13.75,17.5]}
+L11-FIGURE refined 412x915 text-panel-open {"closedHeadBottom":44,"panelBottom":252,"bodyTop":256}
+```
+
+`T10-FIGURES worst` (the reader-frame worst case; budget 5242880):
+- BASE: srcdocChars 13540150, mountMs 164.8, readyMs 1752.5, wallMs 2495.
+- End, alone in the foreground: srcdocChars 13548077, mountMs 111, readyMs 2729.7, wallMs 3313. The case's own bound passed.
+- End, inside its browser piece under other tenants' load: readyMs 6286.4, wallMs 7410.
+- On 2026-11-11 at `d5a6bb20a`, alone: readyMs 2035, wallMs 2554.
+
+The ready time moves with load on this shared box. The srcdoc grew by 7927 characters, which is the library's 1.1.0 assets.
+
+### Mutation table, as measured at the end state
+
+Each row's `red` field names the cases that failed, taken from the last run of that ID. Two rows differ from an earlier record:
+- `L11-T7-M1` now reds 2 cases: the 61 px case and the Quick jump and Contents case. At `cc8516673` it redded 1.
+- `L11-T7-M3` and `L11-T7-M4` exited 1 with no summary on their first end-state run, so they count as unmeasured. Each was run again and redded its one case.
+
+**T2** (2 rows)
+
+```json
+[
+  {"id": "L11-T2-M1", "spec": "(a) M8.12", "pkg": "pwa", "file": "package.json", "old": "\"@synapsium-labs/docserver\": \"1.1.0\",", "new": "\"@synapsium-labs/docserver\": \"^1.1.0\",", "tests": ["test/reader-pin.test.ts"], "red": "1 failed: pwa/package.json pins @synapsium-labs/docserver at exactly 1.1.0"},
+  {"id": "L11-T2-M2", "spec": "(a)", "pkg": "pwa", "file": "node_modules/@synapsium-labs/docserver/assets/assets.json", "old": "\"sha256\": \"dc49ce7dffeb1d2f9ebba065ec6a53ecbdf3ab1439f67c63c17763dda459c424\",", "new": "\"sha256\": \"dc49ce7dffeb1d2f9ebba065ec6a53ecbdf3ab1439f67c63c17763dda459c425\",", "tests": ["test/reader-pin.test.ts"], "red": "1 failed: the installed assets manifest records 1.1.0's moved hashes and keeps the three that did not move"}
+]
+```
+
+**T3** (7 rows)
+
+```json
+[
+  {"id": "L11-T3-M1", "spec": "(b)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "return e17 === 'holds' ? 'after-ready' : 'on-request';", "new": "return e17 === 'does-not-hold' ? 'on-request' : 'after-ready';", "tests": ["test/reader-policy.test.ts"], "red": "1 failed: docsDrawFor draws after ready only when the E17 Mermaid line holds"},
+  {"id": "L11-T3-M2", "spec": "(b)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "export const READER_E17_MERMAID: ReaderE17Reading = 'does-not-hold';", "new": "export const READER_E17_MERMAID: ReaderE17Reading = 'holds';", "tests": ["test/reader-policy.test.ts"], "red": "1 failed: READER_E17_MERMAID is the reading the operator's block gave"},
+  {"id": "L11-T3-M3", "spec": "(d)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' }", "new": "? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome }", "tests": ["test/reader-policy.test.ts"], "red": "1 failed: readerMountPlan: lab-draw draws on open in the auto mode, on the frame's own bar, whatever the reading and the bar asked for"},
+  {"id": "L11-T3-M4", "spec": "(f)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "return compactWidth ? 'host-bar' : 'frame-bar';", "new": "return 'host-bar';", "tests": ["test/reader-policy.test.ts"], "red": "1 failed: readerChromeFor: ccrc's bar at the compact width, the frame's own bar otherwise"},
+  {"id": "L11-T3-M5", "spec": "(j)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "const ONE_BAR_PLAN_TOOLS: readonly ReaderCommand[] = ['jump', 'contents', 'outline'];", "new": "const ONE_BAR_PLAN_TOOLS: readonly ReaderCommand[] = ['jump', 'contents'];", "tests": ["test/reader-policy.test.ts"], "red": "1 failed: oneBarTools: the quick jump and the contents; a plan's Outline on a plans leaf; never the reading settings"},
+  {"id": "L11-T3-M6", "spec": "(h)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "return metaTitle !== null && metaTitle.trim() !== '' ? metaTitle : fileName;", "new": "return metaTitle ?? fileName;", "tests": ["test/reader-policy.test.ts"], "red": "1 failed: readerBarTitle: the document's first level-1 heading, else the file name"},
+  {"id": "L11-T3-M7", "spec": "(j)", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "export type ReaderCommand = 'jump' | 'settings' | 'contents' | 'outline';", "new": "export type ReaderCommand = 'jump' | 'settings' | 'contents';", "tests": ["test/reader-commands.test-d.ts"], "red": "1 failed: ReaderCommand is the name type DocFrame.command takes"}
+]
+```
+
+**T4** (10 rows)
+
+```json
+[
+  {"id": "L11-T4-M1", "spec": "(c)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "...(plan.draw === 'after-ready' ? { loadMermaid } : {}),", "new": "", "tests": ["test/reader-bridge.test.ts"], "red": "4 failed: a doc over the gate is handed the loader too: the library's gate decides; hands the library the loader itself and awaits nothing before the mount; the adapters are ccrc's keys for each draw and bar: the fourteen, loadMermaid after ready, features and onProgress on ccrc's bar; the installed library seeds a host-bar mount drawn after ready with the bar off, progress asked for, and no Mermaid script in its srcdoc"},
+  {"id": "L11-T4-M2", "spec": "(c)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "if (plan.draw !== 'after-ready' && document.scan !== undefined && mermaidGate(document.scan.mermaid).inline) {", "new": "if (document.scan !== undefined && mermaidGate(document.scan.mermaid).inline) {", "tests": ["test/reader-bridge.test.ts"], "red": "3 failed: a loader that never settles does not hold the mount, and leaves no timer; hands the library the loader itself and awaits nothing before the mount; the installed library seeds a host-bar mount drawn after ready with the bar off, progress asked for, and no Mermaid script in its srcdoc"},
+  {"id": "L11-T4-M3", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "? { features: { chrome: { bar: false, topSpace: false } }, onProgress: (share: number) => input.onProgress?.(share) }", "new": "? { features: { chrome: { bar: true, topSpace: false } }, onProgress: (share: number) => input.onProgress?.(share) }", "tests": ["test/reader-bridge.test.ts"], "red": "2 failed: a host-bar mount turns the frame's bar off and trims its top space, as a fresh plain object; the installed library seeds a host-bar mount drawn after ready with the bar off, progress asked for, and no Mermaid script in its srcdoc"},
+  {"id": "L11-T4-M4", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "features: { chrome: { bar: false, topSpace: false } }", "new": "features: { chrome: { bar: false } }", "tests": ["test/reader-bridge.test.ts"], "red": "2 failed: a host-bar mount turns the frame's bar off and trims its top space, as a fresh plain object; the installed library seeds a host-bar mount drawn after ready with the bar off, progress asked for, and no Mermaid script in its srcdoc"},
+  {"id": "L11-T4-M5", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "onProgress: (share: number) => input.onProgress?.(share)", "new": "onProgress: () => undefined", "tests": ["test/reader-bridge.test.ts"], "red": "1 failed: a host-bar mount forwards each progress share to the input"},
+  {"id": "L11-T4-M6", "spec": "(i)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "if (destroyed) return;\n      frame.command(name);", "new": "frame.command(name);", "tests": ["test/reader-bridge.test.ts"], "red": "1 failed: command forwards to DocFrame.command at once, and does nothing after destroy"},
+  {"id": "L11-T4-M7", "spec": "(c) (d) D-8030", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "if (plan.draw === 'auto') input.onMermaidDrop?.();", "new": "input.onMermaidDrop?.();", "tests": ["test/reader-lab-bridge.test.ts", "test/reader-bridge.test.ts"], "red": "2 failed: on request, a rejected load drops the scan and reports no drop: the drop report is the lab's alone; signals a rejected load only for the lab profile while still mounting without scan"},
+  {"id": "L11-T4-M8", "spec": "(b)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "deps.e17 ?? READER_E17_MERMAID", "new": "deps.e17 ?? 'holds'", "tests": ["test/reader-bridge.test.ts"], "red": "1 failed: with no e17 dep, the recorded reading decides the draw"},
+  {"id": "L11-T4-M9", "spec": "(d)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "export const LAB_GAP_WINDOW: LabGapWindow = 'ready';", "new": "export const LAB_GAP_WINDOW: LabGapWindow = 'ready-and-settle';", "tests": ["test/reader-lab-window.test.ts"], "red": "1 failed: lab-draw draws in auto mode whatever the reading, and the window ends at ready"},
+  {"id": "L11-T4-M10", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "...(plan.chrome === 'host-bar'", "new": "...(true", "tests": ["test/reader-bridge.test.ts", "test/reader-lab-bridge.test.ts"], "red": "3 failed: a frame-bar mount, and a mount that names no chrome, pass neither features nor onProgress; the adapters are ccrc's keys for each draw and bar: the fourteen, loadMermaid after ready, features and onProgress on ccrc's bar; with E17 held the lab still inlines (auto), loads first and reports a drop; it is handed no loader and no bar"}
+]
+```
+
+**T5** (10 rows)
+
+```json
+[
+  {"id": "L11-T5-M1", "spec": "(f)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "const chrome = cur.barSlot?.chrome ?? 'frame-bar';", "new": "const chrome = 'frame-bar' as const;", "tests": ["test/reader-frame.test.tsx"], "red": "8 failed: a fallback after ready withdraws the bar, and so does an unmount; a host-bar slot mounts with ccrc's bar and asks for progress; a phone turned sideways keeps the one bar: a frame mounted with ccrc's bar still publishes it after the slot asks for the frame's own; progress reaches the bar's store and its listeners; the Docs screen asks for ccrc's bar under the compact width and for the frame's own above it; the bar is published at ready, not before; the bar's command reaches the mount's command; the bar's title is the document's own, else the file name"},
+  {"id": "L11-T5-M2", "spec": "(i)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "{state.s === 'ready' && bar !== null && <ReaderBarShown bar={bar} />}", "new": "{bar !== null && <ReaderBarShown bar={bar} />}", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: the bar is published at ready, not before"},
+  {"id": "L11-T5-M3", "spec": "(i)", "pkg": "pwa", "file": "src/docs/readerBar.ts", "old": "return () => slot.publish(null);", "new": "return undefined;", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: a fallback after ready withdraws the bar, and so does an unmount"},
+  {"id": "L11-T5-M4", "spec": "(h)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "title: readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path)),", "new": "title: leafName(cur.props.show.path),", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: the bar's title is the document's own, else the file name"},
+  {"id": "L11-T5-M5", "spec": "(i)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "...(progress === null ? {} : { onProgress: (share: number) => progress.set(share) }),", "new": "...(progress === null ? {} : { onProgress: () => undefined }),", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: progress reaches the bar's store and its listeners"},
+  {"id": "L11-T5-M6", "spec": "(i)", "pkg": "pwa", "file": "src/docs/readerBar.ts", "old": "for (const l of listeners) l();", "new": "", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: progress reaches the bar's store and its listeners"},
+  {"id": "L11-T5-M7", "spec": "(f)", "pkg": "pwa", "file": "src/screens/DocsScreen.tsx", "old": "({ chrome: readerChromeFor(compactWidth), publish: setReaderBar })", "new": "({ chrome: readerChromeFor(false), publish: setReaderBar })", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: the Docs screen asks for ccrc's bar under the compact width and for the frame's own above it"},
+  {"id": "L11-T5-M8", "spec": "(f)", "pkg": "pwa", "file": "src/docs/readerBar.ts", "old": "    if (slot === null) return undefined;", "new": "    if (slot === null || slot.chrome !== 'host-bar') return undefined;", "tests": ["test/reader-frame.test.tsx"], "red": "1 failed: a phone turned sideways keeps the one bar: a frame mounted with ccrc's bar still publishes it after the slot asks for the frame's own"},
+  {"id": "L11-T5-M9", "spec": "(f)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "  }, [overGate, text, bytes]);", "new": "  }, [overGate, text, bytes, barSlot]);", "tests": ["test/reader-frame.test.tsx"], "red": "3 failed: a frame mounted with its own bar publishes none, even once the slot asks for ccrc's (a window narrowed after the mount); a phone turned sideways keeps the one bar: a frame mounted with ccrc's bar still publishes it after the slot asks for the frame's own; the slot's bar is read as the mount starts: a later change does not remount"},
+  {"id": "L11-T5-M10", "spec": "(f)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "      const progress = chrome === 'host-bar' ? createReaderProgress() : null;", "new": "      const progress = createReaderProgress();", "tests": ["test/reader-frame.test.tsx"], "red": "2 failed: a frame mounted with its own bar publishes none, even once the slot asks for ccrc's (a window narrowed after the mount); a frame-bar slot, and no slot, mount with the frame's own bar and ask for no progress; nothing is published"}
+]
+```
+
+**T6** (17 rows)
+
+```json
+[
+  {"id": "L11-T6-M1", "spec": "(f)", "pkg": "pwa", "file": "src/docs/docsHeadWords.ts", "old": "if (leaf && takesCommands) return 'one-bar';", "new": "if (compactWidth && leaf && takesCommands) return 'one-bar';", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: compact width false, /docs/demo/plans/p.md, takes commands true: one-bar"},
+  {"id": "L11-T6-M2", "spec": "(j)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => bar.command(t)}", "new": "onClick={() => { queueMicrotask(() => bar.command(t)); }}", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: each tool runs its command in the tap itself"},
+  {"id": "L11-T6-M3", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "hidden={!open}\n      >\n        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />\n        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />\n        <Actions", "new": "hidden\n      >\n        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />\n        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />\n        <Actions", "tests": ["test/docs-one-bar.test.tsx"], "red": "4 failed: Escape from inside the panel, or on the title, closes it with focus on the title; Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open; choosing the plain view withdraws the one bar: option 1's row comes back, with the plain-view note under it; the title opens the details panel: the crumbs, the truth line and the full header's actions, in §4.5's order"},
+  {"id": "L11-T6-M4", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "title.current?.focus();", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: Escape from inside the panel, or on the title, closes it with focus on the title"},
+  {"id": "L11-T6-M5", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<Actions\n          page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}\n          exportAssets={p.exportAssets} onPlainView={p.onPlainView} form=\"stacked\"\n        />", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "3 failed: Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open; choosing the plain view withdraws the one bar: option 1's row comes back, with the plain-view note under it; the title opens the details panel: the crumbs, the truth line and the full header's actions, in §4.5's order"},
+  {"id": "L11-T6-M6", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<span className=\"sr-only\">{moreName(dot)}</span>", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "2 failed: the title names a failed fetch: its name ends with the freshness problem words, and the dot is the failed one; the title's name carries the freshness words"},
+  {"id": "L11-T6-M7", "spec": "(l)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "style={{ inlineSize: `${Math.round(share * 1000) / 10}%` }}", "new": "style={{ inlineSize: '0%' }}", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: the reading line shows the share the frame reports"},
+  {"id": "L11-T6-M8", "spec": "(j)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "min-height: var(--tap-min); min-width: var(--tap-min);\n  border: 0; border-radius: var(--r-md);\n  background: none; color: var(--ink-secondary);\n  cursor: pointer;\n}\n.docs-read", "new": "min-height: var(--sp-8); min-width: var(--sp-8);\n  border: 0; border-radius: var(--r-md);\n  background: none; color: var(--ink-secondary);\n  cursor: pointer;\n}\n.docs-read", "tests": ["test/tap-targets.test.tsx", "test/control-census.test.ts"], "red": "3 failed: verifies every TOKEN claim against the stylesheets; are at least one tap tall, the tools one tap wide, off the shared token; keeps every floored rule on the token, never a bare 44px literal"},
+  {"id": "L11-T6-M9", "spec": "(l)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px;", "new": "position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px; transition: inline-size 0.2s;", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the bar positions the reading line; the title, a tool and the line carry their declarations; no selector of the block names a width"},
+  {"id": "L11-T6-M10", "spec": "(k)", "pkg": "pwa", "file": "design/audit.mjs", "old": "'.docs-tool': {", "new": "'.docs-tool-unregistered': {", "tests": ["test/contrast.test.ts"], "red": "7 failed: has no stale inherited registry entry, and it is not empty (168); reports no structural problem; contains no identities beyond the grandfathered blind spots; measures every docs rule that sets a colour in both themes, at or above its floor; exits 0 when every pair passes; measures far more than the 94 token pairs it used to; passes every pair it measures"},
+  {"id": "L11-T6-M11", "spec": "(f)", "pkg": "pwa", "file": "src/docs/docsHeadWords.ts", "old": "if (leaf && takesCommands) return 'one-bar';", "new": "if (takesCommands) return 'one-bar';", "tests": ["test/docs-compact-head.test.tsx"], "red": "2 failed: compact width true, /docs/demo/specs, takes commands true: full; compact width true, /docs/demo/specs/d/, takes commands true: full"},
+  {"id": "L11-T6-M12", "spec": "(f)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "bar !== null && tree !== null", "new": "bar !== null", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: a bar handle without a usable tree at 412 uses the compact head"},
+  {"id": "L11-T6-M13", "spec": "(h)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}\n        >\n          <CompactWhere where={p.crumbs.at(-2)?.label ?? ''} refText={rowRefText(page, tree)}", "new": "onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}\n        >\n          <CompactWhere where={p.crumbs.at(-2)?.label ?? ''} refText={null}", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: the where line keeps a served ref and a draft badge above the title"},
+  {"id": "L11-T6-M14", "spec": "(h)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "            {dot !== null && <span className=\"docs-title-dot\" data-tone={dot} aria-hidden=\"true\" />}\n            {bar.title}\n", "new": "            {bar.title}\n            {dot !== null && <span className=\"docs-title-dot\" data-tone={dot} aria-hidden=\"true\" />}\n", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: the freshness dot sits before the title text (refinement (h))"},
+  {"id": "L11-T6-M16", "spec": "(j)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-read {\n  position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px;\n  background: var(--accent); pointer-events: none;\n}\n", "new": "@media (min-width: 1px) {\n.docs-read {\n  position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px;\n  background: var(--accent); pointer-events: none;\n}\n}\n", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the bar positions the reading line; the title, a tool and the line carry their declarations; no selector of the block names a width"},
+  {"id": "L11-T6-M17", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;\n", "new": "", "tests": ["test/docs-one-bar.test.tsx"], "red": "1 failed: Escape inside Share's sheet closes the sheet only: the details panel it was opened from stays open"},
+  {"id": "L11-T6-M18", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<span className=\"sr-only\">{moreName(dot)}</span>", "new": "<span className=\"sr-only\">{moreName(null)}</span>", "tests": ["test/docs-one-bar.test.tsx"], "red": "2 failed: the title names a failed fetch: its name ends with the freshness problem words, and the dot is the failed one; the title's name carries the freshness words"}
+]
+```
+
+**T7** (4 rows)
+
+```json
+[
+  {"id": "L11-T7-M1", "spec": "(g)", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "features: { chrome: { bar: false, topSpace: false } }", "new": "features: { chrome: { bar: false, topSpace: true } }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 412 x 915, Refined: the title is at most 61 px down, 48 of them the console's; 412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons"},
+  {"id": "L11-T7-M2", "spec": "(j)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => bar.command(t)}", "new": "onClick={() => undefined}", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons"},
+  {"id": "L11-T7-M3", "spec": "(l)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-one-bar .docs-compact-bar :focus-visible { position: relative; z-index: 1; }\n", "new": ".docs-one-bar .docs-compact-bar :focus-visible { position: relative; }\n", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it"},
+  {"id": "L11-T7-M4", "spec": "(l)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "  background: var(--accent); pointer-events: none;\n}\n", "new": "  background: var(--accent); pointer-events: none; z-index: -1;\n}\n", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it"}
+]
+```
+
+**T9** (3 rows)
+
+```json
+[
+  {"id": "L11-T9-M1", "spec": "Task 9", "pkg": "pwa", "file": "src/screens/settings/SettingsIndex.tsx", "old": "commandId=\"go-reader-lab\"", "new": "commandId=\"go-settings-updates\"", "tests": ["test/settings-frame.test.tsx", "test/settings-screen.test.tsx", "test/command-layer.test.tsx", "test/command-registry.test.ts"], "red": "4 failed: Reader lab: a click runs its command and lands on its route; Reader lab is discoverable after the five ordinary sections; an ordinary click is prevented and goes to its route through the command; the index's two diagnostic rows follow the five sections and open their pages on a click; a modified click opens nothing here"},
+  {"id": "L11-T9-M2", "spec": "Task 9", "pkg": "pwa", "file": "src/screens/settings/SettingsIndex.tsx", "old": "commandId=\"go-measure-highlighting\"", "new": "commandId=\"go-settings-security\"", "tests": ["test/settings-frame.test.tsx", "test/settings-screen.test.tsx", "test/command-layer.test.tsx", "test/command-registry.test.ts"], "red": "4 failed: Measure highlighting: a click runs its command and lands on its route; Measure highlighting is discoverable after the five ordinary sections; an ordinary click is prevented and goes to its route through the command; the index's two diagnostic rows follow the five sections and open their pages on a click; a modified click opens nothing here"},
+  {"id": "L11-T9-M3", "spec": "Task 9", "pkg": "pwa", "file": "src/screens/settings/SettingsIndex.tsx", "old": "        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // a new tab or window keeps the href\n", "new": "", "tests": ["test/settings-frame.test.tsx", "test/settings-screen.test.tsx", "test/command-layer.test.tsx", "test/command-registry.test.ts"], "red": "11 failed: Measure highlighting: a meta, ctrl, shift or alt click each leaves the page where it is; Reader lab: a meta, ctrl, shift or alt click each leaves the page where it is; a altKey click is left to the browser: not prevented, no command, no navigation; a ctrlKey click is left to the browser: not prevented, no command, no navigation; a metaKey click is left to the browser: not prevented, no command, no navigation; a shiftKey click is left to the browser: not prevented, no command, no navigation; a altKey click is left to the browser: not prevented, no command, no navigation; a ctrlKey click is left to the browser: not prevented, no command, no navigation; a metaKey click is left to the browser: not prevented, no command, no navigation; a shiftKey click is left to the browser: not prevented, no command, no navigation; the index's two diagnostic rows follow the five sections and open their pages on a click; a modified click opens nothing here"}
+]
+```
+
+**T10** (1 rows)
+
+```json
+[
+  {"id": "L11-T10-M1", "spec": "(f) the frame does not move", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-one-bar .docs-compact-bar { position: relative; }", "new": ".docs-one-bar .docs-compact-bar { position: relative; margin-block-end: 6px; }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "3 failed: 412 x 915, Instrument: the one bar, and at most 48 px of the console above the frame; 412 x 915, Refined: the title is at most 61 px down, 48 of them the console's; 412 x 915: the frame does not move when the row becomes the one bar at ready (refinement (f))"}
+]
+```
+
+### Held-out review (Step 1) and its fixes
+
+The review ran three `opus`/`high` lenses at `ba4bc1443`, plus `sonnet`/`high` refuters. No lens found a Critical or Important issue. Fixes are grouped by file, and each commit names its findings:
+- `b942d6edd`:
+  - An Escape in a sheet that the panel opened now closes the sheet only (L1-M1).
+  - The title now names a failed fetch (L3-M6).
+  - Rows `L11-T6-M17` and `L11-T6-M18`.
+- `e12f95451`: the reading line now paints under a focused control's ring and over an open title's ground, both measured in Chromium. Rows `L11-T7-M3` and `L11-T7-M4`.
+- `aee9970f3`: a frame mounted with its own bar publishes none after the window narrows (L3-M2). Row `L11-T5-M10`.
+- `6cb262b93`: arm A's after-ready mark now counts hits from before the open (L3-M5 and the Task 7 review's Important). This is dormant under arm B.
+- `63b383b34`: two lab design text fixes (L2-M1, L2-M2).
+- `d5a6bb20a`: "the frame does not move" at the ready swap (L3-M4) is measured: 48 px before and after. Row `L11-T10-M1`. This commit is part of the 2026-11-11 work in D-8145.
+
+### Named, without a number
+
+- **`L11-T3-M1` reds 1 case, not the predicted 2.** Case 3 derives its expectation from `docsDrawFor`, so it follows the mutation.
+- **`L11-T4-M8` used the word `'holds'`.** The plan's placeholder word does not typecheck.
+- **Row-count predictions differed in three places:** T4-M1/M2 also red the real-mount seed case, T6-M3/M5 red 2 cases, and T5-M1 reds 7.
+- **Task 2's `npm install` re-synced the lock's linked `../ui` metadata.** Those 5 lines were restored, so the lock diff is the library's 4 lines.
+- **GitHub reports the v1.1.0 tag's signature as `unknown_key`.** This is an observation; the plan does not check it.
+- **The browser runs use Chrome for Testing 156.0.8078.4 (revision 1248).** The installed `playwright-core` names it. Revision 1243, used on 2026-11-11, is no longer in the cache. Every figure above matched the 2026-11-11 figures to the pixel.
+- **`lanes-row` failed once inside its browser piece.** The case was "instrument, phosphor, 390px", with a card at 42.2 px against 44. The file passed alone, 89 of 89, and is outside this diff.
+- **`ask-inline` once failed to start.** The error was `code.charCodeAt is not a function` in vite's module runner, while the test slice's memory cap killed other tenants' processes. Run again, it passed 500, with 12 skipped.
+- **The memory cap killed processes in two other passing runs.** The test slice's cap logged kills in `pwa` piece 9 and in browser pieces 3 and 4. Each exited 0 with every file passed.
+- **The Task 6 probe M15 (drop OneBar's key) stays green.** The bar remounts on every leaf navigation, so the navigation case pins behaviour without a single-line guard. It is not a row.
+
+### Carried, not fixed
+
+- **An open Page details disclosure is dropped at the ready swap (L1-M2, and the Task 6 review's minor 6).**
+  - Reproduction: at 412 px, open a leaf. While "Formatting…" shows, tap the title to open Page details. At ready, the head swaps from option 1's row to the one bar, the disclosure closes, and focus goes to the body.
+  - Impact: one extra tap to reopen it. Nothing is lost, and no route changes.
+  - The plan designs no cross-component state or focus carry for this. It is the same family as the lazy-mount focus carry that Docs W1a Task 13 owns.
+- **OneBar's `key` is defensive (L3-M3).** No reachable case was found, and deleting it stays green.
+- **The Outline button's click is pinned in jsdom only (L3-M7).**
+- **The previous page's bar can show for one frame after navigating (Task 5 review, minor 4).** This is passive cleanup, the same window as Export's body.
+- **Settings repeats the diagnostics' literal titles and hrefs beside `routes.ts` (Task 9 review, M-b).** The plan allows this, and the href and command-registry cases guard it.
+
 ## Deviations found
 
 - **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; this is the same definition already published in the programme ledger, not another allocation. Task 10 verified this entry; it used two of the reserve, below. Unused reserve: 8146.
