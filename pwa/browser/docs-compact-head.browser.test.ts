@@ -311,7 +311,26 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
         const box = name.getBoundingClientRect();
         return { titleW: button.width, nameW: box.width, nameScroll: name.scrollWidth, nameRight: box.right, titleRight: button.right };
       });
-      console.log(`L11-FIGURE refined 412x915 long-title ${JSON.stringify({ chars: LONG_TITLE.length, ...f, ...bar })}`);
+      const handle = await app.page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
+      const frame = await handle?.contentFrame();
+      if (frame === null || frame === undefined) throw new Error('the reader iframe has no content frame');
+      // Fix round 2 (A12): aaOverTitle reads false when there is no Aa at all, so the case asks that the frame's own Aa
+      // is there and records its box and the h1's first line beside the reading. One sampled title, one wrap point.
+      const aa = await frame.evaluate((title) => {
+        const box = document.querySelector('.aa-wrap')?.getBoundingClientRect() ?? null;
+        const h1 = [...document.querySelectorAll('h1')].find((h) => h.textContent?.trim() === title) ?? null;
+        let first: { left: number; right: number; top: number; bottom: number } | null = null;
+        if (h1 !== null) {
+          const range = document.createRange();
+          range.selectNodeContents(h1);
+          const r = range.getClientRects()[0];
+          if (r !== undefined) first = { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        }
+        return { aa: box === null ? null : { left: box.left, right: box.right, top: box.top, bottom: box.bottom }, first };
+      }, LONG_TITLE);
+      console.log(`L11-FIGURE refined 412x915 long-title ${JSON.stringify({ chars: LONG_TITLE.length, ...f, ...bar, aaBox: aa.aa, firstLine: aa.first })}`);
+      expect(aa.aa, "the frame's own Aa is drawn, so aaOverTitle false is a reading, not an absence").not.toBeNull();
+      expect(aa.first, "the h1's first line has a box").not.toBeNull();
       expect(f.head).toBe('one-bar');
       expect(f.frameBar, 'the frame draws no bar of its own').toBe(false);
       expect(f.above, 'px above the title').toBeLessThanOrEqual(ONE_BAR_TITLE_MAX);
@@ -524,17 +543,33 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       const inJump = (): Promise<boolean> => frame.evaluate(() => document.querySelector('.jump')?.contains(document.activeElement) === true);
       const contents = page.getByRole('button', { name: DOCS_TOOL_TEXT.contents });
       const jump = page.getByRole('button', { name: DOCS_TOOL_TEXT.jump });
+      // Fix round 2 (item 6): the Quick jump focus wait timed out once in five runs (CI attempt 1 of run 43676134505).
+      // Its bound stays 5 s; when a wait here expires, the case first prints what holds focus in the host and in the
+      // frame, so the next failure says where the focus went.
+      const say = (el: Element | null): string => el === null ? 'null'
+        : `${el.tagName.toLowerCase()}${el.id === '' ? '' : `#${el.id}`}${el.className === '' || typeof el.className !== 'string' ? '' : `.${el.className.trim().split(/\s+/).join('.')}`}${el.getAttribute('aria-label') === null ? '' : `[${el.getAttribute('aria-label')}]`}`;
+      const waitOrSay = async (what: string, fn: () => boolean): Promise<void> => {
+        try {
+          await frame.waitForFunction(fn, undefined, { timeout: 5000 });
+        } catch (err) {
+          const host = await page.evaluate(`(${say.toString()})(document.activeElement)`).catch(() => 'unreadable');
+          const inner = await frame.evaluate(`(${say.toString()})(document.activeElement)`).catch(() => 'unreadable');
+          const frameHasFocus = await frame.evaluate(() => document.hasFocus()).catch(() => 'unreadable');
+          console.log(`L11-FOCUS-TIMEOUT ${what}: host activeElement ${String(host)}; frame activeElement ${String(inner)}; frame hasFocus ${String(frameHasFocus)}`);
+          throw err;
+        }
+      };
       await contents.click();
-      await frame.waitForFunction(() => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true, undefined, { timeout: 5000 });
+      await waitOrSay('contents opens', () => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true);
       expect(await tocOpen(), 'the first tap opens Contents').toBe(true);
       await contents.click();
-      await frame.waitForFunction(() => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') !== true, undefined, { timeout: 5000 });
+      await waitOrSay('contents closes', () => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') !== true);
       expect(await tocOpen(), 'the second tap closes it').toBe(false);
       await jump.click();
-      await frame.waitForFunction(() => document.querySelector('.jump')?.contains(document.activeElement) === true, undefined, { timeout: 5000 });
+      await waitOrSay('focus in Quick jump', () => document.querySelector('.jump')?.contains(document.activeElement) === true);
       expect(await inJump(), 'the first tap puts focus in Quick jump').toBe(true);
       await jump.click();
-      await frame.waitForFunction(() => document.querySelector('.jump')?.contains(document.activeElement) !== true, undefined, { timeout: 5000 });
+      await waitOrSay('focus out of Quick jump', () => document.querySelector('.jump')?.contains(document.activeElement) !== true);
       expect(await inJump(), 'the second tap takes it out').toBe(false);
       console.log('L11-FIGURE refined 412x915 tools {"contents":"toggles","jump":"toggles"}');
       expect(app.errors, 'no page error').toEqual([]);

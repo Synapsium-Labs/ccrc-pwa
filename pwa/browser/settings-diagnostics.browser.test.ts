@@ -94,7 +94,7 @@ describe("Settings' index: the two diagnostic doors in both skins (Task 9 Step 4
               purpose: a.querySelector('.settings-index-purpose')?.textContent ?? '',
               purposeShown: shown(a.querySelector('.settings-index-purpose')),
               status: a.querySelectorAll('.settings-index-status').length,
-              skeleton: a.querySelectorAll('[aria-busy], .skeleton').length,
+              skeleton: a.querySelectorAll('.skel, [role=status]').length,
               current: a.getAttribute('aria-current'),
             })),
           };
