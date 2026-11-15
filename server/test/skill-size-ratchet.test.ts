@@ -26,8 +26,11 @@
 // goes there.
 //
 // Lower a cap by editing skill-size-caps.json down to the size the R2 lowered message prints.
-// Raise a cap only by the bytes of the clause line a pull request appends. R6 has no raise: a clause
-// that pushes the contract past the budget needs shorter clauses, or less text before the contract.
+// Raise a cap only by the bytes of the clause line a pull request appends. R6's budget was raised once,
+// from 16,000 to 16,750 bytes, to fit four waiting coordinator clauses as written (the autonomy, recall,
+// Linear and Overlord clauses), by the operator's decision (operator item 326, programme `overlord`).
+// A further raise needs the operator's decision again. Without one, a clause that pushes the contract
+// past the budget needs shorter clauses, or less text before the contract.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
@@ -42,9 +45,14 @@ type Base = { caps: Caps | 'absent'; sizes: Sizes };
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CAPS = 'server/test/skill-size-caps.json';
 const SKILL_FILE = /^ccd\/[^/]+-skill\/SKILL\.md$/;
-// 5,000 tokens at 3.2 bytes a token. These files measure about 4.0 bytes a token on a public tokenizer;
-// Claude's own is not measured here and counts more tokens for the same text, so the bound leans short.
-const CONTRACT_BUDGET_BYTES = 16_000;
+// The budget was 16,000 bytes: 5,000 tokens at 3.2 bytes a token. It was raised once, to 16,750, to fit
+// four waiting coordinator clauses as written (the autonomy, recall, Linear and Overlord clauses), by the
+// operator's decision (operator item 326, programme `overlord`). A further raise needs the operator's
+// decision again. At 3.2 bytes a token, 16,750 bytes is about 5,234 tokens: 234 past the 5,000 Claude
+// Code re-attaches. The cut notice before the contract covers that tail: a session that cannot see the
+// section after the contract loads the skill again. These files measure about 4.0 bytes a token on a
+// public tokenizer; Claude's own is not measured here and counts more tokens for the same text.
+const CONTRACT_BUDGET_BYTES = 16_750;
 const CONTRACT_HEADING = '## The contract';
 const CUT_NOTICE = 'load this skill again';
 
@@ -307,6 +315,9 @@ describe('R6: the contract sits where a compaction keeps it', () => {
   const skill = (before: string, clauses: string, after = '## Steps\n\nrest\n'): string =>
     `---\nname: x\n---\n\n# Title\n\n${before}## The contract\n\n${clauses}\n${after}`;
 
+  it('the budget is 16,750 bytes, raised once by the operator\'s decision (operator item 326): a further raise needs it again', () => {
+    expect(CONTRACT_BUDGET_BYTES).toBe(16_750);
+  });
   it('a contract that is the first section, behind the notice and inside the budget, passes', () => {
     expect(contractPlace(F, skill(NOTICE, one + two))).toEqual([]);
   });
