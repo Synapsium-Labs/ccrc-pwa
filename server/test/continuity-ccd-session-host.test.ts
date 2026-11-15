@@ -81,6 +81,13 @@ describe('renew', () => {
     await without.host.renew(ID, 7);
     expect(without.calls).toEqual([CCD_ARGV.hibernate(ID, null, null, 'fresh')]);
   });
+  it('runs the ccd call inside `around`, keyed by the session, when given', async () => {
+    const seen: string[] = [];
+    const { host, calls } = harness({ around: async (id, fn) => { seen.push(`in ${id}`); const r = await fn(); seen.push(`out ${id}`); return r; } });
+    expect(await host.renew(ID, 3)).toEqual({ kind: 'started' });
+    expect(seen).toEqual([`in ${ID}`, `out ${ID}`]);
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('deliver', () => {

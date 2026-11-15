@@ -708,8 +708,16 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
 describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
   const HOME = 'server/src/sleepLane.ts';
 
+  // The renewal act's fresh start is NOT a sleep act, legitimately different (Overlord W1a renewal act, slug
+  // renew-is-not-a-sleep-act): spec §3.3.11 H13 picks `ccd hibernate --roll --fresh` as `SessionHost.renew`'s act, which ends a
+  // long-lived session's conversation and starts a fresh one under the same id; it never puts a session to sleep, it is the
+  // port's ccd adapter, driven by the generations lane's renewal walk and never by the sleep executor's rows. It is named by
+  // symbol, so a second SLEEP act site is still red.
+  const NOT_SLEEP_ACTS: readonly string[] = ['server/src/continuity/ccdSessionHost.ts#ccdSessionHost'];
   it('the ccd hibernate act sites are one, sleepAct in sleepLane.ts (2 -> 1 at C4d; may only shrink)', () => {
-    expect(hibernateActSites().map((s) => s.symbol)).toEqual([`${HOME}#sleepAct`]);
+    const all = hibernateActSites().map((s) => s.symbol);
+    expect(all.filter((s) => !NOT_SLEEP_ACTS.includes(s))).toEqual([`${HOME}#sleepAct`]);
+    expect(all.filter((s) => NOT_SLEEP_ACTS.includes(s)), 'each named exception is still an act site the census sees').toEqual(NOT_SLEEP_ACTS);
   });
 
   it('no capability site is held for W4, and sleepLane.ts asks no verb through verbSupported(', async () => {

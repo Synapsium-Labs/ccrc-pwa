@@ -22,6 +22,10 @@ export interface CcdSessionHostDeps {
   readonly usage: (sessionId: string) => Promise<UsageRead>;
   readonly startsOf: (sessionId: string, limit: number) => StartsRead;
   readonly log?: (line: string) => void;
+  /** Runs the renewal's ccd call on the session's serialisers (the server passes the stop-and-done serialiser around the
+   *  per-session queue, as the automatic roll's act runs), so it never interleaves with a send to that pane or another
+   *  lane's act on that row. Absent, the call runs as it is. */
+  readonly around?: <T>(sessionId: string, fn: () => Promise<T>) => Promise<T>;
 }
 
 /** How many of a session's newest starts `receipt` looks through. */
@@ -41,7 +45,8 @@ export function ccdSessionHost(deps: CcdSessionHostDeps): SessionHost {
     const base = sweepDec(deps.fleetState, 'sweep:renew');
     const dec = base === null ? null : { ...base, reason: `renewal n=${n}` };
     let res;
-    try { res = await deps.runCcd(CCD_ARGV.hibernate(sessionId, dec, null, 'fresh')); }
+    const argv = CCD_ARGV.hibernate(sessionId, dec, null, 'fresh');
+    try { res = await (deps.around === undefined ? deps.runCcd(argv) : deps.around(sessionId, () => deps.runCcd(argv))); }
     catch (e) { return { kind: 'unreachable', detail: messageOf(e) }; }
     if (res.ran === false) return { kind: 'unreachable', detail: res.stderr };
     if (res.ok) return { kind: 'started' };
