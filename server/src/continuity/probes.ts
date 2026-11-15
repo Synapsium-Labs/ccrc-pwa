@@ -14,6 +14,7 @@
 import type { CardFacts, CardItem, CardNote, Fact } from '../../../shared/continuity-card.js';
 import {
   FIT_PASS_RATE, FIT_WINDOW, PROBE_NONE, PROBE_ROUND_MAX, PROBE_ROUND_MIN, SPOT_PROBE_EVERY_TOKENS, isBlankText, type ProbeClass,
+  type ProbeGrade, type ProbeRoundKind,
 } from '../../../shared/continuity.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
@@ -33,7 +34,8 @@ export interface ProbeQuestion {
  *  rows, and `why` names the reads by their own `what`. */
 export interface ProbeSkip { readonly cls: ProbeClass; readonly why: string; readonly unmeasured: boolean }
 
-export type ProbeKind = 'start' | 'compaction' | 'spot';
+/** A round's occasion: `ProbeRoundKind`, the vocabulary `continuity_probes.kind` is read through. */
+export type ProbeKind = ProbeRoundKind;
 
 /** A composed round. `short` is true when it asks fewer than its kind's least count (three, or one for a spot probe);
  *  `unmeasured` is true when it is short and any class it consulted had a failed read, whether or not that class still
@@ -51,7 +53,7 @@ type Draft = Omit<ProbeQuestion, 'id'>;
 interface Pool { readonly drafts: readonly Draft[]; readonly why: string; readonly unread: readonly string[] }
 
 /** The one fold grading uses: decoys are filtered by it too, so no decoy grades as the answer (review 1999, F5). */
-const fold = (t: string): string => t.trim().toLowerCase();
+export const fold = (t: string): string => t.trim().toLowerCase();
 
 /** Fisher-Yates, drawn from the port. */
 function shuffle<T>(xs: readonly T[], entropy: Entropy): T[] {
@@ -227,9 +229,8 @@ export function probeRound(role: FleetRole, snapshot: CardFacts, entropy: Entrop
   return { kind, questions, skipped, short, unmeasured: short && unread.size > 0 };
 }
 
-export type ProbeGrade = 'pass' | 'fail';
-/** Whether the session read anything between ask and answer (the probe door records it, PR B). */
-export type BookState = 'closed' | 'open' | 'unmeasured';
+/** One answer's grade and the book state the probe door records: the vocabulary lives in `shared/continuity.ts`. */
+export type { BookState, ProbeGrade } from '../../../shared/continuity.js';
 export type RoundVerdict = 'passed' | 'failed' | 'unmeasured';
 
 /** Closed-form: the answer, trimmed and case-folded, must be the expected one, and one of the choices when there is a
@@ -240,12 +241,13 @@ export function gradeProbe(q: ProbeQuestion, answer: string): ProbeGrade {
 }
 
 /** A round passes only when it asked something and every answer passed. A wrong answer fails it whatever else holds:
- *  it is the session's. Otherwise a round the snapshot's failed reads made short (`ProbeRound.unmeasured`) is
- *  `unmeasured`, never `failed`, so the session is not blamed for the server's read (review 1999, F4b); a measured empty
- *  round still fails (slug empty-round-fails). */
+ *  it is the session's. Otherwise a round the snapshot's failed reads made short (`ProbeRound.unmeasured`), or one with a
+ *  question the door could not grade (grade `unmeasured`), is `unmeasured`, never `failed`, so the session is not blamed
+ *  for the server's read (review 1999, F4b; review 2063, F1 and F6); a measured empty round still fails (slug
+ *  empty-round-fails). */
 export function roundVerdict(grades: readonly ProbeGrade[], unmeasured: boolean): RoundVerdict {
   if (grades.some((g) => g === 'fail')) return 'failed';
-  if (unmeasured) return 'unmeasured';
+  if (unmeasured || grades.some((g) => g === 'unmeasured')) return 'unmeasured';
   return grades.length > 0 ? 'passed' : 'failed';
 }
 

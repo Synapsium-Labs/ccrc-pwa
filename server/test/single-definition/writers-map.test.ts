@@ -309,7 +309,8 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 // (the delegation tables' `delegationInsertSql`) or split from its verb across string pieces is not seen.
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
-  'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers'] as const;
+  'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
+  'continuity_probes', 'continuity_reads'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -376,6 +377,9 @@ describe(TABLES_PIN, () => {
       continuity_timers: ['cancelTimer', 'insertTimer', 'markTimersFired', 'purgeTimers'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_notes: ['server/src/continuity/continuityStore.ts#appendNote'],
       continuity_handovers: ['server/src/continuity/continuityStore.ts#putHandover'],
+      // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
+      continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
     });
   });
 });

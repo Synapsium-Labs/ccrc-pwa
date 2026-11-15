@@ -75,10 +75,13 @@ Each has a recommendation. None blocks wave 4a's first tasks.
 2. **Each lane's watch verdict**, from Task 0's readings (runbook step R1). lane-a has no baseline of its own defined:
    it was switched six hours into lane-b's watch (the Stage 2 plan's record of the second lane's switch).
    Recommendation: judge both lanes on the criteria that need no baseline, and both together on the two that do.
+   **Ruled 2026-11-14: accepted (D-8637).** Every criterion that can be read passes on both lanes, and compaction is
+   recorded as not measurable on these lanes.
 3. **New lanes start `direct`** (Task 7). **Ruled 2026-11-10: yes, always.** `account add` writes a `direct` lane,
    and no longer waits for the watch verdict.
 4. **When the runtime leaves the fleet box** (R4). Recommendation: after the 4a build has run there for a week with
-   the doctor green, the usage rows fresh and the hourly refresh clean.
+   the doctor green, the usage rows fresh and the hourly refresh clean. **Ruled 2026-11-14: yes (D-8639)**, once R3's
+   week ends clean, on 2026-11-21 at the earliest, with the evidence shown to the operator before the removal.
 5. **The catalogue probe's identity.** The design's D27 has ccrc name itself on the backend route. The bridge and the
    usage poll do. The models probe still presents as the Codex CLI. Changing it is one live request the runbook would
    have to cover, so it is out of this plan unless the operator rules it in.
@@ -463,8 +466,21 @@ Its own plan, written when R4 has held on the reference fleet. What it has to de
 
 ## Deviations found
 
-None yet. A deviation's number is issued by the ledger door when this programme's run opens. Until then a finding is
-reported in the pull request that met it.
+Numbers are issued by the ledger door. A finding without one is reported in the pull request that met it.
+
+- **D-8637 (2026-11-14)** — `stage-4-verdict-accepted`: the operator accepted the watch verdict (ruling 2) on R1's
+  readings of 2026-11-14. Every criterion that can be read passes on both lanes: empty tool calls, the 5xx rate, the
+  credential and drift (growth since the baseline). Compaction is recorded as not measurable on these lanes: its
+  comparable window, from the class model's advance to each lane's switch, holds no GPT-model session.
+- **D-8638 (2026-11-14)** — `stage-4-r3-started`: R3, the week with the LiteLLM runtime still installed as the
+  fallback, started on 2026-11-14 at the operator's word. Read daily:
+  - the doctor shows no failure;
+  - both lanes' usage rows stay fresh (the per-lane usage timers, which the doctor's `codex` usage checks read);
+  - the hourly refresh stays clean (the models timer's runs).
+  The way back at any point is `ccrc codex switch <lane> litellm`.
+- **D-8639 (2026-11-14)** — `stage-4-r4-approved`: R4 is approved. The LiteLLM runtime is removed
+  (`ccrc codex runtime remove`) once R3's week ends clean, on 2026-11-21 at the earliest. The week's evidence goes to
+  the operator first, and the removal waits for their word on it.
 
 ## Where things stand
 
@@ -508,5 +524,8 @@ ran v0.0.1201. This record stands in for the Stage 2 plan's step 7 entry, which 
   from the class model's advance to each lane's switch, holds no GPT-model session. Ruling 2 (the verdict) and R3
   are the operator's.
 
-**Open questions for the operator:** the rulings above still open, most important first: 2 (the verdict), 1 (the order of
-the stages), 3 (new lanes), 4 (when the runtime leaves).
+**Ruled 2026-11-14:** the verdict is accepted (D-8637), R3's week started that day (D-8638), and R4 follows a clean
+week, on 2026-11-21 at the earliest, after the operator has seen the week's evidence (D-8639).
+
+**Open questions for the operator:** 1 (the order of the stages), 5 (the catalogue probe's identity) and 6 (the
+leftovers), none of which blocks R3 or R4.

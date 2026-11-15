@@ -209,6 +209,10 @@ export const NOTE_REFUSALS = {
   notAsked: 'note-not-asked',
 } as const;
 export type NoteRefusal = (typeof NOTE_REFUSALS)[keyof typeof NOTE_REFUSALS];
+/** The probe door's own words (Overlord W1a, the probes piece; spec Table 11.6, m5): no round of the caller's is open, and a
+ *  round already answered. Box-facing, so the console has no sentence for them. */
+export const PROBE_REFUSALS = { noneOpen: 'probe-none-open', closed: 'probe-closed' } as const;
+export type ProbeRefusal = (typeof PROBE_REFUSALS)[keyof typeof PROBE_REFUSALS];
 /** The timer doors' own words (Overlord W1a, the timers piece; spec §11.6, the `timer-*` words), each with its one status,
  *  declared once here and spread into `REFUSAL_STATUS` (`LEASE_DOOR_REFUSALS`' idiom). CHOSEN, not measured: 409 for the
  *  caller's cap and for a timer no longer pending, 429 for the hourly rate, 400 for a body the caller can fix, 503 for a
@@ -244,6 +248,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | CardRefusal
   // The note door (Overlord W1a): its five words of its own.
   | NoteRefusal
+  // The probe door (Overlord W1a, the probes piece): its two words of its own.
+  | ProbeRefusal
   // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
   | TimerRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
@@ -455,6 +461,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // its cap and for a handover thread naming no live row (the caller's text to fix).
   [NOTE_REFUSALS.keyUnknown]: 403, [NOTE_REFUSALS.cap]: 409, [NOTE_REFUSALS.tooLong]: 400,
   [NOTE_REFUSALS.referenceUnknown]: 400, [NOTE_REFUSALS.notAsked]: 409,
+  // The probe door (Overlord W1a): CHOSEN, not measured. 409 for both, as `note-not-asked`: no round open and a round already
+  // answered are each a state of the world, not a fault in the body.
+  [PROBE_REFUSALS.noneOpen]: 409, [PROBE_REFUSALS.closed]: 409,
   // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
   ...TIMER_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing

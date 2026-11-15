@@ -291,6 +291,11 @@ export function gradeCases(m: ProbesModule): Record<string, SuiteCase> {
       expect(m.roundVerdict(['pass', 'fail'], true)).toBe('failed');
       expect(m.roundVerdict(['fail'], true)).toBe('failed');
     },
+    'a question the door could not grade makes the round unmeasured, unless an answer failed (review 2063, F1 and F6)': () => {
+      expect(m.roundVerdict(['pass', 'unmeasured'], false)).toBe('unmeasured');
+      expect(m.roundVerdict(['unmeasured'], false)).toBe('unmeasured');
+      expect(m.roundVerdict(['unmeasured', 'fail'], false)).toBe('failed');
+    },
     'monotonic: turning a pass into a fail never makes a round pass': () => {
       for (const unm of [false, true]) {
         for (let bits = 0; bits < 32; bits++) {
@@ -435,8 +440,9 @@ const GRADE_SET: MutantSet<ProbesModule> = {
     { id: 'G3 a round on most passes', old: "if (grades.some((g) => g === 'fail')) return 'failed';", new: "if (grades.filter((g) => g === 'fail').length * 2 > grades.length) return 'failed';" },
     { id: 'G4 the choices unchecked', old: "if (q.choices !== null && !q.choices.some((c) => fold(c) === fold(answer))) return 'fail';", new: '' },
     { id: 'G5 an empty round passes', old: "return grades.length > 0 ? 'passed' : 'failed';", new: "return 'passed';" },
-    { id: 'G6 unmeasured ignored', old: "if (unmeasured) return 'unmeasured';", new: '' },
-    { id: 'G7 unmeasured hides a fail', old: "if (grades.some((g) => g === 'fail')) return 'failed';\n  if (unmeasured) return 'unmeasured';", new: "if (unmeasured) return 'unmeasured';\n  if (grades.some((g) => g === 'fail')) return 'failed';" },
+    { id: 'G6 unmeasured ignored', old: "if (unmeasured || grades.some((g) => g === 'unmeasured')) return 'unmeasured';", new: '' },
+    { id: 'G7 unmeasured hides a fail', old: "if (grades.some((g) => g === 'fail')) return 'failed';\n  if (unmeasured || grades.some((g) => g === 'unmeasured')) return 'unmeasured';", new: "if (unmeasured || grades.some((g) => g === 'unmeasured')) return 'unmeasured';\n  if (grades.some((g) => g === 'fail')) return 'failed';" },
+    { id: 'G8 a question graded unmeasured ignored', old: "unmeasured || grades.some((g) => g === 'unmeasured')", new: 'unmeasured' },
   ],
   suite: gradeCases,
 };
