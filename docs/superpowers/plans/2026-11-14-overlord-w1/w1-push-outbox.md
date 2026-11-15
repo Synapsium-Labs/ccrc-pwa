@@ -18,7 +18,7 @@ durable record of each push before they can be armed (§6.7, H18). The response 
 needs a push id and a per-send verdict on each push (§4.3, C67).
 
 **Architecture:** L0 vocabulary in a new `shared/push-outbox.ts`: the row states, `OUTBOX_TRANSITIONS` with the actor of
-each move, the verdict words and the bounds. L1 deciders in a new `server/src/pushOutbox.ts`: the one payload builder,
+each move, the verdict words and the bounds. L1 deciders in a new `server/src/pushOutbox.ts`: the payload's two rules,
 `pushDue`, the verdict's next state, the retry time and the boot pass's answer per row. L3: the table's functions in a
 new `server/src/coord/pushOutboxStore.ts`, with one-line `CoordStore` delegates, and a per-send verdict from
 `PushService.notify`. L4: the sender in a new `server/src/pushSender.ts`. It wraps `Deps.push` and is derived, in one
@@ -61,12 +61,13 @@ recommendation unless the coordinator rules otherwise. Rulings so far are marked
    then waits on the network, and a death anywhere in that window leaves the attempt `unknown`, whether or not the
    service took it. I2 holds as worded, and "at least one push attempt" reads "at least one claimed attempt".
 4. **A held item's reach** (slug `item-held-until-is-a-hold`). The spec says an item "had no hold before". The tree has
-   one: `operator_items.heldUntil`, set by the end-request, run-close-refusal and review-release raises, keeps an item
+   one: `operator_items.heldUntil`, set by some end-request, run-close-refusal and review-release raises, keeps an item
    off Waiting on you until it passes (`ledgersStore.ts#itemsFor`, `operatorWasShown`). Nothing happens at that time,
    because the list derives it on read. **Recommendation:** an item raised with no `heldUntil` is stamped at its raise.
    A held item is stamped at `heldUntil` by the sender's lane pass, once `operatorWasShown` holds for it, through the
-   same one writer, with its outbox row decided by `pushDue` from the item's current level. All three raises are `soon`
-   or `later` at the raise, but the level can change during the hold (question 8).
+   same one writer, with its outbox row decided by `pushDue` (`event: 'held'`) from the item's current level. All three
+   raises are `soon` or `later` at the raise, and only a toggle makes an item blocking. A toggle arms the item's row
+   (question 8), so the drain's row is always `silent` (fix round 2, F9).
 5. **Rollback below `push-outbox-v1`** (slug `rollback-refusal-ships-with-holds`). **Ruled (fix round 1, R1, reversing
    index review F8): the refusal ships with W3's hold arming, not here.** The spec's reason for §11.5's "a rollback below
    it refuses unless forced" is the hold tier: "the hold tier can be armed only when every build the box keeps and can
@@ -75,12 +76,19 @@ recommendation unless the coordinator rules otherwise. Rulings so far are marked
    and the two columns (Table 11.5's "ignored" class). The obligation W3 inherits, recorded here so W3's plan finds it:
    `ccd/ccrc#cmd_rollback` reads no server capability word today. A release records none (`build.json` carries `sha`,
    `ref`, `builtAt`, `dirty` and `version` only). `CCRC_CAP_WORDS` names what an install's `ccrc` can do, never a
-   server word, and "a version number is never a capability" (decision 13). **Ruled (second report of review 2083):**
-   there is one release capability record and one rollback floor check, and both are the pool-set piece's
-   (`_upd_cap_floor_check` beside `_upd_floor_check` in `ccd/ccrc`, reading the target's `build.json` `ccdCaps`, its
-   Task 8, with `--force` and the unattended passes it defines). W3's refusal below `push-outbox-v1` reuses that check
-   and adds only its word to the record that check reads. It builds no second record, reader, flag or warning. The
-   coordinator records this on the index row and Table 11.1d's line.
+   server word, and "a version number is never a capability" (decision 13). **Ruled (second report of review 2083,
+   worded by review 2089, F6):** there is one release capability record and one rollback floor check, and both are the
+   pool-set piece's (`_upd_cap_floor_check` beside `_upd_floor_check` in `ccd/ccrc`, reading the target's `build.json`
+   `ccdCaps`, its Task 8). W3 generalises that check and builds no mechanism beside it. It adds:
+   - a second `--below-cap` word (the pool set's override is `--below-cap pool-set`, and no `--force` crosses the
+     floor);
+   - a source for server words in the record (`ccdCaps` holds what `ccd caps` prints, which names no `SERVER_CAP_MAP`
+     word);
+   - its own standing fact, read where the held rows live (in `coord.db` on the server box, while the check runs on the
+     box being moved);
+   - its own sentence for the unattended passes.
+
+   W1 builds none of it. The coordinator carries the index row and Table 11.1d's line.
 6. **The ask's reach stamp beside `releasedAt`** (slug `reach-stamp-beside-released-at`). `asks.releasedAt` already
    records "the instant the operator's push was released" (`CoordStore.declineAsk`). In W1 the two are equal. In W3 an
    ask the coordinator releases may be held for the Overlord, so they part. **Recommendation:** a column of its own. Its
@@ -179,7 +187,18 @@ Measured on `main` at `416b8f942`.
   `raiseItemWithMail`'s `tx`. `raiseItemWithMail` passes a `queue(id)` callback into the transaction. `setBlocking` is a
   `tx` that answers whether the level moved. Only the raise route and the blocking route push: the raise when
   `neededBy === 'blocking'`, the toggle on every move to blocking, with no `heldUntil` check. The three `ccrc`-raised
-  paths (`endRequest.ts`, `runCloseRefusals.ts`, `reviewRelease.ts`) raise `soon` or `later` with a `heldUntil`.
+  paths (`endRequest.ts`, `runCloseRefusals.ts`, `reviewRelease.ts`) raise `soon` or `later`, sometimes with a
+  `heldUntil` and sometimes with none:
+  - `endRequest.ts` sets none when the coordinator raised the item or reads gone;
+  - `reviewRelease.ts` sets none when the run has no coordinator;
+  - `runCloseRefusals.ts` sets none unless the refusal is `tell-and-hold`.
+
+  All three raise through `CoordStore.raiseItemWithMail`, a `WatcherCoordPort` member (`coord/ports.ts`). Their deps
+  (`EndRequestDeps`, `ReviewReleaseDeps`, `RefusalDeps`) hold `coord` and no push service. They are built at
+  `coord/routes.ts`'s end-request handler, `watch.ts`'s review-release pass and `coord/runCloseLane.ts`'s refusal step.
+  The ledger routes' deps, `ledgersRoutes.ts#LedgerCoordinatorDeps`, carry `coord`, `notice`, `bus`, `now` and
+  `presenceOf`, and no push, time, entropy or masker. They are built in `coord/routes.ts`'s
+  `registerLedgerCoordinatorRoutes` call.
   `itemsFor` leaves a held item out of Waiting on you until `heldUntil` passes, and `operatorWasShown` says whether one
   was ever shown.
 - **The feed archive** keeps 2,000 rows and passes bodies through `redactCommand` (`CoordStore.recordFeedEvent`).
@@ -190,8 +209,13 @@ Measured on `main` at `416b8f942`.
   `derivedFrom`, `clock`, `flight` and `warnKey`, with an optional `staleAfterMs` for a `skip` row.
   `server/test/lane-schedule.test.ts` pins every row on the monotonic clock and counts them.
 - **The boot order.** `index.ts` opens `coord.db`, builds `CoordStore` and replays the landing journal before anything
-  else, then connects the fleet link, builds the masker, builds the server and starts the watcher. An inventory run on
-  the link's connect can reach `pushRelease` before `watcher.start()`.
+  else. It builds `time = systemTimePorts()` after that, then connects the fleet link, builds the masker, builds the
+  server and starts the watcher. An inventory run on the link's connect can reach `pushRelease` before `watcher.start()`.
+- **Masking.** `PushService` is built with `SHAPE_ONLY_MASKER` and handed the wired masker by `setMasker`. `notify` masks
+  at serialisation. The notify log's ring record is never masked (`NotifyLog` has no masker). `maskDeep` is idempotent
+  on shape matches: measured on `SHAPE_ONLY_MASKER` over an `sk-ant-` key, a JWT and a plain body, where a second pass
+  returns the first pass's bytes. Its budget arm (`SECRET_MASK_TOO_LARGE`) only shortens a string, so a second pass reads
+  fewer runs. That arm was not measured.
 - **Latches.** `changeLatch` is the "log once per cause, clear on success" helper (`FleetWatcher`'s
   `releasePushFailure`).
 - **Capability words.** `shared/api.ts#SERVER_CAP_MAP` (nine words, `timers-v1` the newest). `health.test.ts` and
@@ -213,49 +237,85 @@ Measured on `main` at `416b8f942`.
 - **Architecture (`CLAUDE.md`).** Decide in L1, act in L4. The payload builder, `pushDue`, the verdict's next state, the
   retry time and the boot pass's answer are L1 deciders over facts. The sender gathers facts, asks them and writes what
   they answer.
-- **One writer per fact.** `reachedOperatorAt` has one writer, `stampReach` in `pushOutboxStore.ts`, called only inside
-  a raising, releasing or arming transaction. `pushedAt` has one writer, `markOutboxVerdict`, called only by the
-  sender. Each outbox move goes through `OUTBOX_TRANSITIONS`, and `server/test/single-definition/writers-map.test.ts`
-  names each writer: `TABLES` gains `push_outbox`, and the `asks` and `operator_items` writer lists gain
-  `pushOutboxStore.ts#stampReach`.
+- **One writer per fact.** `reachedOperatorAt` has one writer, `stampReach` in `pushOutboxStore.ts`. It is called only
+  inside a raising, releasing or arming transaction, or the held drain's per-item transaction. `pushedAt` has one
+  writer, `markOutboxVerdict`, called only by the sender. Each outbox move goes through `OUTBOX_TRANSITIONS`.
+  `server/test/single-definition/writers-map.test.ts` names each writer:
+  - `TABLES` gains `push_outbox` and `operator_items`;
+  - `operator_items`' list names its current writers (`ledgersStore.ts`'s `raiseItemInTx`, the item move
+    `moveItemInTx` and `setBlocking`'s `neededBy` update, as the scan's own `tableWriters` names them at build time) plus
+    `stampReach`;
+  - the `asks` list gains `stampReach`.
+
+  `stampReach` writes through two literal statements, one per table, because the scan cannot see a table name built
+  at run time.
 - **One sender, wrapped around `Deps.push`.** `Deps.push` stays the whole `PushService`. The sender is derived from the
   deps object a funnel site already passes, by `pushSender.ts#senderFor`, so every `buildServer` and `FleetWatcher`
-  harness pushes as today. After PR B, `pushSender.ts` holds the only `PushService.notify` call, and the census in
-  `notify-push.test.ts` moves to it.
-- **One owner for a payload.** `pushOutbox.ts#noticePayload` builds every push's payload: title (with the project suffix),
-  body, `sessionId`, tag (the default, or the caller's), `url` and `actions`. `pushOne` and `raise` call it, and so do
-  the bound callers before their transaction. `senderFor(deps).prepare(payload)` masks it with the deps' masker and
-  mints its push id. A stored payload is the masked bytes the push carries, so the ring record, the stored row and the
-  push say the same thing.
+  harness pushes as today. Its `WeakMap`, keyed on the `PushService`, holds only per-service state: the `changeLatch`
+  and the in-flight attempts. `coord`, `time` and `masker` are read from the deps each call is given, so no caller's
+  deps fix another caller's behaviour (fix round 2, F3). After PR B, `pushSender.ts` holds the only `PushService.notify`
+  call, and the census in `notify-push.test.ts` moves to it.
+- **One owner for a payload.** `pushOutbox.ts` owns a push's text in two rules, each called once per push:
+  - `noticeTitle` is the project suffix. `pushOne` calls it once, as today, and a bound ask calls it once. An item's
+    push never had the suffix, so a bound item does not call it.
+  - `noticePayload` is the rest: body, `sessionId`, tag (the default, or the caller's), `url` and `actions`. `raise`
+    calls it once for an unbound push, and a bound caller calls it once, on the title as `noticeTitle` left it.
+
+  So no title is suffixed twice (fix round 2, F11). `senderFor(deps).prepare(payload)` masks the payload and mints its
+  push id. It masks with `deps.masker`, or with `SHAPE_ONLY_MASKER` until `index.ts` sets it, as `PushService` is built.
+  `PushService.notify` masks again at serialisation, which changes no byte on a shape match (measured, "What exists
+  today"). So the stored row and the push carry the same bytes. The ring record stays unmasked, as today (fix round 2,
+  F12).
 - **Pushes stay today's** (I9). Every site keeps its kind, title, body, tag, actions, url, mode and presence rule. Task 1
   pins them before any move, byte for byte. The behaviour changes are named, and nothing else changes: a send that
   every subscription refused is retried, and a row unsent when the server stopped is sent at its next boot.
 - **Bound rows** are asks and items only (open question 7). A bound row has exactly one outbox row, held by a unique
   index on its source (I2). Once a `pending` bound row has committed, no fallback sends an unbound push for the same
   event.
-- **No push service, no rows.** With `Deps.push` absent (no VAPID keys, every test box), nothing is written and nothing
-  is sent, as today. With a push service and no outbox store (a test's narrow `coord` double), the push is sent with no
-  row and no warning. With a store whose write throws, the push is still sent with no row and no push id (C67), and the
-  sender logs once per cause through a `changeLatch` that clears on the next successful write.
+- **Reaching the operator is not pushing** (H18; fix round 2, F4). With `Deps.push` absent (no VAPID keys, every test
+  box), an ask or item that reaches the operator still gets its stamp and one row in the raising transaction: `silent`,
+  with a null payload and `silentWhy` `no-service`. `prepare` still mints its push id. An unbound push with no push
+  service writes nothing and sends nothing, as today.
+- **A failed write, by kind** (fix round 2, F5).
+  - *Unbound pushes.* With a push service and no outbox store (a test's narrow `coord` double), the push is sent with no
+    row and no warning. With a store whose write throws, the push is still sent with no row and no push id (C67). The
+    sender logs once per cause through a `changeLatch` that clears on the next successful write.
+  - *Bound rows.* A bound row is written inside the move's transaction, so a failed insert rolls back the move itself
+    (C31).
+    - The lapse keeps the hold and retries at its next sweep. It logs once per cause through a `changeLatch`, not once
+      a sweep.
+    - The release door catches `declineAsk`'s throw and answers its error, never an unhandled throw.
+    - The item routes and the three `ccrc` raisers meet the throw a failed raise meets today.
 - **Time and chance through ports.** The new modules read `Clock`, `Scheduler` and `Entropy` from `Deps.time`, and join
-  `TIME_PORT_FILES` in the pull request that creates them. The push id is `entropy.hex(16)`. SQL never reads the clock.
+  `TIME_PORT_FILES` in the task that creates them: `pushOutbox.ts` in Task 2, `pushOutboxStore.ts` in Task 3 and
+  `pushSender.ts` in Task 4. The push id is `entropy.hex(16)`. SQL never reads the clock. The store takes no `Entropy`
+  and no masker. A bound row's push id and payload reach it through the caller's `BoundRowOf` callback.
 - **Text at rest is short-lived.** A row's payload is nulled when the row reaches a terminal state. A re-arm rebuilds it
   from the source row.
 - **One concern per file** (the large-file programme, #2769; index review F6). Every new wire type (`PushSendVerdict`,
   the states, the bounds) lives in the new `shared/push-outbox.ts`. `shared/api.ts` gains only `push-outbox-v1`'s row in
   `ServerCap` and `SERVER_CAP_MAP`.
-- **Shared files, by row** (index review F13). In `server/src/coord/ledgersRoutes.ts`, this piece touches
-  `pushBlocking` and its one call line in each of the raise route (`POST /api/programmes/:slug/items`) and the blocking
-  route (`POST /api/items/:id/blocking`), and no other handler. The goals doors belong to the portfolio piece and the
-  gate rows to the gates piece. In `server/src/coord/ledgersStore.ts` it touches `raiseItemInTx`, `setBlocking` and the
-  new `heldItemsReached` read only. It does not touch `pwa/src/lib/api.ts`.
+- **Shared files, by row** (index review F13; fix round 2, F1 and F2). This piece touches only these rows:
+  - `server/src/coord/ledgersRoutes.ts`: `LedgerCoordinatorDeps` (gains `bound: BoundRowOf` and the sender view),
+    `pushBlocking`, and its call lines in the raise route (`POST /api/programmes/:slug/items`) and the blocking route
+    (`POST /api/items/:id/blocking`). It touches no other handler. The goals doors belong to the portfolio piece and the
+    gate rows to the gates piece.
+  - `server/src/coord/ledgersStore.ts`: `raiseItemInTx`, `raiseItem`, `raiseItemWithMail`, `setBlocking` and the new
+    `heldItemsReached` read.
+  - `server/src/coord/routes.ts` (growth-checked): the `registerLedgerCoordinatorRoutes` call and the end-request
+    handler's deps.
+  - The three `ccrc` raisers' deps: `EndRequestDeps`, `ReviewReleaseDeps` and `RefusalDeps`, and the one deps line of
+    each in `watch.ts` and `runCloseLane.ts`.
+  - `server/src/coord/ports.ts#WatcherCoordMember`: the outbox members the watcher and its lanes reach.
+
+  It does not touch `pwa/src/lib/api.ts`.
 - **The push id has one owner, this piece:** its column, its minting through `Entropy`, and its uniqueness. The
   response record reads it from the outbox row and puts it in the payload.
 - **Tests.** From `server/`: `ccrc test -- ./node_modules/.bin/vitest run test/<file>.test.ts`. Each task's last run adds
   both `tsc` runs (`ccrc test -- npx tsc --noEmit -p tsconfig.json` and `-p test/tsconfig.tests.json`),
   `test/typecheck-tests.test.ts`, and pwa's `tsc` when `shared/` changed.
-- **Mutation floors.** Every new L1 decider (`noticePayload`, `pushDue`, `outboxNextState`, `outboxRetryAt`,
-  `outboxBootVerdict`) joins `MUTANT_SETS` through a new `server/test/sim/pushOutboxSets.ts` and
+- **Mutation floors.** Every new L1 decider (`noticeTitle`, `noticePayload`, `pushDue`, `outboxNextState`,
+  `outboxRetryAt`, `outboxBootVerdict`, `asSendVerdict`) joins `MUTANT_SETS` through a new `server/test/sim/pushOutboxSets.ts` and
   `server/test/sim/mutation-floors.json`, in PR A.
 - **Growth check** (`server/test/growthCheck.ts#GROWTH_FILES`, 40 net lines a file a pull request): each PR states its
   estimate below, and the builder measures it before pushing.
@@ -267,23 +327,25 @@ Measured on `main` at `416b8f942`.
 
 1. **I2.** An ask or item that reaches the operator has exactly one reach stamp and one outbox row, written in the
    transaction that moves it. No path writes a second, and a reach on a row that did not move writes none.
-2. **Never twice.** A row is sent only from a claim. A claim is a compare-and-set from `pending` or `retrying`. A verdict
+2. **Never twice.** A row is sent only from a claim. A claim is a compare-and-set from `pending` or `retrying`, or, for
+   an unbound row, its insert straight to `sending`. A verdict
    lands only on the attempt it answers (`claimSeq`). A retry follows only a verdict in which every subscription
    refused for a reason that can pass. A row claimed by a dead process is sealed `unknown` at boot, and that attempt is
    never retried.
 3. **Today's pushes.** Task 1's characterization suite is green on `main` and unchanged after the move, except its one
    seam. A push the presence gate suppressed today writes no unbound row and, for a bound row, a `silent` one.
-4. **A failed write never costs the push.** With no outbox store, or an insert that throws, the push still goes, as
-   today. The caller's failure sentence still prints on a rejected send.
+4. **A failed write never costs an unbound push.** With no outbox store, or an insert that throws, an unbound push
+   still goes, as today. A bound row's failed insert rolls back its move, which is retried as Global Constraints says.
+   The caller's failure sentence still prints on a rejected send.
 5. **One writer each.** `reachedOperatorAt` and `pushedAt` each have one writer. `PushService.notify` has one caller.
-   `noticePayload` builds every payload.
+   `noticeTitle` and `noticePayload` build every payload, each once.
 
 ## The PR split
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
 | A, the record and its rules | 1 to 3 | The characterization suite; the vocabulary and deciders, the payload builder among them; `push_outbox`, the reach stamps, their writers, and the per-send verdict. Nothing reachable: no caller writes a row yet | nothing: **ready to build** | `server/src/coord/schema.ts` about +34; `server/src/coord/store.ts` about +12; `server/src/watch.ts` about +4 (`pushOne` calls the builder) |
-| B, the sender and the move | 4 to 6 | The sender with its lane row and boot pass; every funnel site behind it; the raising transactions for asks and items; the held item's reach; the word `push-outbox-v1` | PR A | `server/src/coord/store.ts` about +22; `server/src/watch.ts` about +18; `server/src/server.ts` about +2; `shared/api.ts` about +6 |
+| B, the sender and the move | 4 to 6 | The sender with its lane row and boot pass; every funnel site behind it; the raising transactions for asks and items; the held item's reach; the word `push-outbox-v1` | PR A | `server/src/coord/store.ts` about +26; `server/src/watch.ts` about +24; `server/src/coord/routes.ts` about +6; `server/src/server.ts` about +4; `shared/api.ts` about +6 |
 
 **Order:** PR A at once; PR B once PR A has merged. The index lists one pull request. Two keep the move, which changes
 every push in the server, apart from the record it moves onto, and PR A's characterization suite is green on `main`
@@ -325,12 +387,13 @@ again at the payload level, so one suite is the arbiter of the move.
 **Files:**
 - Create: `shared/push-outbox.ts` (L0, C6; imports nothing)
 - Create: `server/src/pushOutbox.ts` (L1, C6: pure; the time is a fact)
-- Modify: `server/src/watch.ts` (`FleetWatcher.pushOne` passes its title through `noticePayload`'s project rule) and
+- Modify: `server/src/watch.ts` (`FleetWatcher.pushOne` passes its title through `noticeTitle`) and
   `server/src/notice.ts` (`raise` builds its payload with `noticePayload`), a move that changes no byte (Task 1 is the
   arbiter)
 - Create: `server/test/sim/pushOutboxSets.ts`; Modify: `server/test/sim/mutation-floors.json` and `MUTANT_SETS`
 - Modify: the architecture spec's C6 row (`push.ts` becomes `push*.ts`, and `coord/pushOutbox*.ts` is added)
-- Modify: `server/test/single-definition/time-ports.test.ts` (`TIME_PORT_FILES` gains the new `server/src` files)
+- Modify: `server/test/single-definition/time-ports.test.ts` (`TIME_PORT_FILES` gains `server/src/pushOutbox.ts`; the
+  scan fails on an entry for a file that does not exist yet, so the store and the sender join in Tasks 3 and 4)
 - Test: `server/test/push-outbox-vocab.test.ts`, `server/test/push-outbox-decide.test.ts` (new)
 
 **Interfaces:**
@@ -354,6 +417,7 @@ export type OutboxActor = 'raise' | 'sender' | 'boot' | 'arm';
 export const OUTBOX_TRANSITIONS: readonly { readonly from: OutboxState | null; readonly to: OutboxState; readonly actor: OutboxActor }[] = [
   { from: null, to: 'pending', actor: 'raise' }, { from: null, to: 'silent', actor: 'raise' },
   { from: null, to: 'sending', actor: 'sender' },                    // an unbound push, claimed at its insert
+  { from: null, to: 'silent', actor: 'sender' },                     // the held drain's insert (always silent, F9)
   { from: 'pending', to: 'sending', actor: 'sender' }, { from: 'retrying', to: 'sending', actor: 'sender' },
   { from: 'pending', to: 'silent', actor: 'sender' }, { from: 'retrying', to: 'silent', actor: 'sender' }, // the source re-read
   { from: 'sending', to: 'sent', actor: 'sender' }, { from: 'sending', to: 'retrying', actor: 'sender' },
@@ -381,14 +445,25 @@ export const OUTBOX_KEEP_MS = 7 * 86_400_000;        // a terminal unbound row i
 ```
 
 ```ts
-/** The one payload builder: today's `pushOne` title rule and `raise`'s tag, url and actions, byte for byte. */
-export function noticePayload(e: { readonly kind: string; readonly sessionId: string; readonly project: string;
-  readonly title: string; readonly body: string }, opts: { readonly tag?: string; readonly url?: string;
-  readonly actions?: PushPayload['actions'] }, activeProjects: ReadonlySet<string>): PushPayload;
+/** Today's `pushOne` title rule, byte for byte: " · <project>" only when more than one project is active. */
+export function noticeTitle(title: string, project: string, activeProjects: ReadonlySet<string>): string;
+/** Today's `raise` rule, byte for byte: the default tag `${kind}-${sessionId}` or the caller's, and `url` and `actions`
+ *  when given. It takes the title as it is (already suffixed or not), so it never suffixes. */
+export function noticePayload(e: { readonly kind: string; readonly sessionId: string; readonly title: string;
+  readonly body: string }, opts: { readonly tag?: string; readonly url?: string;
+  readonly actions?: PushPayload['actions'] }): PushPayload;
 
-export type PushSilentWhy = 'level' | 'viewing' | 'settled' | 'no-payload';
+/** What `prepare` answers. `payload` is null and `service` false when there is no push service (F4). */
+export interface PreparedPush { readonly payload: PushPayload | null; readonly pushId: string; readonly service: boolean }
+/** The bound-row callback a raising transaction calls with the source's id (F2), built from `senderFor(deps).prepare`. */
+export type BoundRowOf = (id: number) => PreparedPush;
+/** A resolve that is not a verdict (a test double's `undefined`) reads null, so its attempt is `unknown` (F10). */
+export function asSendVerdict(x: unknown): PushSendVerdict | null;
+
+export type PushSilentWhy = 'level' | 'viewing' | 'settled' | 'no-payload' | 'no-service' | 'older-build';
 export interface PushDueFacts {
-  readonly event: 'reach' | 'arm' | 'claim';      // claim: the re-read before each bound row's attempt
+  readonly event: 'reach' | 'arm' | 'claim' | 'held'; // claim: the re-read before each attempt; held: the held drain
+  readonly service: boolean;                      // a push service exists
   readonly source: OutboxSource | 'none';
   readonly blocking: boolean;                     // an item's current level; an ask always pushes today
   readonly viewing: boolean;                      // the presence gate's one answer; a notice with no session is never viewed
@@ -411,10 +486,18 @@ export function outboxBootVerdict(row: { readonly state: 'pending' | 'sending' |
   'send' | 'seal-unknown' | 'fail-stale';
 ```
 
-**`pushDue`'s rules, first match:** no payload is `silent`, `no-payload`; a settled source is `silent`, `settled`; an
-item that is not blocking is `silent`, `level`; a notice being viewed is `silent`, `viewing`, except on a `claim`
-(presence was decided once, at the reach or the arm, and is not asked again); everything else is `now`. The funnel
-asks `pushDue` only in modes `'push'` and `'record-always'`, and `'record-only'` writes no row, as today.
+**`pushDue`'s rules, first match:**
+1. No push service is `silent`, `no-service`.
+2. No payload is `silent`, `no-payload`.
+3. A settled source is `silent`, `settled`.
+4. An item that is not blocking is `silent`, `level`.
+5. On `held`, a blocking item is `silent`, `older-build`. Only an older build's toggle inside the hold makes a held
+   item blocking with no row, and that build pushed it then.
+6. A notice being viewed is `silent`, `viewing`, except on a `claim`: presence was decided once, at the reach or the
+   arm, and is not asked again.
+7. Everything else is `now`.
+
+The funnel asks `pushDue` only in modes `'push'` and `'record-always'`, and `'record-only'` writes no row, as today.
 
 **`outboxNextState`'s rules:** `no-subscription` is `unsent`. Any `accepted` subscription is `sent`. Otherwise any
 `no-answer` (a reset or a timeout after the request was written) is `unknown`, because the service may have taken it.
@@ -429,19 +512,24 @@ refusal, depending on the lane's beat.
 is `fail-stale`, so a `coord.db` restored from an older snapshot never re-sends its old rows; otherwise `send`.
 
 - [ ] **Step 1: Failing tests:** `outboxMoveAllowed` over every pair and actor; the state map's keys equal
-  `OUTBOX_STATES`, and `TERMINAL_OUTBOX_STATES` is exactly the states whose only move out is `arm`; `noticePayload`
-  against Task 1's pinned payloads, one or two active projects, an empty project, a caller's tag and the default;
+  `OUTBOX_STATES`, and `TERMINAL_OUTBOX_STATES` is exactly the states whose only move out is `arm`; `noticeTitle` and
+  then `noticePayload` against Task 1's pinned payloads, one or two active projects, an empty project, a caller's tag
+  and the default, and `noticePayload` on an already suffixed title leaves it as it is; `asSendVerdict` on a verdict,
+  `undefined` and a malformed object;
   `pushDue` over the full product of its facts against a table written in the test; `outboxNextState` over each verdict
   shape, all `gone`, a mixed `accepted` and `refused`, a mixed `refused` and `no-answer`, `refused-for-good` beside
   `refused`, `null`, and a retry just inside and just past the horizon; `outboxRetryAt` at attempts 1 to 6, and null past
   the horizon; `outboxBootVerdict` over its three states and both sides of the horizon.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement**, and move `pushOne`'s and `raise`'s payload code onto `noticePayload`.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement**, and move `pushOne`'s title code onto `noticeTitle` and `raise`'s
+  payload code onto `noticePayload`.
   **Step 4: Run** these suites, Task 1's (unchanged, green), `test/sim/mutation-floors.test.ts`, `test/rings/*.test.ts`,
   `test/single-definition/time-ports.test.ts`, both `tsc` runs and pwa's. Green. Register the floors.
 - [ ] **Step 5: Mutation.** Let `pushDue` answer `now` for a non-blocking item: red. Let it ask presence on a `claim`: red.
+  Let it answer `now` on `held`: red. Drop the `no-service` rule: red. Let `noticePayload` suffix the title: the
+  two-project case goes red.
   Let `outboxNextState` read `no-answer` as `retrying`: the never-twice case goes red. Read all `gone` as `retrying`: red.
   Let `outboxBootVerdict` answer `send` for `sending`: red. Drop the horizon: red. Revert each.
-- [ ] **Step 6: Commit.** `feat(notice): one payload builder, and the push outbox's states, moves and deciders, with pushDue total (H18)`
+- [ ] **Step 6: Commit.** `feat(notice): one owner for a push's text, and the push outbox's states, moves and deciders, with pushDue total (H18)`
 
 ### Task 3: The table, the reach stamps and the per-send verdict (L3)
 
@@ -452,9 +540,12 @@ is `fail-stale`, so a `coord.db` restored from an older snapshot never re-sends 
 - Modify: `server/src/push.ts` (`notify` answers `PushSendVerdict`; a per-request `timeout`)
 - Modify: `server/src/notice.ts` (`NoticeDeps.push` widens to `{ notify(p: PushPayload): Promise<unknown> }`, so every
   double that answers `void` still types)
-- Modify: `server/test/single-definition/writers-map.test.ts` (`TABLES` gains `push_outbox`; the `asks` and
-  `operator_items` lists gain `stampReach`; the gap text that names the tables without a writer pin)
-- Modify: `server/test/run-close-switch.test.ts` (the new migration's undo step, and "all nineteen" becomes twenty)
+- Modify: `server/test/single-definition/writers-map.test.ts` (`TABLES` gains `push_outbox` and `operator_items`;
+  `operator_items`' list is written with its current writers, measured by `tableWriters` at build time, plus
+  `stampReach`; `asks`' list gains `stampReach`; the gap text that names the tables without a writer pin)
+- Modify: `server/test/run-close-switch.test.ts` (the new migration's undo step, and the count of replayed migrations
+  as it reads at build time: "all nineteen" today, and other W1 pieces add migrations too)
+- Modify: `server/test/single-definition/time-ports.test.ts` (`TIME_PORT_FILES` gains `server/src/coord/pushOutboxStore.ts`)
 - Test: `server/test/push-outbox-store.test.ts` (new), `server/test/push-verdict.test.ts` (new), `server/test/coord-db.test.ts`
 
 **Schema:**
@@ -493,8 +584,8 @@ on an older item writes both (Task 5). The held drain stamps only items whose `h
 `firstBootAt`.
 
 **Interfaces** (each move checks `outboxMoveAllowed` and is a compare-and-set on its `from` state):
-- `insertBoundRowInTx(db, row: { source: OutboxSource; sourceId: number; pushId: string; payload: PushPayload | null; state: 'pending' | 'silent'; silentWhy: PushSilentWhy | null; at: number }): number`, which opens no transaction, so it runs inside the caller's `tx`;
-- `stampReach(db, source, id, at): { changed: boolean }`, the one writer of `reachedOperatorAt`: `WHERE reachedOperatorAt IS NULL`, so a row is stamped at most once. It opens no transaction and is called inside the move's;
+- `insertBoundRowInTx(db, row: { source: OutboxSource; sourceId: number; pushId: string; payload: PushPayload | null; state: 'pending' | 'silent'; silentWhy: PushSilentWhy | null; at: number }): number`, which opens no transaction, so it runs inside the caller's `tx`. A null payload is stored for `no-service` and `no-payload`;
+- `stampReach(db, source, id, at): { changed: boolean }`, the one writer of `reachedOperatorAt`: `WHERE reachedOperatorAt IS NULL`, so a row is stamped at most once. It opens no transaction and is called inside the move's. Its two statements are literals, `UPDATE asks …` and `UPDATE operator_items …`, so `writers-map.test.ts` sees both;
 - `armBoundRowInTx(db, source, sourceId, row: { pushId: string; payload: PushPayload; at: number }): { inserted: boolean }`, the upsert: an existing row moves to `pending` from any state, keeps its `pushId`, takes the new payload, resets `attempts` and `nextAttemptAt`, and sets `armedAt`; no row inserts one with the given `pushId`;
 - `insertUnboundRow(db, row): { ok: true; id; claimSeq } | { ok: false; detail }`, its own `tx`, written straight to `sending` (claimed at its insert);
 - `claimOutboxRow(db, id, at): { changed: boolean; claimSeq: number }` (`pending` or `retrying` to `sending`, `attempts + 1`, `claimSeq + 1`, `claimedAt`);
@@ -511,8 +602,9 @@ on an older item writes both (Task 5). The held drain stamps only items whose `h
 **The verdict.** `PushService.notify(payload): Promise<PushSendVerdict>`. Each send passes
 `{ TTL: 600, timeout: OUTBOX_SUB_TIMEOUT_MS }`. No subscription answers `no-subscription`. Each subscription answers
 `accepted` on a resolved send, `gone` on 404 or 410 (pruned, as today), `refused-for-good` on 400, 403 or 413, `refused`
-on any other `WebPushError` and on an error raised before the request left the box, and `no-answer` on a reset or
-timeout after it was written. `endpointHash` is the hex SHA-256 of the endpoint, so no endpoint is stored. A failed
+on any other `WebPushError` and on the listed errors raised before the request left the box (`ENOTFOUND`,
+`ECONNREFUSED`, `EAI_AGAIN`, `ENETUNREACH`), and `no-answer` on a reset or timeout after it was written. Any other error
+(a TLS failure, a connect `ETIMEDOUT`) is `no-answer` too, the safe side, because the service may have taken it. `endpointHash` is the hex SHA-256 of the endpoint, so no endpoint is stored. A failed
 prune write still rejects, as today. The sender reads a rejection as a `null` verdict.
 
 - [ ] **Step 1: Failing tests:** insert a bound row in a `tx` that then throws: neither the row nor the stamp lands; a
@@ -529,7 +621,7 @@ prune write still rejects, as today. The sender reads a rejection as a `null` ve
 - [ ] **Step 2: Run.** Red. **Step 3: Implement** in `continuityStore.ts`'s prepared-statement shape. **Step 4: Run**
   these suites, `test/coord-db.test.ts`, `test/run-close-switch.test.ts`, `test/single-definition/writers-map.test.ts`,
   `test/push-masker-pin.test.ts`, `test/notify-push.test.ts`, `test/secret-mask.test.ts`, `test/typecheck-tests.test.ts`,
-  both `tsc` runs. Green. The funnel still ignores the answer, so no caller's behaviour changes.
+  `test/single-definition/time-ports.test.ts`, both `tsc` runs. Green. The funnel still ignores the answer, so no caller's behaviour changes.
 - [ ] **Step 5: Mutation.** Drop `WHERE reachedOperatorAt IS NULL`: the stamped-twice case goes red. Drop the unique
   index: red. Drop `claimSeq = ?` from the verdict write: the stale-claim case goes red. Let `notify` read
   `ECONNREFUSED` as `no-answer`: red. Revert each.
@@ -548,10 +640,18 @@ prune write still rejects, as today. The sender reads a rejection as a `null` ve
 - Modify: `server/src/watch.ts`: `FleetWatcher.pushOne`, the two `noticeSink(this.deps)` sinks, the delegation adoption
   sink and `pushRelease`, which passes `this.deps` instead of `{ push: sender }`; and the lane's one call
 - Modify: `server/src/server.ts` (`noticeSink(deps)` and the `POST /api/notify` call already pass `deps`; no change
-  unless the type widening needs one), `server/src/coord/diskAlarmLane.ts`, `server/src/coord/buildCaptureLane.ts`
-  (each passes the deps it holds, which must carry `coord`, `time` and `masker`)
-- Modify: `server/src/laneSchedule.ts` (the `pushOutbox` row), `server/src/index.ts` (the boot pass)
-- Modify: `server/test/notify-push.test.ts` (`callers()` becomes `{ 'pushSender.ts': 1 }`), `server/test/pushSeam.ts`,
+  unless the type widening needs one), `server/src/diskAlarmLane.ts` (its `Pick` gains `time` and `masker`),
+  `server/src/buildCaptureLane.ts` (built with `() => this.deps`, the full `WatcherDeps`; its `coord` `Pick` gains the
+  outbox members)
+- Modify: `server/src/coord/ports.ts#WatcherCoordMember` (the outbox members the watcher and its lanes reach, in their
+  sorted places: added here, where the first reach is, because `rings/watcher-store-port.test.ts` reds on a member
+  nothing reaches as well as on a reached member the port lacks)
+- Modify: `server/src/laneSchedule.ts` (the `pushOutbox` row), `server/src/index.ts` (the boot pass, and
+  `const time = systemTimePorts()` moved up above `new CoordStore`: it takes no argument and reads nothing the store
+  builds, and the boot reads its `clock`)
+- Modify: `server/test/single-definition/time-ports.test.ts` (`TIME_PORT_FILES` gains `server/src/pushSender.ts`)
+- Modify: `server/test/notify-push.test.ts` (`callers()` becomes `{ 'pushSender.ts': 1 }`), `server/test/pushSeam.ts`
+  (its double answers a `PushSendVerdict`: the characterization suite's one seam change),
   `server/test/lane-schedule.test.ts` (the monotonic count, and a row-pin case like the timers row's),
   `server/test/push-composition-pin.test.ts` (the boot call), and `push-copy.test.ts`'s release-push docstring line
 - Test: `server/test/push-sender.test.ts` (new)
@@ -560,33 +660,46 @@ prune write still rejects, as today. The sender reads a rejection as a `null` ve
 
 ```ts
 export interface SenderDeps {
-  readonly push?: Pick<PushService, 'notify'> | undefined;
+  readonly push?: NoticeDeps['push'];                      // the same type as the funnel's (F10)
   readonly coord?: Partial<OutboxStorePort> | undefined;   // a narrow test double without the port sends with no row
   readonly time?: TimePorts | undefined;
-  readonly masker?: PayloadMasker | undefined;             // read at each call, so index.ts's late masker holds
+  readonly masker?: PayloadMasker | undefined;             // absent until index.ts sets it: SHAPE_ONLY_MASKER meanwhile
 }
+/** Whether a bound row's source is settled, read through its owner (the questions owner for an ask, the items read
+ *  for an item), or null when the read failed (the row is left for the next drain). */
+export type SettledOf = (source: OutboxSource, sourceId: number) => boolean | null;
 export interface PushSender {
-  /** Mask the payload and mint its push id. No I/O, so a caller may run it inside its transaction. */
-  prepare(payload: PushPayload): { readonly payload: PushPayload; readonly pushId: string };
+  /** Mask the payload and mint its push id. No I/O, so a caller may run it inside its transaction. With no push
+   *  service it still mints the id and answers `payload: null, service: false` (F4). */
+  prepare(payload: PushPayload | null): PreparedPush;   // null: a handover with no in-memory hold, still minted
   /** An unbound push: insert it claimed, send it now. `failed` is the caller's sentence for a rejected send. */
   send(payload: PushPayload, opts?: { readonly failed?: string }): void;
   /** A bound row its raising or arming transaction wrote `pending`: re-read its source, claim it, send it now. */
-  sendRow(id: number): void;
-  drain(now: number): Promise<void>;
+  sendRow(id: number, settledOf: SettledOf): void;
+  drain(now: number, settledOf: SettledOf): Promise<void>;
 }
-/** One sender per PushService instance (a WeakMap), so every deps object built from one Deps shares it. */
+/** A thin per-call view: the WeakMap keyed on the PushService holds only the `changeLatch` and the in-flight attempts,
+ *  and `coord`, `time` and `masker` are read from the `deps` given here, at each call (F3). */
 export function senderFor(deps: SenderDeps): PushSender;
 /** Run once by index.ts, synchronously, right after the store opens and the landing replay passes. */
 export function bootPushOutbox(coord: OutboxStorePort, clock: Clock): void;
 ```
 
-- **No push service.** `senderFor` with no `push` answers a sender whose every method does nothing, and writes no row.
+- **No push service.** `prepare` still mints a push id and answers `payload: null, service: false`, so a bound caller
+  writes its stamp and a `silent` `no-service` row (F4). `send` writes nothing and sends nothing, as today. `sendRow`
+  and `drain` find no `pending` row to send, since `pushDue` never answers `now` with no service.
+- **Per-call deps** (F3). Each call reads `coord`, `time` and `masker` from the deps it was given. The delegation adoption
+  sink, built each pass as `{ notifyLog, coord, push }`, gains `time: deps.time` and `masker: deps.masker`. It is
+  rebuilt each pass, so it sees the masker `index.ts` set before the watcher started. Every production funnel site
+  then carries `time`. A test's narrow caller with no `time` sends with no deadline timer, and its verdict still lands
+  by `claimSeq`.
 - **Send.** `send` prepares the payload, inserts the row at `sending` and calls `notify`. `sendRow` re-reads the source
-  (an ask still released or declined and not answered; an item still open), asks `pushDue` with `event: 'claim'`,
+  through `settledOf` (an ask still released or declined and not answered, read through the questions owner, never by
+  a direct ask lookup from `pushSender.ts`; an item still open), asks `pushDue` with `event: 'claim'`,
   silences the row on `silent`, and otherwise claims it and calls `notify`. A lost claim (`changed: false`, the drain
   won) is normal: it neither logs nor sends anything else. Each attempt starts one `Scheduler.after(OUTBOX_SEND_DEADLINE_MS)`
   timer and cancels it when the verdict lands. Its verdict, a `null` from the deadline, or a `null` from a rejection
-  goes through `outboxNextState` to `markOutboxVerdict` with that attempt's `claimSeq`, so a late answer from an older
+  goes through `asSendVerdict` and `outboxNextState` to `markOutboxVerdict` with that attempt's `claimSeq`, so a late answer from an older
   attempt changes nothing. A rejection never escapes as an unhandled rejection. It prints the caller's `failed`
   sentence when one was given, exactly as today. A failed insert or claim logs once per cause through a `changeLatch`
   and, for `send`, sends the payload with no row.
@@ -596,15 +709,23 @@ export function bootPushOutbox(coord: OutboxStorePort, clock: Clock): void;
 - **The lane row.** `{ name: 'pushOutbox', cadenceMs: 30_000, derivedFrom: null, clock: 'mono', flight: 'skip',
   staleAfterMs: 2 * OUTBOX_SEND_DEADLINE_MS, warnKey: 'ccrc-server: the push outbox lane failed' }`, with `'pushOutbox'`
   added to `LaneName`.
-- **Boot.** `index.ts` calls `bootPushOutbox` synchronously right after `new CoordStore` and the landing replay, before
+- **Boot.** `index.ts` calls `bootPushOutbox(coord, time.clock)` synchronously right after `new CoordStore` and the landing replay, before
   the fleet link connects, the server listens or the watcher starts. So nothing can push before it, and every
   `sending` row it finds belongs to a process that has died. It writes `firstBootAt` if absent, then applies
   `outboxBootVerdict` per row: `seal-unknown`, `fail-stale`, or left for the first drain to send. A failed read logs and
   seals nothing, and the next drain reads again.
-- **The funnel.** `raise` builds the payload with `noticePayload`, asks `pushDue` with
-  `{ event: 'reach', source: 'none', blocking: true, viewing, settled: false, payload: true }` from the presence gate it
-  already reads, and calls `send` on `now`. `notifyPushOnly` calls `send` with its caller's `failed` sentence and no
-  gate, as today. The ring record, the archive and their order are unchanged.
+- **The funnel.** For an unbound push, `raise` builds the payload with `noticePayload`, asks `pushDue` with
+  `{ event: 'reach', service, source: 'none', blocking: true, viewing, settled: false, payload: true }` from the
+  presence gate it already reads, and calls `send` on `now`. A bound push reaches `raise` with a new `NoticeOpts` field:
+
+  ```ts
+  /** A bound row already written by its move: its id and the `pushDue` answer asked before the move (Task 5). */
+  readonly bound?: { readonly rowId: number; readonly due: PushDue };
+  ```
+
+  With `bound`, `raise` reads no presence and asks no `pushDue`. It uses `due` for its record gate and calls
+  `sendRow(rowId, settledOf)` on `now`. `notifyPushOnly` calls `send` with its caller's `failed` sentence and no gate, as
+  today. The ring record, the archive and their order are unchanged.
 - **The release push and D-3295.** D-3295 says the release push goes out "at most once" and "is not retried". After
   this task it is still shown at most once. A rejected send is `unknown` and not retried, and its `failed` sentence
   ("it is not retried") stays true and pinned. A send that every subscription refused is retried within the ten-minute
@@ -615,41 +736,87 @@ export function bootPushOutbox(coord: OutboxStorePort, clock: Clock): void;
   for the 30 to 60 s first retry); a refusal past the horizon ends `failed`; a send that never answers ends `unknown` at
   the deadline and its timer is cancelled on a verdict; an attempt sealed `unknown`, then a re-arm and a second claim,
   then the first attempt's late `refused`: the second attempt's row is unchanged; a rejected send prints the caller's
-  sentence once and leaves no unhandled rejection; with no push service, no row and no send; with no store, and with an
-  insert that throws, the push is still sent once, with no row; a lost `sendRow` claim sends nothing; `bootPushOutbox` on
+  sentence once and leaves no unhandled rejection; with no push service, an unbound push writes no row and sends nothing,
+  and `prepare` answers a minted id with a null payload; with no store, and with an insert that throws, an unbound push
+  is still sent once, with no row; a double that resolves `undefined` leaves its row `unknown`; one push double shared
+  by a narrow caller (no `time`, no `masker`) and then a full one, the reverse order, and a caller with
+  `coord: undefined`: each call masks, times and writes by its own deps; `prepare` before a masker is set masks with
+  `SHAPE_ONLY_MASKER`; a stored payload equals the bytes `notify` serialises (the double masks), and
+  `maskDeep(maskDeep(p))` equals `maskDeep(p)` on the shape cases; a lost `sendRow` claim sends nothing; `bootPushOutbox` on
   a store holding a `sending`, a fresh `pending`, a fresh `retrying` and a stale `pending` row seals the first, fails the
   last, and the next drain sends the other two once each; a second boot sends nothing; the composition pin shows the
-  boot before `connectFleet`. Task 1's suite with its seam unchanged: green.
+  boot, and the `time` it reads, before `connectFleet`. Task 1's suite, its cases unchanged and only its seam changed:
+  green.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** these suites, Task 1's, every test in "What exists
-  today"'s list, `test/lane-schedule.test.ts`, the watcher-quiet census, `test/typecheck-tests.test.ts`, both `tsc`
-  runs. Green.
+  today"'s list, `test/lane-schedule.test.ts`, the watcher-quiet census, `test/rings/*.test.ts` (the watcher store
+  port among them), `test/single-definition/time-ports.test.ts`, `test/typecheck-tests.test.ts`, both `tsc` runs.
+  Green.
 - [ ] **Step 5: Mutation.** Let the boot pass send `sending` rows: the second-boot case goes red. Let `send` skip the
   push when the insert throws: red. Drop the `claimSeq` compare: the late-verdict case goes red. Swallow the `failed`
-  sentence: red. Revert each.
+  sentence: red. Cache the first caller's `coord` in the `WeakMap`: the shared-double case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(notice): one sender drains the push outbox, with retries and a boot pass that never retries a claimed attempt (H18)`
 
 ### Task 5: The raising transactions: asks and items
 
 **Files:**
-- Modify: `server/src/coord/store.ts` (`insertAsk`'s released mint, `releaseAsk` and `declineAsk` take the outbox row)
-- Modify: `server/src/coord/questions.ts` (`hold`, `lapseAsks` and the release door pass the prepared payload in; the
-  release door reads the hold without deleting it; no new `hold(` call, since `ask-digest.test.ts` counts them)
-- Modify: `server/src/coord/ledgersStore.ts` (`raiseItemInTx`, `setBlocking`, `heldItemsReached`),
-  `server/src/coord/ledgersRoutes.ts#pushBlocking`
-- Modify: `server/src/watch.ts` (`pushRaised`'s `released` arm hands the row's id to the funnel; the questions owner
-  receives the active-projects snapshot and the presence read beside its push sink)
+- Modify: `server/src/coord/store.ts` (`insertAsk`'s released mint, `releaseAsk` and `declineAsk` take the outbox row;
+  `raiseItem` and `raiseItemWithMail` take the `BoundRowOf` callback)
+- Modify: `server/src/coord/questions.ts` (`QuestionRules` gains `outbox`, below; `hold`, `lapseAsks` and the release
+  door take the bound row through it; the release door reads the hold without deleting it; no new `hold(` call, since
+  `ask-digest.test.ts` counts them). It imports only types from the sender's side, so its ring holds.
+- Modify: `server/src/coord/ledgersStore.ts` (`raiseItemInTx`, `raiseItem`, `raiseItemWithMail`, `setBlocking`,
+  `heldItemsReached`)
+- Modify: `server/src/coord/ledgersRoutes.ts` (`LedgerCoordinatorDeps` gains `bound` and `sender`; `pushBlocking` and its
+  two call lines) and `server/src/coord/routes.ts` (the `registerLedgerCoordinatorRoutes` call builds both from `deps`;
+  the end-request handler's deps gain `bound`; its own questions instance, `createQuestions(deps)`, is made with
+  `{ heldFor, outbox }`)
+- Modify: the three `ccrc` raisers and their deps: `server/src/coord/endRequest.ts` (`EndRequestDeps`),
+  `server/src/coord/reviewRelease.ts` (`ReviewReleaseDeps`), `server/src/coord/runCloseRefusals.ts` (`RefusalDeps`),
+  each passing `bound` to `raiseItemWithMail`; `server/src/coord/runCloseLane.ts` (its `routeRefusals` deps line)
+- Modify: `server/src/coord/ports.ts` (only if a `WatcherCoordPort` member's signature needs it: the port is a `Pick`
+  of `CoordStore`, so the widened `raiseItemWithMail` flows through)
+- Modify: `server/src/watch.ts` (`pushRaised`'s `released` arm hands the row's id to the funnel; the questions owner is
+  made with `outbox`; `routeReviewReleases` and the run-close lane get `bound`) and `server/src/server.ts` (its own
+  questions instance, `createQuestions(deps)`, is made with `{ heldFor, outbox }` too)
+- Modify: `server/test/ledgers-coordinator-routes.test.ts` (its deps object gains `bound` and `sender`)
 - Test: `server/test/push-outbox-asks.test.ts`, `server/test/push-outbox-items.test.ts` (new)
+
+**Interfaces** (F8):
+
+```ts
+// coord/questions.ts: types only from the sender's side (`import type`), as `QuestionRules.heldFor` does.
+export interface QuestionOutbox {
+  /** Before the move: today's payload for this ask (noticeTitle, then noticePayload), prepared, and pushDue's answer,
+   *  with presence read once. A null `ev` (a handover with no in-memory hold) answers a null payload. */
+  readonly prepare: (ev: QuestionPush | null) => PreparedPush & { readonly due: PushDue };
+  /** After a move that committed a bound row: the funnel's record with `bound: { rowId, due }`, and sendRow on `now`. */
+  readonly sent: (ev: QuestionPush | null, rowId: number, due: PushDue) => void;
+}
+export interface QuestionRules {
+  readonly heldFor: typeof heldFor;
+  readonly doors?: QuestionDoorSink;
+  readonly outbox?: QuestionOutbox;   // the watcher's and the server's own instance get one; a test may pass none
+}
+```
+
+The watcher builds `outbox` from `senderFor(this.deps)`, `noticeTitle`, `noticePayload`, its active-projects snapshot
+and its presence read. `server.ts` and `coord/routes.ts` build their own instance's from `deps`, the same way. An
+instance made with no `outbox` (a test's) writes no bound row and no stamp, as a narrow `coord` double does.
 
 **Asks.** Three moves make an ask reach the operator: the mint at `released` (`insertAsk` with a `releaseReason`), the
 lapse (`releaseAsk`) and the parent's release (`declineAsk`). Each takes an optional bound row, and writes the row,
 `stampReach` (with the move's own `now`) and the move in one `tx`. So `releaseAsk` and `declineAsk` gain the transaction
 they lack.
-- **The payload.** It comes from `noticePayload` over the hold's `ev`, with the active-projects snapshot, prepared by
-  `senderFor(deps).prepare` before the `tx`. For the minted-released ask, `ev` is built from the same inputs before the
-  insert. Its text is today's, byte for byte (Task 1).
-- **The state.** It is `pushDue`'s answer, asked once before the `tx` with `viewing` from the presence gate: `pending`
-  on `now`, otherwise `silent` with its `why`. The funnel is then told that answer for its record gate. It never reads
-  presence a second time, and it calls `sendRow` for a `pending` row.
+- **The payload.** `outbox.prepare(ev)` builds it with `noticeTitle` and `noticePayload` over the hold's `ev`, with
+  the active-projects snapshot, before the `tx`. For the minted-released ask, `ev` is built from the same inputs before
+  the insert. Its text is today's, byte for byte (Task 1).
+- **The state.** It is `pushDue`'s answer, asked once in `prepare` with `viewing` from the presence gate: `pending` on
+  `now`, otherwise `silent` with its `why` (`no-service` with no push service). `outbox.sent` hands that answer to the
+  funnel as `bound: { rowId, due }`, so it never reads presence a second time. On `now` it calls `sendRow`.
+- **A failed move** (F5). A throw inside the move's `tx` (the row, the stamp or the move) rolls all of it back.
+  `lapseAsks` treats it as today's `release-threw` (`decideAskLapse` answers `keep`): it keeps the hold for the next
+  sweep and logs once per cause through a `changeLatch`, where it now warns every sweep. The release door wraps
+  `declineAsk` and answers the throw as its error, where today it is unhandled.
 - **The handover door.** The release door reads the hold's `ev` without deleting it. It deletes the hold only after
   `declineAsk`'s compare-and-set wins. When no in-memory hold exists (after a restart, or with no watcher), the move
   still writes the stamp and a `silent` row, `no-payload`. Today such a handover pushes nothing, and this keeps it so.
@@ -660,17 +827,25 @@ they lack.
   amendment's replacement push and a top-level session's dialog push stay unbound.
 
 **Items.**
-- **The raise.** `raiseItemInTx` takes a `(id) => { payload; pushId }` callback, as `raiseItemWithMail` takes
-  `queue(id)`. The callback builds the payload with `noticePayload` from `pushBlocking`'s copy (kind `coord`, title
-  "Waiting on you", the item's title, tag `item-<id>`, `url: WAITING_URL`) and prepares it. When `heldUntil` is null,
-  `raiseItemInTx` writes the stamp and the row: `pending` when blocking, `silent`, `level` otherwise. `pushBlocking`
-  becomes the funnel call with that row's id.
+- **The raise** (F2). `raiseItem` and `raiseItemWithMail`, their `CoordStore` wrappers and so the `WatcherCoordPort`
+  member take an optional `bound: BoundRowOf`, as `raiseItemWithMail` takes `queue(id)`. With `bound`, each answers
+  `{ id, row: { id, due } | null }` (an overload), and without it the id, as today. The callback builds the payload
+  with `noticePayload` from `pushBlocking`'s copy (kind `coord`, title "Waiting on you", the item's title, tag
+  `item-<id>`, `url: WAITING_URL`) and prepares it with `senderFor(deps).prepare`. When `heldUntil` is null,
+  `raiseItemInTx` writes the stamp and the row, its state from `pushDue` (`event: 'reach'`; an item's notice has no
+  session, so it is never viewed): `pending` when blocking, `silent` `level` otherwise, or `no-service`. `pushBlocking`
+  becomes the funnel call with `bound: { rowId, due }`.
+- **The three `ccrc` raisers.** `endRequest.ts`, `reviewRelease.ts` and `runCloseRefusals.ts` pass `bound` from their
+  deps, which `coord/routes.ts`, `watch.ts` and `runCloseLane.ts` build from `senderFor(deps).prepare`. They raise
+  `soon` or `later`, so a row written at their raise is `silent` and they need no send. With a `heldUntil`, no row is
+  written at the raise, and the drain writes it.
 - **The toggle.** `setBlocking(true)`, when it moved the level, calls `armBoundRowInTx` inside its own transaction,
   whatever the row's state, and stamps the reach if absent. That covers an item open before PR B and a held item toggled
   inside its hold, both of which push today. Then the funnel calls `sendRow`.
 - **A held item.** It gets its stamp at `heldUntil`, and its row, from the drain through `heldItemsReached`, in one `tx`
-  per item. The row's state is `pushDue`'s answer for the item's current level: `pending` if it became blocking during
-  the hold and was never toggled (a toggle would already have written the row), otherwise `silent`, `level`.
+  per item. The row is always `silent` (F9): `pushDue` with `event: 'held'` answers `level` for a `soon` or `later`
+  item, and `older-build` for a blocking one. A blocking held item with no row can only be one an older build toggled
+  inside the hold, and that build pushed it then. Its payload is null, and the drain never sends it.
 
 - [ ] **Step 1: Failing tests:** a lapse that wins writes the ask's stamp, its row and its `released` state together,
   and a throw inside the `tx` lands none; a beaten lapse writes no row; a second lapse attempt on a released ask writes
@@ -682,16 +857,24 @@ they lack.
   same push id and tag; a toggle while the row is `sending` arms it, and the in-flight verdict is dropped; a toggle on an
   item with no row (raised before the migration, and held) writes the row and the stamp and pushes once; a crash
   between `setBlocking`'s level and its arm cannot happen (one `tx`); an end-request item gets no stamp before
-  `heldUntil`, one stamp at `heldUntil` and one `silent` row after it while open, none when it closed first, and a
-  `pending` row when it became blocking inside the hold; a bound row whose ask was answered before the drain claims it
+  `heldUntil`, one stamp at `heldUntil` and one `silent` row after it while open, and none when it closed first; a held
+  item made blocking with no row (a direct SQL write of `neededBy`, as an older build's toggle leaves it) gets a `silent`
+  `older-build` row and no push; an end-request item raised with a null `heldUntil` (by its coordinator, or with the
+  coordinator gone), a review-release item with no coordinator and a run-close refusal that is not `tell-and-hold` each
+  get the stamp and one `silent` row at the raise and push nothing; with no push service, a blocking raise, a lapse and
+  a toggle each write the stamp and one `silent` `no-service` row with a null payload and send nothing; a bound insert
+  that throws rolls back the lapse (the hold kept, one warning across two sweeps), the release door (its error answer,
+  no unhandled throw), the item raise and the toggle; a bound row whose ask was answered before the drain claims it
   goes `silent`, `settled`. Task 1's suite: unchanged, green.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** these suites, Task 1's,
-  `ledgers-coordinator-routes`, the ask and approval suites, `test/single-definition/ask-digest.test.ts`, both `tsc`
-  runs. Green.
+  `ledgers-coordinator-routes`, the end-request, review-release and run-close-refusal suites, the ask and approval
+  suites, `test/single-definition/ask-digest.test.ts`, `test/single-definition/writers-map.test.ts`,
+  `test/rings/*.test.ts`, both `tsc` runs. Green.
 - [ ] **Step 5: Mutation.** Write the outbox row after the `tx` instead of inside it: the throw case goes red. Let a
   beaten lapse write a row: red. Delete the hold before `declineAsk`: the lost-race case goes red. Arm only from a
   terminal state: the in-flight and no-row toggle cases go red. Let `heldItemsReached` read an item closed before
-  `heldUntil`: red. Revert each.
+  `heldUntil`: red. Skip the stamp when there is no push service: the `no-service` cases go red. Drop `bound` from
+  `reviewRelease.ts`: its null-`heldUntil` case goes red. Revert each.
 - [ ] **Step 6: Commit.** `feat(coord): an ask or an item reaches the operator with its stamp and its one outbox row, in one transaction (I2)`
 
 ### Task 6: The word, and the record of what changed
@@ -703,7 +886,7 @@ they lack.
 
 The word promises: every push the server sends has an outbox row, or is logged as unwritable; an ask or an item that
 reached the operator after this build shipped carries `reachedOperatorAt` and one outbox row written in the same
-transaction; a claimed attempt is never retried.
+transaction, with or without a push service; a claimed attempt is never retried.
 
 - [ ] **Step 1:** Add the word and its comment. **Step 2: Run** `test/health.test.ts`, `test/ccrc-api.test.ts`,
   `test/claimant-client-pin.test.ts`, both `tsc` runs and pwa's. Green.
@@ -732,7 +915,9 @@ None yet. **Spec departures**, for the spec's next correction:
 - **item-held-until-is-a-hold** — items already have a hold, `heldUntil`. The drain stamps their reach at it (open
   question 4).
 - **rollback-refusal-ships-with-holds** — W1 advertises `push-outbox-v1` and refuses no rollback. The refusal ships
-  with W3's hold arming, and adds only its word to the pool-set piece's one floor check (open question 5, ruled R1).
+  with W3's hold arming, which generalises the pool-set piece's one capability record and floor check, with a second
+  `--below-cap` word, a source for server words, its own standing fact and its own unattended sentence, never a
+  mechanism beside it (open question 5, ruled R1, worded by review 2089 F6).
 - **silent-is-its-own-state** — the spec says a silent row is "marked sent at once". Here it is `silent`, a terminal
   state of its own with its reason, so `sent` always means the push service accepted it.
 
@@ -744,8 +929,12 @@ Decisions this plan takes, by slug:
 - **rearm-is-an-upsert** — open question 8 (ruled).
 - **sender-wraps-deps-push** — `Deps.push` stays the whole `PushService`, and `senderFor` derives one sender per
   service from the deps each funnel site already passes (fix round 1, 1).
-- **one-payload-builder** — `noticePayload` is the one owner of a push's text, and the sender's `prepare` masks it
-  (fix round 1, 2).
+- **one-payload-builder** — `noticeTitle` and `noticePayload` own a push's text, each called once, and the sender's
+  `prepare` masks it (fix round 1, 2; fix round 2, F11).
+- **bound-row-callback** — the raising transactions take a `BoundRowOf` callback built from `prepare`, and the store
+  takes no `Entropy` and no masker (fix round 2, F2, ruled).
+- **per-call-deps** — the sender's `WeakMap` holds only per-service state, and each call reads its own deps (fix round
+  2, F3, ruled).
 - **pushed-at-on-the-outbox-row** — `pushedAt` is a column of the outbox row, read through the source, so the one fact
   has one place and one writer.
 - **claim-seq-ties-the-verdict** — `claimSeq` never resets, and a verdict lands only on the claim it answers. `attempts`
@@ -767,7 +956,12 @@ Decisions this plan takes, by slug:
 - **handover-reads-before-it-deletes** — the release door deletes the hold only after its compare-and-set wins.
 - **boot-after-the-store-opens** — the boot pass runs synchronously right after the store opens, before anything can
   push, so it needs no process id to tell a dead attempt from a live one.
-- **no-push-service-no-rows** — with no push service nothing is written, as nothing is sent today.
+- **reach-without-a-push-service** — with no push service, an ask or item that reaches the operator still gets its
+  stamp and one `silent` `no-service` row, because reaching and pushing are two facts (H18). An unbound push writes
+  nothing (fix round 2, F4, ruled; it replaces fix round 1's "no push service, no rows").
+- **a-failed-bound-write-rolls-back** — a bound row's failed insert rolls back its move, and the lapse retries it (C31;
+  fix round 2, F5, ruled).
+- **held-drain-is-silent** — the held drain never pushes (fix round 2, F9).
 - **release-push-shown-at-most-once** — D-3295's "at most once" holds as shown at most once, and a refusal by every
   subscription is retried.
 - **no-backfill** — rows raised before the migration get no stamp, until an event on them writes one.
@@ -799,13 +993,41 @@ Decisions this plan takes, by slug:
   - `stampReach` is the one writer.
   - The boot runs after the store opens.
   - The lane row is given in full.
-  - No push service means no rows.
+  - No push service means no rows (replaced in fix round 2, F4: the reach is still recorded).
   - The site table names its entry points and the callers that never push.
   - The verdict mapping and `outboxRetryAt`'s null are defined.
   - `silentWhy` is typed, the actors are renamed, `unknown`'s wording is fixed, and `silent` is listed as a departure.
 - From the index review, F6 and F13 stand: the wire types are in a sibling, and the shared rows are named.
 - From the second report: no rollback task and no PR C. The one floor check is the pool-set piece's, and W3 reuses it
   (open question 5).
+
+**Changed after review 2089 (fix round 2, the last):**
+- F1: `coord/ports.ts` joins Task 4, with `test/rings/*` in its Step 4. `coord/routes.ts` and `LedgerCoordinatorDeps`
+  join Task 5, with the growth estimate and the "Shared files" row. `writers-map.test.ts` gains `operator_items` with
+  its current writers and `stampReach`. `time-ports.test.ts` is in Tasks 3 and 4.
+- F2 (ruled): the `BoundRowOf` callback goes through `raiseItem`, `raiseItemWithMail`, their wrappers and the port, and
+  the three `ccrc` raisers pass it. The fact reads "sometimes with a `heldUntil`", with one test per null path.
+- F3 (ruled): per-call deps. The delegation sink carries `time` and `masker`, and the shared-double test is added.
+- F4 (ruled): the stamp and a `silent` `no-service` row are written with no push service, and `prepare` still mints.
+- F5 (ruled): a bound write's failure rolls the move back, the lapse retries through a latch, and the release door
+  catches it. The two unscoped sentences now speak of unbound pushes.
+- F6 (ruled): W3 generalises the pool set's check. Open question 5, the deviation line and the index bullet say so.
+- F7: the index's A and B are re-cut as this plan has them (below).
+- F8: `QuestionOutbox` reaches the questions owner through `QuestionRules`, with types only.
+- F9: the held drain is always `silent`.
+- F10: `SenderDeps.push` is the funnel's type, and `asSendVerdict` reads a non-verdict as null.
+- F11: `noticeTitle` and `noticePayload` are split, and `NoticeOpts.bound` carries the row and its answer.
+- F12: the masking sentence is corrected. `maskDeep` was measured idempotent on shape matches, and `prepare` uses
+  `SHAPE_ONLY_MASKER` until the masker is set.
+- F13: `server/src/diskAlarmLane.ts` and `server/src/buildCaptureLane.ts` are the real paths.
+- F14: the boot reads `time.clock`, and `time` moves above the store.
+- The nits:
+  - The seam is changed only in its double.
+  - The migration count is taken at build time.
+  - The held drain's insert is in the transition table.
+  - `stampReach`'s callers include the drain.
+  - An unlisted error is `no-answer`.
+  - The ask re-read goes through the questions owner.
 
 **What depends on it:** responses PR A (the push id, the verdict and the claim step); W3's holds, the repeat push and the
 attention budget (`pushDue` gains `deferred`); W3's hold arming, which carries the rollback refusal; the readiness
@@ -818,15 +1040,29 @@ next boot, if it is still inside that horizon. No Shadow lanes row is added.
 **What the index should change:**
 - The row reads "2 PRs, 6 tasks".
 - "`PushService`'s per-send verdict" moves from responses PR A to this row.
-- The rollback refusal below `push-outbox-v1` moves to W3's hold arming, and reuses the pool-set piece's
-  `_upd_cap_floor_check` (open question 5).
+- The row's A and B are re-cut as this plan has them (F7):
+  - A is the characterization suite, the vocabulary and deciders (`pushDue` total among them), `push_outbox` with the
+    push id column, the reach-stamp columns and their writer, and `PushService`'s per-send verdict. Nothing is
+    reachable.
+  - B is the sender with its boot pass, today's sites moved behind it, the raising transactions that write
+    `reachedOperatorAt` and the outbox rows, and `push-outbox-v1`.
+- The rollback refusal below `push-outbox-v1` moves to W3's hold arming. W3 generalises the pool-set piece's
+  `_upd_cap_floor_check` and its one record, with a second `--below-cap` word, never with `--force` and never with a
+  second mechanism (open question 5). The index's "adds only its word" wording at the shared-check sentence changes to
+  say so.
 - Lane E's file list adds:
   - the new files: `server/src/pushSender.ts`, `server/src/pushOutbox.ts`, `server/src/coord/pushOutboxStore.ts` and
     `shared/push-outbox.ts`;
-  - the funnel deps sites: `server/src/deps.ts`, `server/src/server.ts`, `server/src/coord/diskAlarmLane.ts`,
-    `server/src/coord/buildCaptureLane.ts`, and `server/src/watch.ts`'s `pushOne`, `pushRelease`, its two
+  - the funnel deps sites: `server/src/deps.ts`, `server/src/server.ts`, `server/src/diskAlarmLane.ts`,
+    `server/src/buildCaptureLane.ts`, and `server/src/watch.ts`'s `pushOne`, `pushRelease`, its two
     `noticeSink(this.deps)` sinks and the delegation sink;
-  - `ledgersStore.ts`'s `raiseItemInTx`, `setBlocking` and `heldItemsReached`;
+  - `ledgersStore.ts`'s `raiseItemInTx`, `raiseItem`, `raiseItemWithMail`, `setBlocking` and `heldItemsReached`;
+  - `ledgersRoutes.ts`'s `LedgerCoordinatorDeps` and `pushBlocking`, and `server/src/coord/routes.ts` (growth-checked)
+    for the ledger routes' wiring and the end-request handler's deps;
+  - the three `ccrc` raisers' deps (`endRequest.ts`, `reviewRelease.ts`, `runCloseRefusals.ts`) and
+    `coord/runCloseLane.ts`'s deps line;
+  - `server/src/coord/ports.ts#WatcherCoordMember`, `server/src/coord/questions.ts#QuestionRules`;
+  - `server/test/single-definition/writers-map.test.ts` and `server/test/single-definition/time-ports.test.ts`;
   - `server/test/run-close-switch.test.ts`;
   - the architecture spec's C6 row.
 - The index names `docs/superpowers/plans/2026-11-14-overlord-w1/` as the piece plans' directory.
