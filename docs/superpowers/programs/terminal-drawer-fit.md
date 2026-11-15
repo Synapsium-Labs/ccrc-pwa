@@ -8,6 +8,58 @@ Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-brisk-mesa`   Workspace: per-w
 the phone without lying to the fleet. It replaces PR #96, which was measured to destroy the very
 scrollback it exists to render.
 
+## Goals
+
+The spec's §3 states the whole programme as one invariant, and every wave is a mechanism for one
+clause of it:
+
+> A session's window is **pinned at the canonical grid** unless a drawer has **deliberately** un-pinned
+> it; it is un-pinned only to a width its history can absorb without shedding and only through a verb
+> the fleet box advertised; and while it is narrower than the readers were calibrated for, **every
+> reader that would type stands down and says so**, rather than reading a wrapped phrase as silence.
+
+Four goals follow from it — two wants and two costs the wants must not incur (spec §1). Each one is
+written so a fresh session can tell whether it is met without replaying a wave:
+
+| # | Goal | Met when | State |
+|---|---|---|---|
+| **G1** | **History a phone can read.** A wheel notch or a finger drag scrolls the pane's stored scrollback. | The drawer renders scrollback from one measured read of the RIGHT pane (`capture-pane -J` on the active pane, never row `[0]` — F7), and no scroll gesture reaches the pane as keystrokes. | **MET** — wave 1, [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7`. Before it, a wheel notch typed `ESC OA` into the session. |
+| **G2** | **A live pane readable at phone width.** ~43 columns, not the tail of 220-column lines. | A drawer may narrow a session's window, only to a width the fit floor permits, only through the capability-gated verb, and the width returns when the drawer leaves. | **NOT MET.** The un-pin wave (wave 4 in the table below, §7 in the spec) has never been dispatched. Today a phone still sees 220 columns painted into 43 — honestly, and without losing history, but not readably. |
+| **G3** | **No stored line is ever destroyed** — the cost G1 and G2 must not pay. tmux reflows on a horizontal resize and sheds the overflow past `history-limit` for good (F1). | Every attach pins the canonical grid FIRST (F14: pinned → zero loss; unpinned → 157 of 1203 lines destroyed on one 43-column attach), and any deliberate un-pin is bounded by `(history_size + pane_height) × ceil(pane_width/W)` (F13 — the cheaper bound approved a narrow that destroyed 200 lines). | **HALF MET.** The pin is live (wave 1). The fit floor is an L1 policy module that lands with G2's wave, so nothing un-pins yet — which is why the half that is missing costs no history. |
+| **G4** | **No reader types into a pane it cannot read** — the other cost. A narrow pane wraps `esc to interrupt` between words and every phrase reader fails OPEN, which is the shape of the 2026-09-08 five-session incident. | Every `ccd` site and server lane that would TYPE stands down below `READER_MIN_COLS` and says why, and the stand-down is live ON THE FLEET BOX before any server that calls it (AGENT-FIRST). | **MET** — wave 2, [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) → `7a6220f6`, and the deploy is measured, not reported: the box's active ccd body carries the same guard counts as `origin/main` (2026-11-14, last section). |
+
+**G4 is met in BEHAVIOUR, and its coverage mechanism is not yet proof — carried wave-3 finding 4.**
+`ccd-reader-standdown.test.ts`'s `POPULATION` is a census of phrase-carrying grep lines, not of guard
+call sites, and it is read as though it were the latter. Measured on `origin/main` 2026-11-15:
+**13 `_pane_measurable` call sites across 12 functions, while `POPULATION` names 7 functions.** So a
+stand-down deleted in one of the other five would not red the suite. That is a gap in the GUARD'S
+GUARD, not an ungated typing site — the sites are gated; what is missing is the mechanism that keeps
+them gated (CLAUDE.md's mutation-table discipline: "a comment is a request; a red suite is a
+mechanism"). Whoever resumes this programme fixes the census before trusting it, and does not count
+greps when the claim is about sites.
+
+**So the programme is half-delivered, and the half that shipped is the half that cannot hurt anything.**
+G1 and G4 are live; G3's pin is live and its floor is unwritten; G2 — the original complaint about the
+live pane — is untouched. The ordering was deliberate (spec §4: "wave 1 delivers most of the value
+alone and is safe with nothing after it"), so stopping here is a coherent place to stop, not a
+half-built mechanism. **What it is not is finished.**
+
+**Non-goals, named so a later wave does not quietly adopt them** (spec §10, §6.4):
+
+- **Width-proof readers** — automation that reads correctly AT 43 columns, rather than standing down.
+  Needs a real Ink capture at phone width, a decision on `armWindow`'s size when 8 lines carry a third
+  of the content, and a join-before-match at ~14 ccd sites plus the server. Its own spec.
+- **Raising `history-limit`** — only if a later census contradicts F12 (which found 25 of 31 live panes
+  storing zero history and every pane passing the 43-column bound at today's limit).
+- **Horizontal panning** of a full-width live view — an alternative to narrowing, unneeded while the
+  un-pin works.
+
+**The accepted residual, stated once (spec §7.6):** while a phone holds a session narrow, that
+session's automation WAITS — ccd's stand-downs and the mail lane's nudges hold until the drawer closes.
+That is bounded by the drawer's open time, visible in the drawer, and the correct direction: a session
+under a human's eye yields automation rather than having automation type over the human. It is not a
+defect to be fixed by a later wave of this programme.
+
 ## Waves
 
 | # | scope | deploy class | PRs | state |
