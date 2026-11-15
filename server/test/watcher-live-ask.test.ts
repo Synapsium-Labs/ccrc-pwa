@@ -24,18 +24,18 @@ const watcherWith = (states: Record<string, HookState>): FleetWatcher => {
 describe('FleetWatcher#liveAskKey', () => {
   it('answers the key of the ask a waiting hookstate shows', () => {
     const w = watcherWith({ 'lane-a-project-a': hs({ state: 'waiting', ask: ASK }) });
-    expect(w.liveAskKey('lane-a-project-a')).toBe(askKey(ASK));
-    expect(w.liveAskKey('lane-a-project-a')).toMatch(/^[0-9a-f]{16}$/);
+    expect(w.liveAskKey('lane-a-project-a')).toEqual({ kind: 'read', key: askKey(ASK) });
+    expect(w.liveAskKey('lane-a-project-a')).toMatchObject({ key: expect.stringMatching(/^[0-9a-f]{16}$/) });
   });
 
   it('answers null for a hookstate that shows no ask, and for one not waiting', () => {
     const w = watcherWith({ 'lane-a-project-a': hs({ state: 'waiting', ask: null }), 'lane-a-project-b': hs({ state: 'working', ask: ASK }) });
-    expect(w.liveAskKey('lane-a-project-a')).toBeNull();
-    expect(w.liveAskKey('lane-a-project-b')).toBeNull();
+    expect(w.liveAskKey('lane-a-project-a')).toEqual({ kind: 'read', key: null });
+    expect(w.liveAskKey('lane-a-project-b')).toEqual({ kind: 'read', key: null });
   });
 
   it('answers unmeasured for a child it never read', () => {
-    expect(watcherWith({}).liveAskKey('lane-a-project-a')).toBe('unmeasured');
+    expect(watcherWith({}).liveAskKey('lane-a-project-a')).toEqual({ kind: 'unmeasured' });
   });
 
   it('stores nothing: the hookstates are the same after a read', () => {

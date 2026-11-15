@@ -99,8 +99,10 @@ export type WatcherCoordMember =
  *  `CoordStore` is assignable to it; it is not assignable back (the store's private members). */
 export type WatcherCoordPort = Pick<CoordStore, WatcherCoordMember>;
 
-/** Overlord W1, portfolio (plan w1-portfolio.md Task 2): the live signal for an open ask. The `askKey` of the ask the child's
- *  newest hookstate is `waiting` on; `null` when that hookstate shows no ask; `unmeasured` when the watcher has read no
- *  hookstate for that child in this process. Consumer: `portfolioStore.ts#portfolioFacts`; adapter:
- *  `FleetWatcher#liveAskKey`, a read-only accessor that stores nothing new. */
-export type LiveAskRead = (childId: string) => string | null | 'unmeasured';
+/** Overlord W1, portfolio (plan w1-portfolio.md Task 2): the live signal for an open ask. `read` carries the `askKey` of the
+ *  ask the child's newest hookstate is `waiting` on, or `null` when that hookstate shows no ask; `unmeasured` when the
+ *  watcher has read no hookstate for that child in this process. A tagged answer, so no key can be mistaken for the
+ *  unmeasured case and every caller must handle both (review 2130, F7). Consumer: `portfolioStore.ts#portfolioFacts`;
+ *  adapter: `FleetWatcher#liveAskKey`, a read-only accessor that stores nothing new. */
+export type LiveAskAnswer = { kind: 'unmeasured' } | { kind: 'read'; key: string | null };
+export type LiveAskRead = (childId: string) => LiveAskAnswer;

@@ -6,6 +6,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { LiveAskRead } from '../src/coord/ports.js';
 import type { RankOrderEntry } from '../../shared/portfolio.js';
+import { portfolioFor } from '../src/coord/portfolio.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_790_000_000_000;
@@ -25,7 +26,7 @@ const run = (program: string, state = 'working', o: { kind?: string; closedAt?: 
 const rows = () => coord.db.prepare('SELECT program, position, cls, fixedDate, setAt, setBy FROM portfolio_rank ORDER BY cls, position').all();
 const revisionRow = () => coord.db.prepare('SELECT id, revision, setAt, setBy FROM portfolio_rank_revision').all();
 const e = (slug: string, cls: RankOrderEntry['cls'] = 'standard', fixedDate: string | null = null): RankOrderEntry => ({ slug, cls, fixedDate });
-const none: LiveAskRead = () => 'unmeasured';
+const none: LiveAskRead = () => ({ kind: 'unmeasured' });
 const write = (basedOn: number, seen: string[], order: RankOrderEntry[], actor = 'op-a', now = NOW) =>
   coord.setPortfolioRank({ basedOn, seen, order }, actor, now);
 
@@ -53,6 +54,14 @@ describe('portfolio_rank and its one writer', () => {
     const before = [rows(), revisionRow()];
     expect(write(0, ['prog-a'], [e('prog-a', 'background')])).toEqual({ ok: false, why: 'rank-changed', revision: 1 });
     expect(write(5, ['prog-a'], [e('prog-a', 'background')])).toEqual({ ok: false, why: 'rank-changed', revision: 1 });
+    expect([rows(), revisionRow()]).toEqual(before);
+  });
+
+  it('an unknown slug with a stale basedOn answers the unknown slug first and changes no row', () => {
+    programme('prog-a');
+    write(0, ['prog-a'], [e('prog-a')]);
+    const before = [rows(), revisionRow()];
+    expect(write(0, ['prog-a', 'prog-x'], [e('prog-x'), e('prog-a')])).toEqual({ ok: false, unknownSlug: 'prog-x' });
     expect([rows(), revisionRow()]).toEqual(before);
   });
 
@@ -150,10 +159,61 @@ describe('the facts portfolioFor reads', () => {
     const answered = ask(r, 'lane-a-third', 'answered', 'k-a', NOW - HOUR);
     const liveOf = (port: LiveAskRead) => Object.fromEntries(coord.portfolioFacts(NOW, port).asks.map((a) => [a.id, a.live]));
     const keys: Record<string, string | null> = { 'lane-a-child': 'k-new', 'lane-a-other': 'k-d', 'lane-a-third': 'k-a' };
-    expect(liveOf((c) => keys[c] ?? null)).toEqual({ [older]: null, [newest]: true, [declined]: true, [answered]: null });
-    expect(liveOf(() => 'k-other')).toEqual({ [older]: null, [newest]: false, [declined]: false, [answered]: null });
-    expect(liveOf(() => null)).toEqual({ [older]: null, [newest]: false, [declined]: false, [answered]: null });
-    expect(liveOf(() => 'unmeasured')).toEqual({ [older]: null, [newest]: 'unmeasured', [declined]: 'unmeasured', [answered]: null });
+    expect(liveOf((c) => ({ kind: 'read', key: keys[c] ?? null }))).toEqual({ [older]: null, [newest]: true, [declined]: true, [answered]: null });
+    expect(liveOf(() => ({ kind: 'read', key: 'k-other' }))).toEqual({ [older]: null, [newest]: false, [declined]: false, [answered]: null });
+    expect(liveOf(() => ({ kind: 'read', key: null }))).toEqual({ [older]: null, [newest]: false, [declined]: false, [answered]: null });
+    expect(liveOf(() => ({ kind: 'unmeasured' })))
+      .toEqual({ [older]: null, [newest]: 'unmeasured', [declined]: 'unmeasured', [answered]: null });
+  });
+
+  const answer = (id: number, answeredAt: number, answeredBy = 'operator'): void => {
+    coord.db.prepare("UPDATE asks SET state = 'answered', answeredAt = ?, answeredBy = ? WHERE id = ?").run(answeredAt, answeredBy, id);
+  };
+  const entryOf = (port: LiveAskRead = none) => portfolioFor(coord.portfolioFacts(NOW, port), NOW).programmes[0]!;
+  const fetched = (port: LiveAskRead = none) => coord.portfolioFacts(NOW, port).asks.map((a) => a.id);
+
+  it('an ask released 29 days ago and answered by the operator yesterday is fetched, and its wait is clipped to the window', () => {
+    programme('prog-a');
+    const r = run('prog-a');
+    const id = ask(r, 'lane-a-child', 'released', 'k1', NOW - 29 * DAY);
+    answer(id, NOW - DAY);
+    expect(fetched()).toEqual([id]);
+    expect(entryOf()).toMatchObject({ waitingOnOperatorMs28: 27 * DAY, asksUnmeasured: 0 });
+  });
+
+  it('an ask released and answered before the window is not fetched', () => {
+    programme('prog-a');
+    const r = run('prog-a');
+    answer(ask(r, 'lane-a-child', 'released', 'k1', NOW - 40 * DAY), NOW - 29 * DAY);
+    expect(fetched()).toEqual([]);
+  });
+
+  it('an answering ask released 40 days ago is fetched and counts in asksUnmeasured', () => {
+    programme('prog-a');
+    const id = ask(run('prog-a'), 'lane-a-child', 'answering', 'k1', NOW - 40 * DAY);
+    expect(fetched()).toEqual([id]);
+    expect(entryOf()).toMatchObject({ waitingOnOperatorMs28: 0, asksUnmeasured: 1 });
+  });
+
+  it('asks-unmeasured-is-windowed: an older released ask before the window is not fetched; one inside it still counts', () => {
+    programme('prog-a');
+    const r = run('prog-a');
+    ask(r, 'lane-a-child', 'released', 'k-old', NOW - 40 * DAY);
+    ask(r, 'lane-a-child', 'declined', 'k-older', NOW - 29 * DAY);
+    const inside = ask(r, 'lane-a-child', 'released', 'k-in', NOW - 2 * DAY);
+    const newest = ask(r, 'lane-a-child', 'released', 'k-new', NOW - HOUR);
+    const port: LiveAskRead = () => ({ kind: 'read', key: 'k-new' });
+    expect(fetched(port)).toEqual([inside, newest]);
+    expect(entryOf(port)).toMatchObject({ waitingOnOperatorMs28: HOUR, asksUnmeasured: 1 });
+  });
+
+  it('asks-unmeasured-is-windowed: the newest ask released before the window is fetched, and counts only while its live read is unmeasured', () => {
+    programme('prog-a');
+    const id = ask(run('prog-a'), 'lane-a-child', 'declined', 'k1', NOW - 29 * DAY);
+    expect(fetched()).toEqual([id]);
+    expect(entryOf(() => ({ kind: 'read', key: null }))).toMatchObject({ waitingOnOperatorMs28: 0, asksUnmeasured: 0 });
+    expect(entryOf(() => ({ kind: 'unmeasured' }))).toMatchObject({ waitingOnOperatorMs28: 0, asksUnmeasured: 1 });
+    expect(entryOf(() => ({ kind: 'read', key: 'k1' }))).toMatchObject({ waitingOnOperatorMs28: 28 * DAY, asksUnmeasured: 0 });
   });
 
   it('an item\'s events come back oldest first, and an item closed before the window is left out', () => {

@@ -18,7 +18,7 @@ import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
-import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
+import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
@@ -2168,9 +2168,9 @@ export class FleetWatcher {
   }
   /** `LiveAskRead`'s adapter (Overlord W1, portfolio): the `askKey` of the ask this child's newest hookstate is `waiting` on,
    *  `null` when it shows none, `unmeasured` when no hookstate was read for it in this process. A pure read; stores nothing. */
-  liveAskKey(childId: string): string | null | 'unmeasured' {
+  liveAskKey(childId: string): LiveAskAnswer {
     const hs = this.hookStates.get(childId);
-    return hs === undefined ? 'unmeasured' : hs.state === 'waiting' ? askKey(hs.ask) : null;
+    return hs === undefined ? { kind: 'unmeasured' } : { kind: 'read', key: hs.state === 'waiting' ? askKey(hs.ask) : null };
   }
 
   /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means

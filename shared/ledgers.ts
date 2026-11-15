@@ -41,6 +41,12 @@ const ITEM_ACT_MAP: Record<ItemAct, true> = {
   tick: true, confirm: true, return: true, withdraw: true, dismiss: true, act: true, decline: true, settle: true,
 };
 export const ITEM_ACTS = Object.keys(ITEM_ACT_MAP) as readonly ItemAct[];
+/** The acts an item event records besides an `ItemAct`: a raise and a blocking change, which do not move the item. An
+ *  event's act is an `ItemEventAct`; `isItemNonMove` reads this one map (Overlord W1, portfolio). */
+export type ItemNonMove = 'raise' | 'block' | 'unblock';
+export type ItemEventAct = ItemAct | ItemNonMove;
+const ITEM_NON_MOVE_MAP: Record<ItemNonMove, true> = { raise: true, block: true, unblock: true };
+export const isItemNonMove = (act: string): act is ItemNonMove => Object.prototype.hasOwnProperty.call(ITEM_NON_MOVE_MAP, act);
 const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true, ccrc: true };
 export const ITEM_ACTORS = Object.keys(ITEM_ACTOR_MAP) as readonly ItemActor[];
 

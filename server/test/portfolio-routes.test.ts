@@ -113,6 +113,16 @@ describe('the rank door\'s refusals', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'rank-changed', revision: 1 });
   });
 
+  it('an unknown slug with a stale basedOn answers 404 not-found, and the revision does not move', async () => {
+    const r = await rig({ armed: false });
+    programme(r, 'prog-a');
+    expect((await rank(r, { basedOn: 0, seen: ['prog-a'], order: [{ slug: 'prog-a', cls: 'standard' }] })).statusCode).toBe(200);
+    const res = await rank(r, { basedOn: 0, seen: ['prog-a', 'prog-x'], order: [{ slug: 'prog-x', cls: 'standard' }] });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
+    expect(r.coord.db.prepare('SELECT revision FROM portfolio_rank_revision').get()).toEqual({ revision: 1 });
+  });
+
   it('every shape refusal is bad-request and writes nothing', async () => {
     const r = await rig({ armed: false });
     programme(r, 'prog-a');

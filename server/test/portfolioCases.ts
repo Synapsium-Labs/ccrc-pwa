@@ -94,6 +94,11 @@ export const ORDER_CASES: PortfolioCase[] = [
 ];
 
 export const LIST_CASES: PortfolioCase[] = [
+  { name: 'a ranked programme whose run closed exactly 28 days ago is still listed', run: (m) => {
+    const edge = [run({ state: 'done', closedAt: NOW - 28 * DAY })];
+    expect(m.portfolioFor(facts({ runs: edge, ranks: [rank('prog-a', 'standard', 1)] }), NOW).programmes.map((p) => p.slug))
+      .toEqual(['prog-a']);
+  } },
   { name: 'only closed runs older than the window: listed neither unranked nor ranked; ranked with a recent close it is', run: (m) => {
     const old = [run({ state: 'done', closedAt: NOW - 30 * DAY })];
     expect(m.portfolioFor(facts({ runs: old }), NOW).programmes).toEqual([]);
@@ -136,6 +141,12 @@ export const WAVE_CASES: PortfolioCase[] = [
     const e = entry(m, facts({ runs: [run({ state: 'working', wave: 9 }), run({ wave: 1, state: 'done', closedAt: NOW - 2 * DAY }),
       run({ wave: 2, state: 'failed', closedAt: NOW - 10 * DAY }), run({ wave: 3, state: 'done', closedAt: NOW - 29 * DAY })] }));
     expect(e.closedWaves).toEqual({ days7: 1, days28: 2 });
+  } },
+  { name: 'a wave closed exactly 7 days ago counts in both; one exactly 28 days ago in days28 only', run: (m) => {
+    const e = entry(m, facts({ runs: [run({ state: 'working', wave: 9 }), run({ wave: 1, state: 'done', closedAt: NOW - 7 * DAY }),
+      run({ wave: 2, state: 'done', closedAt: NOW - 28 * DAY })] }));
+    expect(e.closedWaves).toEqual({ days7: 1, days28: 2 });
+    expect(e.ended28.done).toBe(2);
   } },
   { name: 'the oldest started open wave is aged from its earliest dispatch', run: (m) => {
     const e = entry(m, facts({ runs: [run({ wave: 1, state: 'working', dispatchedAt: NOW - 5 * HOUR }),
@@ -267,6 +278,32 @@ export const ASK_CASES: PortfolioCase[] = [
   { name: 'an operator answer from a release 40 days ago is clipped to the window', run: (m) => {
     expect(askWait(m, ask({ state: 'answered', releasedAt: NOW - 40 * DAY, answeredAt: NOW - 27 * DAY, answeredBy: 'operator' })))
       .toEqual({ ms: DAY, unmeasured: 0 });
+  } },
+  { name: 'a live ask released 40 days ago adds only the window', run: (m) => {
+    expect(askWait(m, ask({ state: 'released', releasedAt: NOW - 40 * DAY, live: true }))).toEqual({ ms: 28 * DAY, unmeasured: 0 });
+  } },
+  // answering-or-unknown-ask-is-unmeasured, one case per arm.
+  { name: 'an answering ask with a releasedAt adds nothing and counts in asksUnmeasured', run: (m) => {
+    expect(askWait(m, ask({ state: 'answering', releasedAt: NOW - 3 * HOUR }))).toEqual({ ms: 0, unmeasured: 1 });
+  } },
+  { name: 'an ask in a state this build does not know, with a releasedAt, counts in asksUnmeasured', run: (m) => {
+    expect(askWait(m, ask({ state: 'pondering', releasedAt: NOW - 3 * HOUR }))).toEqual({ ms: 0, unmeasured: 1 });
+  } },
+  { name: 'an operator answer with no answeredAt counts in asksUnmeasured', run: (m) => {
+    expect(askWait(m, ask({ state: 'answered', releasedAt: NOW - 3 * HOUR, answeredAt: null, answeredBy: 'operator' })))
+      .toEqual({ ms: 0, unmeasured: 1 });
+  } },
+  // asks-unmeasured-is-windowed: over the last 28 days.
+  { name: 'a released or declined ask shown not live, released before the window, is not counted', run: (m) => {
+    expect(askWait(m, ask({ state: 'released', releasedAt: NOW - 29 * DAY, live: false }))).toEqual({ ms: 0, unmeasured: 0 });
+    expect(askWait(m, ask({ state: 'released', releasedAt: NOW - 29 * DAY, live: null }))).toEqual({ ms: 0, unmeasured: 0 });
+    expect(askWait(m, ask({ state: 'declined', releasedAt: NOW - 29 * DAY, live: false }))).toEqual({ ms: 0, unmeasured: 0 });
+  } },
+  { name: 'one released exactly at the window start, not live, still counts in asksUnmeasured', run: (m) => {
+    expect(askWait(m, ask({ state: 'released', releasedAt: NOW - 28 * DAY, live: false }))).toEqual({ ms: 0, unmeasured: 1 });
+  } },
+  { name: 'one released before the window whose live signal is unmeasured still counts', run: (m) => {
+    expect(askWait(m, ask({ state: 'released', releasedAt: NOW - 29 * DAY, live: 'unmeasured' }))).toEqual({ ms: 0, unmeasured: 1 });
   } },
 ];
 

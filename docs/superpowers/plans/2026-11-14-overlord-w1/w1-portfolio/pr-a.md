@@ -51,3 +51,35 @@ The first fast run on the PR was red on three checks the brief's gate list did n
 - `server/test/token-shared.test.ts`: the portfolio's seven-day closed-waves window (`portfolio.ts#WEEK_MS`) is a new
   seven-day quantity; the coordinator ruled it in as a separate one (ask 437), the fifteenth holder. The push outbox adds
   its own holder on its branch; whichever lands second keeps both and sets the count to sixteen.
+
+## Fix round 1 (review 2130)
+
+The coordinator ruled on the review's ten findings: F1, F2, F3, F4, F6, F7 and F9 are fixed here; F5, F8 and F10 are not
+in this pull request (F10 goes to PR B's brief). The branch merged `main` once more, on the coordinator's word, keeping both
+sides of the mutation floors files after the pool set's piece landed; the migration is still entry 75.
+
+- **F1, `plan-fetch-text-contradicts-its-clip-rule`.** The plan's fetch text ("with a `releasedAt` in the window or still
+  `released` or `declined`") never fetched an ask released before the window and answered or taken inside it, so the clip
+  its question 10 rules on (and the L1 case pins) could not happen. The asks read now also fetches an ask answered in the
+  window (`answeredAt >= from`) and one still `answering`. A store case releases an ask 29 days ago, answers it yesterday,
+  and reads 27 days of operator wait.
+- **F3, `asks-unmeasured-is-windowed`.** "Over the last 28 days" governs `asksUnmeasured`: a `released` or `declined` ask
+  released before the window and shown not live (its live read names another ask or none, or it is not its child's newest
+  row) is not counted, and an older row of that kind is not fetched at all. One inside the window that cannot be judged
+  still counts, and so does one before it whose live read is itself unmeasured, since nothing shows it ended. Store and L1
+  cases cover each side, with the window's first instant counted inside it.
+- **F2.** The rank writer's census lists every `setPortfolioRank(` call under `server/src`, never deduplicated, by its
+  enclosing symbol and the route whose handler holds it, and requires exactly the store's delegate and the
+  `POST /api/portfolio/rank` handler. A planted control adds a second call to the goals read's handler (a box-token read in
+  the same registration function) and is a second entry; the same plant in the real file reds the census (measured).
+- **F4.** New cases: an `answering` ask with a `releasedAt`, an unknown state with one, an operator answer with no
+  `answeredAt`, a live ask released 40 days ago, closes exactly 7 and 28 days ago (closed waves, ended waves and the
+  listing), and an unknown slug with a stale `basedOn` (store and route: `not-found`, revision unmoved). `PORTFOLIO_FOR_SET`
+  gains P-FOR-20 to P-FOR-27: one mutant per arm of `answering-or-unknown-ask-is-unmeasured`, the window rule and its
+  unmeasured exception, and the three inclusive window edges. All killed; the floor stays 1.
+- **F6.** `shared/ledgers.ts` holds the non-moving item-event acts (`raise`, `block`, `unblock`) in one
+  `Record<ItemNonMove, true>` map; `isItemNonMove` reads it, `ItemEventAct` is `ItemAct | ItemNonMove`, and both the
+  store's `ItemEventRow` and the portfolio's item fold use them.
+- **F7.** `LiveAskRead` answers `{ kind: 'unmeasured' } | { kind: 'read'; key: string | null }`, so the compiler makes every
+  caller handle the unmeasured case; `FleetWatcher#liveAskKey` and the server's dependency answer that shape.
+- **F9.** The facts read takes no transaction, as `itemsFor` and `readProgrammes` do not.

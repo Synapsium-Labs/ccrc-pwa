@@ -9,7 +9,8 @@
 //
 // THE FACTS READ keeps every distinction it reads: a class word `isServiceClass` refuses arrives as `cls: null` with its
 // `clsRaw`; a run kind reads through `isRunKind`; the live-ask port's `unmeasured` stays `'unmeasured'`. A throw is not
-// caught here: the read door answers it `runs-unreadable`.
+// caught here: the read door answers it `runs-unreadable`. It takes no transaction, as `itemsFor` and `readProgrammes` do
+// not: a pure read never takes the write lock (review 2130, F9).
 import type { DatabaseSync } from 'node:sqlite';
 import { isRunKind } from '../../../shared/api.js';
 import { OPEN_ITEM_STATES } from '../../../shared/ledgers.js';
@@ -76,42 +77,43 @@ const LISTED = (terminal: string): string =>
   'SELECT p.slug FROM programs p WHERE EXISTS (SELECT 1 FROM portfolio_rank k WHERE k.program = p.slug) ' +
   `OR EXISTS (SELECT 1 FROM runs r WHERE r.program = p.slug AND r.state NOT IN ${terminal})`;
 
-/** Everything `portfolioFor` reads, inside one transaction. It only bounds what it fetches: items still open or closed in
- *  the window, and asks released in the window or still `released` or `declined`. For each `released` or `declined` ask
- *  that is its child's newest row it asks `liveAsk(childId)`: the row's own key reads `live: true`, any other key or `null`
- *  `false`, and `unmeasured` stays `'unmeasured'`. Every other ask carries `live: null`. */
+/** An ask row that is its child's newest: the only one the live-ask port can speak for. */
+const NEWEST_ASK = '(a.id = (SELECT MAX(b.id) FROM asks b WHERE b.childId = a.childId))';
+
+/** Everything `portfolioFor` reads. It only bounds what it fetches: items still open or closed in the window; and asks
+ *  released or answered in the window, still `answering`, or `released` or `declined` and their child's newest row (an
+ *  older one released before the window cannot be live, so it is outside the window: asks-unmeasured-is-windowed). For
+ *  each `released` or `declined` ask that is its child's newest row it asks `liveAsk(childId)`: the row's own key reads
+ *  `live: true`, any other key or `null` `false`, and `unmeasured` stays `'unmeasured'`. Every other ask carries `live: null`. */
 export function portfolioFacts(db: DatabaseSync, now: number, terminalStatesSql: string, liveAsk: LiveAskRead): PortfolioFacts {
   const from = now - PORTFOLIO_WINDOW_DAYS * 24 * 3_600_000;
   const listed = LISTED(terminalStatesSql);
   const openItems = `(${OPEN_ITEM_STATES.map((s) => `'${s}'`).join(', ')})`;
-  return tx(db, () => {
-    const programmes = db.prepare(
-      `SELECT slug, title, createdAt FROM programs WHERE slug IN (${listed}) ORDER BY slug`,
-    ).all() as unknown as PortfolioProgramme[];
-    const ranks: RankRow[] = (db.prepare(
-      `SELECT program, position, cls, fixedDate, setAt, setBy FROM portfolio_rank WHERE program IN (${listed}) ORDER BY program`,
-    ).all() as unknown as RankRowRaw[]).map((r) => ({ ...r, cls: isServiceClass(r.cls) ? r.cls : null, clsRaw: r.cls }));
-    const runs: PortfolioRun[] = (db.prepare(
-      'SELECT id, program, wave, kind, reviews, state, openedAt, dispatchedAt, closedAt, closeDetail FROM runs ' +
-      `WHERE program IN (${listed}) ORDER BY id`,
-    ).all() as unknown as (Omit<PortfolioRun, 'kind'> & { kind: string })[]).map((r) => ({ ...r, kind: isRunKind(r.kind) ? r.kind : 'unknown' }));
-    const itemRows = db.prepare(
-      'SELECT id, program, title, neededBy, state, raisedAt, heldUntil, tickedAt, closedAt FROM operator_items ' +
-      `WHERE program IN (${listed}) AND (state IN ${openItems} OR closedAt >= ?) ORDER BY id`,
-    ).all(from) as unknown as Omit<PortfolioItem, 'events'>[];
-    const eventsOf = db.prepare('SELECT at, act FROM operator_item_events WHERE itemId = ? ORDER BY at, id');
-    const items: PortfolioItem[] = itemRows.map((i) => ({ ...i, events: eventsOf.all(i.id) as unknown as { at: number; act: string }[] }));
-    const askRows = db.prepare(
-      'SELECT a.id, r.program, a.state, a.releasedAt, a.answeredAt, a.answeredBy, a.childId, a.askKey, ' +
-      '(a.id = (SELECT MAX(b.id) FROM asks b WHERE b.childId = a.childId)) AS newest ' +
-      `FROM asks a JOIN runs r ON r.id = a.runId WHERE r.program IN (${listed}) ` +
-      "AND (a.releasedAt >= ? OR a.state IN ('released', 'declined')) ORDER BY a.id",
-    ).all(from) as unknown as (Omit<PortfolioAsk, 'live'> & { childId: string; askKey: string; newest: number })[];
-    const asks: PortfolioAsk[] = askRows.map(({ childId, askKey, newest, ...a }) => {
-      if (newest !== 1 || (a.state !== 'released' && a.state !== 'declined')) return { ...a, live: null };
-      const key = liveAsk(childId);
-      return { ...a, live: key === 'unmeasured' ? 'unmeasured' : key === askKey };
-    });
-    return { programmes, ranks, revision: revisionOf(db), runs, items, asks };
+  const programmes = db.prepare(
+    `SELECT slug, title, createdAt FROM programs WHERE slug IN (${listed}) ORDER BY slug`,
+  ).all() as unknown as PortfolioProgramme[];
+  const ranks: RankRow[] = (db.prepare(
+    `SELECT program, position, cls, fixedDate, setAt, setBy FROM portfolio_rank WHERE program IN (${listed}) ORDER BY program`,
+  ).all() as unknown as RankRowRaw[]).map((r) => ({ ...r, cls: isServiceClass(r.cls) ? r.cls : null, clsRaw: r.cls }));
+  const runs: PortfolioRun[] = (db.prepare(
+    'SELECT id, program, wave, kind, reviews, state, openedAt, dispatchedAt, closedAt, closeDetail FROM runs ' +
+    `WHERE program IN (${listed}) ORDER BY id`,
+  ).all() as unknown as (Omit<PortfolioRun, 'kind'> & { kind: string })[]).map((r) => ({ ...r, kind: isRunKind(r.kind) ? r.kind : 'unknown' }));
+  const itemRows = db.prepare(
+    'SELECT id, program, title, neededBy, state, raisedAt, heldUntil, tickedAt, closedAt FROM operator_items ' +
+    `WHERE program IN (${listed}) AND (state IN ${openItems} OR closedAt >= ?) ORDER BY id`,
+  ).all(from) as unknown as Omit<PortfolioItem, 'events'>[];
+  const eventsOf = db.prepare('SELECT at, act FROM operator_item_events WHERE itemId = ? ORDER BY at, id');
+  const items: PortfolioItem[] = itemRows.map((i) => ({ ...i, events: eventsOf.all(i.id) as unknown as { at: number; act: string }[] }));
+  const askRows = db.prepare(
+    `SELECT a.id, r.program, a.state, a.releasedAt, a.answeredAt, a.answeredBy, a.childId, a.askKey, ${NEWEST_ASK} AS newest ` +
+    `FROM asks a JOIN runs r ON r.id = a.runId WHERE r.program IN (${listed}) AND (a.releasedAt >= ? OR a.answeredAt >= ? ` +
+    `OR a.state = 'answering' OR (a.state IN ('released', 'declined') AND ${NEWEST_ASK})) ORDER BY a.id`,
+  ).all(from, from) as unknown as (Omit<PortfolioAsk, 'live'> & { childId: string; askKey: string; newest: number })[];
+  const asks: PortfolioAsk[] = askRows.map(({ childId, askKey, newest, ...a }) => {
+    if (newest !== 1 || (a.state !== 'released' && a.state !== 'declined')) return { ...a, live: null };
+    const read = liveAsk(childId);
+    return { ...a, live: read.kind === 'unmeasured' ? 'unmeasured' : read.key === askKey };
   });
+  return { programmes, ranks, revision: revisionOf(db), runs, items, asks };
 }

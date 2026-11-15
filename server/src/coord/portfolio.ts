@@ -10,7 +10,7 @@
 // counted in `cycleUnmeasured`; an item whose events this build cannot fold is counted in `itemsUnmeasured`; an ask that
 // reached the operator and whose end no live signal shows is counted in `asksUnmeasured`, never as an ever-growing wait.
 import { ASK_OPERATOR_PRINCIPAL, TERMINAL_RUN_STATES, isRunState } from '../../../shared/api.js';
-import { ITEM_TRANSITIONS, operatorShownAt, type ItemAct } from '../../../shared/ledgers.js';
+import { ITEM_TRANSITIONS, isItemNonMove, operatorShownAt, type ItemAct } from '../../../shared/ledgers.js';
 import {
   PORTFOLIO_WINDOW_DAYS, SERVICE_CLASSES, UNRANKED_CLASS,
   type Measure, type PortfolioAsk, type PortfolioEntry, type PortfolioFacts, type PortfolioItem, type PortfolioProgramme,
@@ -58,8 +58,6 @@ const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 /** The length of `[a, b]` inside `[from, to]`, never negative. */
 const clipped = (a: number, b: number, from: number, to: number): number => Math.max(0, Math.min(b, to) - Math.max(a, from));
 
-/** The acts an item event may carry besides an `ItemAct`: they do not move the item. */
-const NON_MOVES: readonly string[] = ['raise', 'block', 'unblock'];
 const isItemAct = (act: string): act is ItemAct => Object.prototype.hasOwnProperty.call(ITEM_TRANSITIONS, act);
 
 /** The item's operator wait inside [from, to]: its `open` spans from its events, after `operatorShownAt`; or 'unmeasured'
@@ -67,7 +65,7 @@ const isItemAct = (act: string): act is ItemAct => Object.prototype.hasOwnProper
  *  goes to `ITEM_TRANSITIONS`' target, so a tick ends a span, a return starts one and a close ends it. The coordinator's
  *  `checking` time is never the operator's. An item still open at `to` waits up to `to`. */
 export function itemWaitMs(item: PortfolioItem, from: number, to: number): number | 'unmeasured' {
-  for (const e of item.events) if (!isItemAct(e.act) && !NON_MOVES.includes(e.act)) return 'unmeasured';
+  for (const e of item.events) if (!isItemAct(e.act) && !isItemNonMove(e.act)) return 'unmeasured';
   const shownAt = operatorShownAt(item);
   if (shownAt === null) return 0;
   const lo = Math.max(from, shownAt);
@@ -83,7 +81,8 @@ export function itemWaitMs(item: PortfolioItem, from: number, to: number): numbe
   return total;
 }
 
-/** One ask's operator wait inside [from, to], or 'unmeasured'; null when it never waited on the operator (question 10). */
+/** One ask's operator wait inside [from, to], or 'unmeasured'; null when it never waited on the operator in the window
+ *  (question 10). */
 function askWaitMs(a: PortfolioAsk, from: number, to: number): number | 'unmeasured' | null {
   // A stale ask is not counted at all: most went stale before any push, and staleAsk overwrites `releasedAt`.
   if (a.state === 'stale' || a.releasedAt === null) return null;
@@ -91,7 +90,15 @@ function askWaitMs(a: PortfolioAsk, from: number, to: number): number | 'unmeasu
     if (a.answeredBy !== ASK_OPERATOR_PRINCIPAL) return null;
     return a.answeredAt === null ? 'unmeasured' : clipped(a.releasedAt, a.answeredAt, from, to);
   }
-  if ((a.state === 'released' || a.state === 'declined') && a.live === true) return clipped(a.releasedAt, to, from, to);
+  if (a.state === 'released' || a.state === 'declined') {
+    if (a.live === true) return clipped(a.releasedAt, to, from, to);
+    // asks-unmeasured-is-windowed: released before the window and shown not live, it is outside "the last 28 days".
+    // A live signal that is itself unmeasured cannot say so, and the ask still counts.
+    if (a.live !== 'unmeasured' && a.releasedAt < from) return null;
+    return 'unmeasured';
+  }
+  // answering-or-unknown-ask-is-unmeasured: an `answering` ask (the operator is mid-answer) or a state word this build does
+  // not know reached the operator, and no signal shows its end.
   return 'unmeasured';
 }
 

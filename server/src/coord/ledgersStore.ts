@@ -13,7 +13,8 @@ import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '.
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
   RELEASE_REVIEW_VERB, nextItemState, operatorShownAt, parseItemAction, recommendationOf,
-  type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
+  type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemEventAct, type ItemKind, type ItemMoveRefusal, type ItemState,
+  type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
 
@@ -31,7 +32,7 @@ export interface ItemRow {
 }
 /** One move of one item. `act` is an `ItemAct` or `raise`, `block`, `unblock`. */
 export interface ItemEventRow {
-  id: number; itemId: number; at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; actor: ItemActor; note: string | null;
+  id: number; itemId: number; at: number; act: ItemEventAct; actor: ItemActor; note: string | null;
 }
 /** `moveItem`'s answer: the moved item, or the refusal word (`nextItemState`'s three, or `unknown-item`). */
 export type ItemMoveResult =

@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { parseFile } from '../scan/parse.js';
+import { parseFile, ts } from '../scan/parse.js';
 import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -386,37 +386,72 @@ describe(TABLES_PIN, () => {
     });
   });
 
-  // The portfolio's one writer is reached only from the rank door (Overlord W1, plan w1-portfolio.md Task 2): its callers
-  // under `server/src`, named by the innermost enclosing symbol, are `CoordStore`'s one-line delegate and the door.
-  const rankCallers = (files: readonly string[]): string[] => {
-    const out = new Set<string>();
+  // The portfolio's one writer is reached only from the rank door (Overlord W1, plan w1-portfolio.md Task 2; review 2130, F2):
+  // every call under `server/src` is listed, never deduplicated, by its innermost enclosing symbol and, inside a route's
+  // registration call, by that route. Fastify handlers are anonymous arrows, so the route is what tells a second call in
+  // another handler of the same registration function (the box-token goals read among them) from the rank door's own.
+  const ROUTE_VERB = /^(get|post|put|delete|patch)$/;
+  const rankCallSites = (files: readonly string[]): string[] => {
+    const out: string[] = [];
     for (const f of files) {
-      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-      // A call, never a definition: not after `function `, and not the delegate's own signature (`setPortfolioRank(w: `).
-      const hits = [...text.matchAll(/(?<!function )\bsetPortfolioRank\((?!w: )/g)];
-      if (hits.length === 0) continue;
+      const text = readFileSync(f, 'utf8');
+      if (!text.includes('setPortfolioRank(')) continue;
+      const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
       const syms = parseFile(f).symbols;
-      for (const m of hits) {
-        const inner = syms.filter((x) => x.start <= m.index! && m.index! < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
-        out.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
-      }
+      const visit = (node: ts.Node, route: string | null): void => {
+        let here = route;
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const first = node.arguments[0];
+          if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'app' &&
+            ROUTE_VERB.test(callee.name.text) && first !== undefined && ts.isStringLiteral(first)) {
+            here = `${callee.name.text.toUpperCase()} ${first.text}`;
+          }
+          const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : null;
+          if (name === 'setPortfolioRank') {
+            const at = node.getStart(sf);
+            const inner = syms.filter((x) => x.start <= at && at < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+            out.push(`${rel(f)}#${inner?.name ?? '(module)'}${here === null ? '' : ` @ ${here}`}`);
+          }
+        }
+        ts.forEachChild(node, (c) => visit(c, here));
+      };
+      visit(sf, null);
     }
-    return [...out].sort();
+    return out.sort();
   };
-  it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
+  const RANK_CALLS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/portfolio/rank', `${S}setPortfolioRank`,
+  ];
+  const plant = async (name: string, text: string, check: (f: string) => void): Promise<void> => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const d = mkdtempSync(path.join(tmpdir(), 'writers-map-rank-'));
     try {
-      const f = path.join(d, 'a.ts');
-      writeFileSync(f, ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'));
-      expect(rankCallers([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']);
+      const f = path.join(d, name);
+      writeFileSync(f, text);
+      check(f);
     } finally { rmSync(d, { recursive: true, force: true }); }
+  };
+  it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
+    await plant('a.ts', ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'),
+      (f) => expect(rankCallSites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']));
   });
-  it('setPortfolioRank is called only by CoordStore\'s delegate and the rank door', () => {
-    expect(rankCallers(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
-      'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes', `${S}setPortfolioRank`,
-    ]);
+  it('CONTROL: a second call in the goals read\'s handler, in the same registration function, is a second entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = '    return reply.code(200).send({ ok: true, ...goalsReadOf(';
+    expect(routes.split(anchor)).toHaveLength(2);
+    const planted = routes.replace(anchor, `    coord.setPortfolioRank({ basedOn: 0, seen: [], order: [] }, 'x', 0);\n${anchor}`);
+    await plant('ledgersRoutes.ts', planted, (f) => {
+      const sites = rankCallSites([f]).map((s) => s.replace(/^.*#/, ''));
+      expect(sites).toEqual([
+        'registerLedgerOperatorRoutes @ GET /api/programmes/:slug/goals', 'registerLedgerOperatorRoutes @ POST /api/portfolio/rank',
+      ]);
+      expect(sites).not.toEqual([RANK_CALLS[0]!.replace(/^.*#/, '')]);
+    });
+  });
+  it('setPortfolioRank is called exactly once outside the store, inside the POST /api/portfolio/rank handler', () => {
+    expect(rankCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(RANK_CALLS);
   });
 });
 
