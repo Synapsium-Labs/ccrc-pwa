@@ -170,7 +170,7 @@ L3, C5) is only the body that runs INSIDE that transaction, and it has one call 
 **Precedent, checked.** The store already delegates bodies to same-ring companion modules: `rundefsTx.ts#queueLandingNoticeTx` and
 `rundefsTx.ts#queueRunlessNoticeTx` take `coord: WatcherCoordPort` and run inside a caller's transaction, which is the closest match (and
 the bodies this file reuses); `linkingStore.ts#setLinking`, `reviewCapStore.ts#liftReviewCapByCoordinator` and
-`continuity/continuityStore.ts#mintGeneration` take the `db` and open their own `tx(db, ...)` inside the companion; `practiceCasesStore.ts#openPracticeCase`
+`server/src/continuity/continuityStore.ts#mintGeneration` (outside `coord/`) take the `db` and open their own `tx(db, ...)` inside the companion; `practiceCasesStore.ts#openPracticeCase`
 takes the `db` and opens no transaction of its own (`grep -n "BEGIN\|tx(\|transaction" server/src/coord/practiceCasesStore.ts` finds nothing); the store's `openPracticeCase` is a one-line delegate and its caller `casesLane.ts` calls it directly, so it does not run inside a store transaction. It is a precedent for a same-ring companion taking the `db`, not for a body run inside the store's `tx`. So the form is not new, but `applyLandingControlTx` differs from the db-taking
 companions in that the store, not the companion, owns the transaction.
 
