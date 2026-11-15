@@ -4309,7 +4309,7 @@ export function registerCoordRoutes(
     // One view of the hold: the order and the binding are decided from the same value (`landingReadView`), the route's own now.
     const now = Date.now();
     const { flags: held, binding } = landingReadView(read.facts, watcher?.currentLandingControl(project, now), now);
-    const view: LandingLineView = { project, ...held, ...landingViewOf(entries, held, recovery, pr), binding, recovery };
+    const view: LandingLineView = { project, ...held, ...landingViewOf(entries, held, recovery, pr, read.facts.stateWords), binding, recovery };
     return reply.code(200).send({ ok: true, ...view });
   });
 

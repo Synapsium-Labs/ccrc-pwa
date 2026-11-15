@@ -270,6 +270,17 @@ describe('GET /api/landing: the binding', () => {
     expect((await bindingOf()).binding).toMatchObject({ mode: 'ready', entryId: 1, pr: 7, pinnedSha: CONTROL_HEAD_SHA, fixesMain: false });
   });
 
+  it('order.head reads the stored word: a dependent head behind a damaged terminal target is the head, and behind a damaged pinned one is not', async () => {
+    const raw = (id: number, pr: number, word: string) => db.prepare(
+      "INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, state, setBy, pinnedAt, afterIds) VALUES (?, 'project-a', ?, ?, ?, ?, 'operator', 1, 'not-json')")
+      .run(id, pr, 'f'.repeat(40), 'f'.repeat(40), word);
+    raw(5, 50, 'landed');
+    seedEntry(db, { ...H, afterIds: [5] });
+    expect((await bindingOf()).order).toMatchObject({ paused: false, head: { id: 1, pr: 7 } });
+    db.prepare("UPDATE landing_entries SET state = 'pinned' WHERE id = 5").run();
+    expect((await bindingOf()).order).toMatchObject({ paused: false, head: null });
+  });
+
   it('?pr= still returns that PR\'s entry, while readiness and order are computed over the whole project', async () => {
     seedEntry(db, H); seedEntry(db, NEXT);
     const body = await bindingOf('?project=project-a&pr=12');

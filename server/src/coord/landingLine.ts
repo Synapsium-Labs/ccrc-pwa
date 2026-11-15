@@ -3,7 +3,7 @@
 //
 // - `landingOrder` decides the landing line's order and its head from a project's entries and the project's two flags
 //   (D-7621). The L4 read route reads the project row (`CoordStore.readLanding`) and hands the values in; this file
-//   never sees a project name. `afterIds` name ENTRY IDS (`LandingEntry.id`), never PR numbers (D-7613). An after edge
+//   never sees a project name. An optional `stateWords` input (R4) lets a damaged terminal target stop being outstanding. `afterIds` name ENTRY IDS (`LandingEntry.id`), never PR numbers (D-7613). An after edge
 //   outranks the `fixesMain` jump (D-7622): a fix-main entry that waits on another entry is not taken before it, so the
 //   jump only reorders entries nothing holds back. A `fixesMain` entry is held by `main-red` too (D-7623): inert in 5e,
 //   since `mainRedHold` has no writer until 5i, and a question for 5i. AMENDMENT A (D-8625, wave 5i) settles that
@@ -30,11 +30,23 @@ const byKey = (a: LandingEntry, b: LandingEntry): number =>
 
 /** `recovery` (wave 5f) holds the line while any authority subject is unresolved: no head, but `order` and both flags
  *  are untouched, and a real pause keeps its `by`. Omitted recovery is today's behaviour exactly. */
-export function landingOrder(entries: readonly LandingEntry[], flags: LandingLineFlags, recovery?: LandingRecovery): LandingOrder {
+export function landingOrder(entries: readonly LandingEntry[], flags: LandingLineFlags, recovery?: LandingRecovery,
+  stateWords?: LandingMutationFacts['stateWords']): LandingOrder {
   const line = entries.filter((x) => x.state === 'pinned').sort(byKey);
   // An edge holds its entry behind a target that is still outstanding. An `unknown` target is outstanding because this
-  // build cannot read whether it landed, so an edge to it fails closed.
-  const outstanding = new Set(entries.filter((x) => x.state === 'pinned' || x.state === 'ejected' || x.state === 'unknown').map((x) => x.id));
+  // build cannot read whether it landed, so an edge to it fails closed. Fix round 2 (R4, departure `order-reads-stored-words`):
+  // with `stateWords` given, a target whose display state is `unknown` is NOT outstanding when it is exactly identified and
+  // measurably terminal: its id a safe positive integer, exactly one entry and exactly one stored-word record carrying it,
+  // and that record's word terminal in `LANDING_ENTRY_TERMINAL`. Diagnostic damage then does not block a healthy dependent.
+  // A missing or duplicate record, `'unrecognised'`, a stored `unknown`, `pinned` and `ejected` stay outstanding. Omitted
+  // `stateWords` is the display-only rule exactly.
+  const settled = (x: LandingEntry): boolean => {
+    if (stateWords === undefined || x.state !== 'unknown' || !Number.isSafeInteger(x.id) || x.id <= 0) return false;
+    if (entries.filter((y) => y.id === x.id).length !== 1) return false;
+    const records = stateWords.filter((w) => w.id === x.id);
+    return records.length === 1 && records[0]!.value !== 'unrecognised' && LANDING_ENTRY_TERMINAL[records[0]!.value] === true;
+  };
+  const outstanding = new Set(entries.filter((x) => (x.state === 'pinned' || x.state === 'ejected' || x.state === 'unknown') && !settled(x)).map((x) => x.id));
   const taken = new Set<number>();
   const order: LandingEntry[] = [];
   const rest = new Set(line);
@@ -61,9 +73,10 @@ export function landingOrder(entries: readonly LandingEntry[], flags: LandingLin
 
 /** The landing read's view of one project's entries: `order` over every entry (as before), `entries` the ones not
  *  terminal when `pr` is null, else that PR's entry in any state, or none. `entriesScope` says which. */
-export function landingViewOf(entries: readonly LandingEntry[], flags: LandingLineFlags, recovery: LandingRecovery, pr: number | null):
+export function landingViewOf(entries: readonly LandingEntry[], flags: LandingLineFlags, recovery: LandingRecovery, pr: number | null,
+  stateWords?: LandingMutationFacts['stateWords']):
   { entries: LandingEntry[]; order: LandingOrder; entriesScope: 'open' | 'pr' } {
-  const order = landingOrder(entries, flags, recovery);
+  const order = landingOrder(entries, flags, recovery, stateWords);
   return pr === null
     ? { entries: entries.filter((e) => !LANDING_ENTRY_TERMINAL[e.state]), order, entriesScope: 'open' }
     : { entries: entries.filter((e) => e.pr === pr), order, entriesScope: 'pr' };
@@ -123,7 +136,7 @@ export function mainRedNext(previous: boolean, control: LandingControlRead, nowM
  *  `entryId` of a held answer names the flag-free walk's selected head. Under `paused` and `recovery` that can be the row
  *  whose authority is unresolved: it is not a head `landingOrder` reports (it reports none then). */
 export function landingBindingOf(facts: LandingMutationFacts, control: LandingControlRead | undefined, nowMs: number): LandingBinding {
-  const selected = landingOrder(facts.entries, CLEAR);
+  const selected = landingOrder(facts.entries, CLEAR, undefined, facts.stateWords);
   const head = selected.paused ? null : selected.head;
   const entryId = head?.id ?? null;
   const held = (reason: LandingBindingReason): LandingBinding => ({ mode: 'held', reason, entryId });

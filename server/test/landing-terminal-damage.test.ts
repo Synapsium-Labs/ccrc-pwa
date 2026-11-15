@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import type { CoordStore } from '../src/coord/store.js';
-import { landingBindingOf } from '../src/coord/landingLine.js';
+import { landingBindingOf, landingOrder } from '../src/coord/landingLine.js';
 import { CONTROL_BASE_SHA, CONTROL_HEAD_SHA, CONTROL_NOW, controlRead, landingFactsOf, landingStoreOver } from './landingFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -136,5 +136,95 @@ describe('controls: what must still hold projection-unreadable (R1)', () => {
     const facts = landingFactsOf(coord, P);
     const held = { ...facts, recovery: { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [facts.entries[1]!.id] } } };
     expect(landingBindingOf(held, controlRead(), CONTROL_NOW)).toMatchObject({ mode: 'held', reason: 'recovery' });
+  });
+});
+
+// Fix round 2 (R4): the dependent edge. A healthy pinned head H whose `afterIds` names a damaged terminal target T is not
+// held behind T, because T is exactly identified and measurably stored terminal (`landingOrder`'s `stateWords` input).
+describe('a dependent head behind a damaged terminal target (R4)', () => {
+  const R4_DAMAGE: [string, Record<string, unknown>][] = [
+    ['afterIds not json', { afterIds: 'not-json' }],
+    ['fixesMain 7', { fixesMain: 7 }],
+    ['ejectionKind bogus', { ejectionKind: 'bogus-kind' }],
+    ['pinnedAt text', { pinnedAt: 'later' }],
+    ['ejections negative', { ejections: -1 }],
+  ];
+  const CLEAR_FLAGS = { operatorPaused: false, mainRedHold: false };
+  /** Head H (PR 7), created through the authority writer (the cue's recipient is its creation claim), then ordered behind PR 5
+   *  while PR 5 still reads; `damageT` afterwards puts the retained damage on PR 5. */
+  const dependentHead = (targetId: number): void => {
+    cleanHead();
+    expect(coord.writeLandingAuthority({ kind: 'order', project: P, pr: 7, afterIds: [targetId], setBy: 'creator-a' }, 1001)).toMatchObject({ ok: true });
+  };
+  const damageT = (damage: Record<string, unknown>): void => {
+    coord.db.exec('PRAGMA foreign_keys = OFF');
+    for (const [col, v] of Object.entries(damage)) coord.db.prepare(`UPDATE landing_entries SET ${col} = ? WHERE pr = 5`).run(v as never);
+    coord.db.exec('PRAGMA foreign_keys = ON');
+  };
+  const idOf = (pr: number): number => landingFactsOf(coord, P).entries.find((e) => e.pr === pr)!.id;
+  const orderHead = () => { const f = landingFactsOf(coord, P); const o = landingOrder(f.entries, CLEAR_FLAGS, undefined, f.stateWords); return o.paused ? 'paused' : o.head?.pr ?? null; };
+
+  for (const word of TERMINAL) for (const [label, damage] of R4_DAMAGE) {
+    it(`raw ${word}, ${label}: H is the ready head, its cue queues once and dedupes, T's bytes are unchanged`, () => {
+      rawRow(word, null);
+      dependentHead(idOf(5));
+      damageT(damage);
+      const before = rows('SELECT * FROM landing_entries WHERE pr = 5');
+      const facts = landingFactsOf(coord, P);
+      expect(facts.entries.find((e) => e.pr === 5)!.state).toBe('unknown');
+      expect(facts.entries.find((e) => e.pr === 7)!.afterIds).toEqual([idOf(5)]);
+      expect(binding()).toMatchObject({ ...READY, entryId: idOf(7) });
+      expect(apply()).toMatchObject({ kind: 'queued' });
+      const mails = cueMails();
+      expect(mails).toHaveLength(1);
+      expect(mails[0]).toMatchObject({ toId: 'creator-a', subject: expect.stringMatching(/^next-to-land:#7:/) });
+      expect(apply()).toEqual({ kind: 'duplicate', holdChanged: false });
+      expect(cueMails()).toHaveLength(1);
+      expect(rows('SELECT * FROM landing_entries WHERE pr = 5')).toEqual(before);
+    });
+  }
+
+  // Controls. A damaged non-terminal target also holds the binding on its own (projection-unreadable), so each control also
+  // asks the order decider directly, where the dependency is the only thing that can hold H.
+  for (const word of ['pinned', 'ejected', 'unknown', 'parked-v9']) it(`control: raw ${word} with damage keeps H blocked, zero cue`, () => {
+    rawRow(word, null);
+    dependentHead(idOf(5));
+    damageT({ afterIds: 'not-json' });
+    expect(orderHead()).toBeNull();
+    expect(binding()).toMatchObject({ mode: 'held' });
+    expect(apply()).not.toMatchObject({ kind: 'queued' });
+    expect(cueMails()).toHaveLength(0);
+  });
+  it('control: a quarantined stored unknown target keeps H blocked, zero cue', () => {
+    rawRow('unknown', null);
+    dependentHead(idOf(5));
+    damageT({ afterIds: 'not-json' });
+    coord.db.exec('PRAGMA ignore_check_constraints = ON');
+    coord.db.prepare("UPDATE landing_entries SET quarantineKind = 'stale-episode-head' WHERE pr = 5").run();
+    coord.db.exec('PRAGMA ignore_check_constraints = OFF');
+    expect(orderHead()).toBeNull();
+    expect(binding()).toMatchObject({ mode: 'held' });
+    expect(cueMails()).toHaveLength(0);
+  });
+  it('control: an edge to an id that is in no entry is exactly as before (a dangling edge was never outstanding): same answer with and without stateWords', () => {
+    rawRow('landed', null);
+    dependentHead(idOf(5));
+    damageT({ afterIds: 'not-json' });
+    coord.db.prepare('DELETE FROM landing_entries WHERE pr = 5').run();
+    const f = landingFactsOf(coord, P);
+    expect(landingOrder(f.entries, CLEAR_FLAGS, undefined, f.stateWords)).toEqual(landingOrder(f.entries, CLEAR_FLAGS));
+  });
+  it('control: an independent recovery hold still answers recovery beside a damaged terminal target', () => {
+    rawRow('closed', null);
+    dependentHead(idOf(5));
+    damageT({ fixesMain: 7 });
+    const facts = landingFactsOf(coord, P);
+    const held = { ...facts, recovery: { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [idOf(7)] } } };
+    expect(landingBindingOf(held, controlRead(), CONTROL_NOW)).toMatchObject({ mode: 'held', reason: 'recovery' });
+  });
+  it('duplicate ids: the entries table keys on id, so no store fixture can build two rows with one id (covered purely in landing-line-order)', () => {
+    rawRow('landed', null);
+    expect(() => coord.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, state, setBy, pinnedAt) VALUES (?, ?, 6, ?, ?, ?, ?, 1)')
+      .run(idOf(5), P, OLD, HC, 'landed', 'operator')).toThrow();
   });
 });

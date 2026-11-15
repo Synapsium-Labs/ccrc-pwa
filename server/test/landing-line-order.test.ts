@@ -291,3 +291,30 @@ describe('landingOrder: recovery holds the line without touching the flags (wave
     expect(HOLD.hold.subjectIds).toEqual([7, 9]);
   });
 });
+
+// Fix round 2 (R4): `stateWords` makes a damaged (display `unknown`) target settled only when exactly identified and stored terminal.
+describe('landingOrder stateWords (R4)', () => {
+  type W = { id: number; value: 'pinned' | 'ejected' | 'unknown' | 'landed' | 'closed' | 'withdrawn' | 'unrecognised' };
+  const dep = e(1, { afterIds: [102] });
+  const target = (state: LandingEntry['state'] = 'unknown') => e(2, { state });
+  const headWith = (entries: LandingEntry[], words?: W[]) => head(landingOrder(entries, OPEN, undefined, words));
+  it('omitted input is the display-only rule: an unknown target holds its dependent', () => {
+    expect(headWith([dep, target()])).toBeNull();
+    expect(landingOrder([dep, target()], OPEN)).toEqual(landingOrder([dep, target()], OPEN, undefined, undefined));
+  });
+  for (const w of ['landed', 'closed', 'withdrawn'] as const) it(`a stored ${w} behind display unknown settles the edge`, () => {
+    expect(headWith([dep, target()], [{ id: 101, value: 'pinned' }, { id: 102, value: w }])).toBe(1);
+  });
+  for (const w of ['pinned', 'ejected', 'unknown', 'unrecognised'] as const) it(`a stored ${w} behind display unknown stays outstanding`, () => {
+    expect(headWith([dep, target()], [{ id: 102, value: w }])).toBeNull();
+  });
+  it('a missing record, a duplicate record and a duplicate entry id stay outstanding', () => {
+    expect(headWith([dep, target()], [])).toBeNull();
+    expect(headWith([dep, target()], [{ id: 102, value: 'landed' }, { id: 102, value: 'landed' }])).toBeNull();
+    expect(headWith([dep, target(), e(3, { id: 102, state: 'unknown' })], [{ id: 102, value: 'landed' }])).toBeNull();
+  });
+  it('a non-positive or unsafe id is never settled', () => {
+    const bad = e(2, { id: 0, state: 'unknown' });
+    expect(headWith([e(1, { afterIds: [0] }), bad], [{ id: 0, value: 'landed' }])).toBeNull();
+  });
+});
