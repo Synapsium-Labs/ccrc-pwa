@@ -88,8 +88,34 @@ describe('a raw terminal row with display-level damage is not an open blocker (R
   });
 });
 
+describe('a raw terminal row that also carries a quarantine marker (R1 fix round)', () => {
+  /** The schema's CHECK ties the marker to a stored `unknown`; the check is lifted to build the retained-damage shape. */
+  const mark = (): void => {
+    coord.db.exec('PRAGMA ignore_check_constraints = ON');
+    coord.db.prepare("UPDATE landing_entries SET quarantineKind = 'stale-episode-head' WHERE pr = 5").run();
+    coord.db.exec('PRAGMA ignore_check_constraints = OFF');
+  };
+  // The marker alone does not damage the DISPLAY (the word still reads), only the projection: the row is terminal either way.
+  // With a display-level damage beside it the display reads `unknown`, which is the shape the openness fix is measured on.
+  for (const word of TERMINAL) for (const [label, damage, display] of [['marker alone', null, word], ['marker and afterIds not json', { afterIds: 'not-json' }, 'unknown']] as const) {
+    it(`raw ${word}, ${label}: displays ${display}, the stored word is ${word}, the projection is unreadable, the binding is ready`, () => {
+      rawRow(word, damage);
+      mark();
+      cleanHead();
+      const before = rows('SELECT * FROM landing_entries WHERE pr = 5');
+      const facts = landingFactsOf(coord, P);
+      const row = facts.entries.find((e) => e.pr === 5)!;
+      expect(row.state).toBe(display);
+      expect(facts.stateWords.find((w) => w.id === row.id)?.value).toBe(word);
+      expect(facts.projections.find((p) => p.id === row.id)?.value).toEqual({ kind: 'unreadable' });
+      expect(binding()).toMatchObject({ ...READY, entryId: facts.entries.find((e) => e.pr === 7)!.id });
+      expect(rows('SELECT * FROM landing_entries WHERE pr = 5')).toEqual(before);
+    });
+  }
+});
+
 describe('controls: what must still hold projection-unreadable (R1)', () => {
-  for (const word of ['pinned', 'unknown', 'parked-v9']) for (const [label, damage] of DAMAGE.slice(0, 3)) {
+  for (const word of ['pinned', 'ejected', 'unknown', 'parked-v9']) for (const [label, damage] of DAMAGE.slice(0, 3)) {
     it(`raw ${word}, ${label}: holds projection-unreadable`, () => {
       rawRow(word, damage);
       cleanHead();

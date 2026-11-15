@@ -452,6 +452,11 @@ describe('landingBindingOf: precedence and the evidence it binds', () => {
         stateWords: words([107, 'pinned'], [105, word]) });
       expect(landingBindingOf(damaged, controlRead(), now), word).toMatchObject({ mode: 'held', reason: 'projection-unreadable' });
     }
+    // A terminal word that also carries a quarantine marker (display unknown, projection readable with the marker) is no blocker.
+    const markedTerminal = factsOf([entry(7), entry(5, { state: 'unknown' })], {
+      projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'readable', quarantine: 'stale-episode-head' } }],
+      stateWords: words([107, 'pinned'], [105, 'landed']) });
+    expect(landingBindingOf(markedTerminal, controlRead(), now).mode).toBe('ready');
     const noRecord = factsOf([entry(7), entry(5, { state: 'unknown' })], {
       projections: [{ id: 107, value: { kind: 'readable', quarantine: null } }, { id: 105, value: { kind: 'unreadable' } }],
       stateWords: words([107, 'pinned']) });

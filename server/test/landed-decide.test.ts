@@ -127,7 +127,7 @@ describe('landedCandidatesOf', () => {
     terminalRepairs?: LandingMutationFacts['terminalRepairs'] }): LandingMutationFacts => ({
     project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries: o.entries, projections: o.projections,
     stateWords: o.entries.map((e) => ({ id: e.id, value: e.state })),
-        dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
+    dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
     recovery: o.recovery, nextId: Math.max(0, ...o.entries.map((e) => e.id)) + 1, foreignIds: [],
     coordinators: o.entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })),
     terminalRepairs: o.terminalRepairs ?? [], creations: [],
