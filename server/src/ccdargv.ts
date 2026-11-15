@@ -1013,6 +1013,12 @@ export const CCD_ARGV = {
    *  (`docsBranchFlags`). */
   docsFetch: (project: string, branch: string | null) =>
                argv(['docs-fetch', '--project', project, ...docsBranchFlags(branch)]),
+
+  /** One doc's history (rich-docs spec 2026-10-12 G4, W5b): the commits from `commit` back that changed
+   *  `section/path`, newest first, at most 100. 8 tokens after the verb, under its own grant
+   *  `['docs-log','--project']`, behind `DOCS_LOG_CAP`. The path is a value read by fixed index, never a pathspec. */
+  docsLog: (project: string, commit: string, section: DocSectionSlug, path: string) =>
+             argv(['docs-log', '--project', project, '--commit', commit, '--section', section, '--path', path]),
 } as const;
 
 /**
@@ -1294,6 +1300,11 @@ export const DOCS_CAP = 'docs-v1';
  *  failure word for a request a new server should never have sent. */
 export const DOCS_SECTIONS_CAP = 'docs-sections-v2';
 
+/** The `ccd caps` token that says this box's ccd has `docs-log` at exactly the argv `docsLog` builds (rich-docs spec
+ *  G4, W5b). Spelled ONCE in `server/src`; ccd's `echo docs-log-v1` and `ccdCapTokens.ts` are the other two spellings.
+ *  Read through `ccdCan`'s `docsLog` row (refuses on no evidence), inside the docs gate's tri-state. */
+export const DOCS_LOG_CAP = 'docs-log-v1';
+
 /** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
  *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
  *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
@@ -1542,6 +1553,7 @@ export const CCD_CAN = {
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
   docsShowDraft: capRow(DOCS_CAP),
   docsFetch: capRow(DOCS_CAP),
+  docsLog: capRow(DOCS_LOG_CAP),
 } as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
 
 /** A `CCD_ARGV` row name: what `ccdCan` is asked about. */

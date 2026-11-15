@@ -109,7 +109,7 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * ask's place is pinned in `collect-lane-scans.test.ts`.
  */
 const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
-  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
+  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log',
   // D-6784: sent only behind the `pr-landing-v1` capability word (CCD_CAN's `capRow`); PL-4's lane is its one call site.
   'pr-landing',
 ]);

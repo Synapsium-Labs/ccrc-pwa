@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, DOCS_SECTIONS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -179,6 +179,17 @@ describe('capSupported', () => {
     expect(capSupported(undefined, DOCS_SECTIONS_CAP)).toBe(false);
     expect(capSupported(state([DOCS_CAP]), DOCS_SECTIONS_CAP)).toBe(false);
     expect(capSupported(state([DOCS_SECTIONS_CAP]), DOCS_SECTIONS_CAP)).toBe(true);
+  });
+
+  it('spells the docs-log token exactly once in server/src, and refuses on no evidence (docs W5b-1)', () => {
+    // The other two spellings: ccd's own `echo docs-log-v1` and `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS,
+    // whose `toContain(DOCS_LOG_CAP)` holds all three equal.
+    expect(DOCS_LOG_CAP).toBe('docs-log-v1');
+    expect(literalSpellings(DOCS_LOG_CAP)).toBe(1);
+    expect(capSupported(state(null), DOCS_LOG_CAP)).toBe(false);
+    expect(capSupported(undefined, DOCS_LOG_CAP)).toBe(false);
+    expect(capSupported(state([DOCS_CAP]), DOCS_LOG_CAP)).toBe(false);
+    expect(capSupported(state([DOCS_LOG_CAP]), DOCS_LOG_CAP)).toBe(true);
   });
 });
 
