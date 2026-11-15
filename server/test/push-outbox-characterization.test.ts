@@ -1089,7 +1089,7 @@ describe.each(SITES)('#$n $name', (site) => {
   it('with no push service nothing throws, and the notify log and the source rows are what a run with one leaves', async () => {
     const withService = await recorded(site, pushSeam());
     expect(await recorded(site, null)).toStrictEqual(withService);
-  });
+  }, 60_000); // two runs of the site, so twice a case's time
 });
 
 // ── the title suffix: " · <project>", added in FleetWatcher.pushOne when more than one project is active ───────────────
