@@ -48055,7 +48055,9 @@ def log_entries(rows):
     root commit), the committer date, and the author and subject decoded,
     redacted by ONE redactor call over their lines (neither can hold a
     newline; the line count is checked), then cut to their caps in code
-    points, so a cut never splits a secret the redactor would have matched."""
+    points, so a cut never splits a secret the redactor would have matched. A
+    cut can end inside a mask (`?token=*`); the server's check re-applies
+    redact-then-cut, so such a text passes."""
     texts = []
     for row in rows:
         texts.append(row[3].decode('utf-8', 'replace'))

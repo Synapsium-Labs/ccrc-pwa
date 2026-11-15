@@ -1967,6 +1967,26 @@ describe('W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7)', () => {
     expect(docsAnswerShape('docs-log', answer)).toStrictEqual(T2_SCHEMA);
   });
 
+  it('a token mask that the cap cut inside still passes: the check is redact-then-cut, not a fixed point', () => {
+    // ccd redacts, then cuts to the cap in code points, so a `?token=***` mask can end at the cap as `?token=*`.
+    const cutAt = (text: string, max: number): string => [...redactDocsText(text)].slice(0, max).join('');
+    const subject = cutAt(`${'s'.repeat(192)}?token=abcdef`, DOCS_LOG_SUBJECT_MAX_CHARS);
+    const author = cutAt(`${'a'.repeat(92)}?token=xyz`, DOCS_LOG_AUTHOR_MAX_CHARS);
+    // The cut shape: it ends inside the mask, at exactly the cap.
+    expect(subject.endsWith('?token=*')).toBe(true);
+    expect([...subject]).toHaveLength(DOCS_LOG_SUBJECT_MAX_CHARS);
+    expect(author.endsWith('?token=*')).toBe(true);
+    expect([...author]).toHaveLength(DOCS_LOG_AUTHOR_MAX_CHARS);
+    // POSITIVE CONTROL: neither cut is a fixed point of the redactor (it would lengthen the mask), so a check that only
+    // re-ran the redactor would refuse both, which is the defect this case guards.
+    expect(redactDocsText(subject)).not.toBe(subject);
+    expect(redactDocsText(author)).not.toBe(author);
+    expect(docsAnswerShape('docs-log', log({ entries: [entry({ subject, author })] }))).toStrictEqual({ ok: true });
+    // The same texts as ccd would NOT have produced them are still refused: the unredacted token inside the cap.
+    expect(docsAnswerShape('docs-log', log({ entries: [entry({ subject: `${'s'.repeat(100)}?token=abcdef` })] })))
+      .toStrictEqual(T2_SCHEMA);
+  });
+
   it('the caps count code points, not UTF-16 units: a subject of exactly the cap in astral characters passes', () => {
     const subject = '\u{1F600}'.repeat(DOCS_LOG_SUBJECT_MAX_CHARS);
     expect(docsAnswerShape('docs-log', log({ entries: [entry({ subject })] }))).toStrictEqual({ ok: true });

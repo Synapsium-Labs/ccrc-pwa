@@ -904,14 +904,18 @@ function treeShapeOk(t: AnswerRecord): boolean {
   return Array.isArray(entries) && entries.every(entryOk);
 }
 
-/** Text of at most `max` code points that the docs redactor leaves as it is (refinement (f)): ccd redacted it, and this
- *  proves it without rewriting the answer. */
+/** Text of at most `max` code points that is what ccd's own transform leaves (refinement (f)): redact, then cut to the
+ *  cap in code points. The check re-applies exactly that transform and wants the text back, so a text ccd redacted and
+ *  then cut passes even when the cut ends inside a mask (`?token=*`, which the redactor alone would lengthen), while a
+ *  secret left unredacted inside the cap differs from its mask and is refused. It proves this without rewriting the
+ *  answer. */
 function redactedText(v: unknown, max: number): boolean {
-  return isText(v) && [...v].length <= max && redactDocsText(v) === v;
+  return isText(v) && [...v].length <= max && [...redactDocsText(v)].slice(0, max).join('') === v;
 }
 
 /** One history entry: a full sha, a full sha or `null` parent, a text date, and an author and a subject inside their caps
- *  and already redacted. */
+ *  that are what ccd's redact-then-cut leaves. `date` and any extra key are not redaction-checked: the same rule as the
+ *  tree's `entryOk`, since ccd is the one producer. */
 function logEntryOk(e: unknown): boolean {
   if (!isRecord(e)) return false;
   const sha = own(e, 'sha');
@@ -921,7 +925,8 @@ function logEntryOk(e: unknown): boolean {
     && redactedText(own(e, 'subject'), DOCS_LOG_SUBJECT_MAX_CHARS);
 }
 
-/** The log fields the history route sends: at most `DOCS_LOG_MAX_ENTRIES` entries, each `logEntryOk`, and a boolean
+/** The log fields the history route sends: at most `DOCS_LOG_MAX_ENTRIES` entries, each `logEntryOk` (so each author and
+ *  subject is what ccd's redact-then-cut leaves; `date` and extra keys are not redaction-checked), and a boolean
  *  `truncated`. */
 function logShapeOk(l: AnswerRecord): boolean {
   const entries = own(l, 'entries');

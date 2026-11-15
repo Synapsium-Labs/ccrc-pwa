@@ -12,6 +12,7 @@ import {
   commitDocs, parseOneLine, plantGitRecorder, plantPython3, runCcdDocs, type DocsRun, type RecordedGitCall,
 } from './ccdDocsHelpers.js';
 import { unitJson } from './docsHelperPy.js';
+import { docsAnswerShape } from '../src/docs/policy.js';
 
 const SPECS = 'docs/superpowers/specs';
 const VISION = 'docs/vision';
@@ -241,6 +242,24 @@ describe('docs-log: the listing (M9.4 through M9.7)', () => {
     }
     expect(e.subject.startsWith('s'.repeat(185))).toBe(true);
     expect(e.author.startsWith('a'.repeat(85))).toBe(true);
+  });
+
+  it("a token mask cut at the cap still passes the server's shape check", () => {
+    const dir = freshRepo();
+    // The mask `?token=***` starts at code point 192 of the subject and 92 of the author, so each cap (200 and 100)
+    // ends it as `?token=*`: ccd redacts first and cuts second, and the server's check must accept what that makes.
+    const subject = `${'s'.repeat(192)}?token=abcdef`;
+    const author = `${'a'.repeat(92)}?token=xyz`;
+    const tip = commitAs(dir, `${SPECS}/a.md`, `${author} <who@example.invalid>`, subject);
+    const o = answer(tip, 'specs', 'a.md');
+    const e = entriesOf(o)[0]!;
+    expect(Array.from(e.subject)).toHaveLength(200);
+    expect(Array.from(e.author)).toHaveLength(100);
+    expect(e.subject.endsWith('?token=*')).toBe(true);
+    expect(e.author.endsWith('?token=*')).toBe(true);
+    expect(e.subject).not.toContain('abcdef');
+    expect(e.author).not.toContain('xyz');
+    expect(docsAnswerShape('docs-log', o)).toStrictEqual({ ok: true });
   });
 
   it('a doc whose last change is older than the newest 100 commits in its section still lists its history', () => {
