@@ -127,6 +127,9 @@ export function gradeAnswersCases(m: ProbeDoorModule): Record<string, SuiteCase>
       expect(m.gradeAnswers([qq], new Map([['p1', `rotate ${SECRET_MASK} then deploy`]]), SEAL)[0]!.grade).toBe('pass');
       // Graded as stored, a wrong answer is still a choice-or-fail: a decoy fails, and the answer is recorded masked.
       expect(m.gradeAnswers([qq], new Map([['p1', 'run']]), SEAL)[0]).toEqual({ qid: 'p1', answer: 'run', grade: 'fail' });
+      // Graded as stored, the stored choices still bound it: an answer that is no stored choice fails, even the expected text.
+      const odd = sq('p2', ['rotate SECRET_A', 'run', 'stop'], 'rotate SECRET_B');
+      expect(m.gradeAnswers([odd], new Map([['p2', 'rotate SECRET_B']]), SEAL)[0]!.grade).toBe('fail');
     },
     'an empty answer is an answer: it is given, and it fails': () => {
       expect(m.gradeAnswers([qs[0]!], new Map([['p1', '']]), SAME)).toEqual([{ qid: 'p1', answer: '', grade: 'fail' }]);
@@ -822,7 +825,7 @@ const GRADE_ANSWERS_SET: MutantSet<ProbeDoorModule> = {
     { id: 'A1 a missing answer passes', old: "a === undefined ? 'fail'", new: "a === undefined ? 'pass'" },
     { id: 'A2 every given answer passes', old: "'unmeasured' : gradeProbe(q, mask(a))", new: "'unmeasured' : 'pass'" },
     { id: 'A3 a missing answer as an empty string', old: 'answer: a === undefined ? null : mask(a)', new: "answer: a === undefined ? '' : mask(a)" },
-    { id: 'A4 an empty answer taken for missing', old: 'a === undefined ?', new: "a === undefined || a === '' ?" },
+    { id: 'A4 an empty answer taken for missing', old: "a === undefined ? 'fail'", new: "a === undefined || a === '' ? 'fail'" },
     { id: 'A5 the answer read by the wrong id', old: 'answers.get(row.qid)', new: 'answers.get(row.cls)' },
     { id: 'A6 a question that cannot be graded is graded', old: "!gradableAsServed(q) ? 'unmeasured' : ", new: '' },
     { id: 'A7 an answer masked away is graded', old: "maskedAway(q, mask(a)) ? 'unmeasured' : ", new: '' },

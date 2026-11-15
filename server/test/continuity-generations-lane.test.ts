@@ -16,7 +16,7 @@ import {
   GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, softTimesOf,
   type CompactionsMemo, type EmptyTries, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
-import type { CompactionLine, CompactionsRead } from '../src/continuity/compactions.js';
+import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
 import type { MeasuredStat } from '../src/io.js';
 import type { ChildMark } from '../../shared/api.js';
@@ -1125,7 +1125,7 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     }
   };
   /** The lines of one compaction: its pre line at `pre`, and its post line at `post` when given. */
-  const compaction = (pre: number, post?: number): CompactionsRead => ({ kind: 'lines', skipped: 0, eventsAbsent: false, lines: [
+  const compaction = (pre: number, post?: number): Extract<CompactionsRead, { kind: 'lines' }> => ({ kind: 'lines', skipped: 0, eventsAbsent: false, lines: [
     { at: pre, trigger: 'auto', phase: 'pre', transcript: null, scope: 'main' },
     ...(post === undefined ? [] : [{ at: post, trigger: 'auto' as const, phase: 'post' as const, transcript: null, scope: 'main' as const }]),
   ] });
@@ -1172,7 +1172,7 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     const later = f.t.ports.clock.wall();
     f.t.advance(1_000);
     const both: CompactionsRead = { kind: 'lines', skipped: 0, eventsAbsent: false,
-      lines: [...(compaction(pre, post) as { lines: CompactionLine[] }).lines, { at: later, trigger: 'auto', phase: 'pre', transcript: null, scope: 'main' }] };
+      lines: [...compaction(pre, post).lines, { at: later, trigger: 'auto', phase: 'pre', transcript: null, scope: 'main' }] };
     expect(f.pass(at(f, usage(10_000, 1_000_000), turn('working'), both), 'p2')).toMatchObject({ roundsOpened: 1 });
   });
 
