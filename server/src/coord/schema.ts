@@ -3128,6 +3128,31 @@ export const MIGRATIONS: readonly string[] = [
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
   `,
   // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
+  // The push outbox (Overlord spec §6.7, §6.1 C31, §4.3 C67; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-push-outbox.md`, Task 3): one row per push, moved only through `pushOutboxStore.ts` by `OUTBOX_TRANSITIONS`;
+  // `push_outbox_one_per_source` holds a bound row to one per ask or item (I2), and `claimSeq` ties a verdict to its
+  // claim. `reachedOperatorAt` has ONE writer, `stampReach`. No backfill. The anchor (#2803) took 74, so this is 75. NEW
+  // TABLES AND TWO NULLABLE COLUMNS: an older build opening a file at `user_version 75` takes rule 3, never names them, and
+  // boots. RE-MEASURE the slot before the PR and before merge (it must print 74 before this entry is counted):
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE push_outbox (
+    id INTEGER PRIMARY KEY, pushId TEXT NOT NULL UNIQUE,
+    sourceKind TEXT, sourceId INTEGER,  -- 'ask' | 'item', or both NULL for an unbound push
+    payload TEXT, tag TEXT,             -- the masked PushPayload as JSON, NULL once terminal; tag NULL only when written with no payload
+    state TEXT NOT NULL, createdAt INTEGER NOT NULL, armedAt INTEGER NOT NULL,
+    claimSeq INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+    claimedAt INTEGER, nextAttemptAt INTEGER, pushedAt INTEGER,
+    verdict TEXT, silentWhy TEXT, settledAt INTEGER,
+    CHECK ((sourceKind IS NULL) = (sourceId IS NULL))
+  );
+  CREATE UNIQUE INDEX push_outbox_one_per_source ON push_outbox(sourceKind, sourceId) WHERE sourceKind IS NOT NULL;
+  CREATE INDEX push_outbox_due ON push_outbox(state, nextAttemptAt);
+  CREATE TABLE push_outbox_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+  ALTER TABLE asks ADD COLUMN reachedOperatorAt INTEGER;
+  ALTER TABLE operator_items ADD COLUMN reachedOperatorAt INTEGER;
+  `,
+  // ── 76: user_version 75 -> 76 ─────────────────────────────────────────────
   // The renewal act (Overlord spec §3.3.2 C37 and §3.3.11 H12; W1a, plan `w1a-renewal-act.md` Task 3): two tables of the
   // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
   // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
@@ -3137,10 +3162,11 @@ export const MIGRATIONS: readonly string[] = [
   // never repeats a try) and given its answer word after. `continuity_soft_renewals` holds one row per soft due the lane fed,
   // the soft budget's count across generations.
   //
-  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 74` takes rule 3 (it warns,
-  // reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
-  // The anchor piece took 74, so this entry is 75, the next free slot. RE-MEASURE the slot before the PR and before merge
-  // (it must print 74 before this entry is counted):
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 75` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names any of them, and boots. Every earlier entry is frozen.
+  // The push outbox (#2838) took 75, so this entry is 76, the next free slot, pinned to the entry before it (the
+  // coordinator's word of 20510; it moves again at landing if another piece takes 76 first). RE-MEASURE the slot before
+  // the PR and before merge (it must print 75 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

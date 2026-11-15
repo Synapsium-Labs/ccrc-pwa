@@ -20,6 +20,7 @@ import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
 import { CHECKPOINT_MUTANT_SETS } from './checkpointSets.js';
 import { RENEWAL_ACT_MUTANT_SETS } from './renewalActSets.js';
+import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { simulate } from './run.js';
@@ -161,6 +162,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ANCHOR_MUTANT_SETS,
   ...CHECKPOINT_MUTANT_SETS,
   ...RENEWAL_ACT_MUTANT_SETS,
+  ...PUSH_OUTBOX_MUTANT_SETS,
   ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
 };

@@ -3626,6 +3626,31 @@ note corrects the run's length to 340 characters (F3) and says which checked row
 **Acceptance.** `item-wrap.browser.test.ts` is green at the PR's tip and pwa's whole browser suite passes once before the
 wave-done. The test reds with any one of its three declarations removed: the card's column rule (the probe case), the How steps' wrap and the options' wrap, each measured in `c32.md`'s mutation table (review 1944 F2). **Rollback.** A plain revert.
 
+### Task C25: the Docs head's focus-ring cases check the first crumb, and two comments fit 120 columns (D-8647) — now
+
+Placed after C32's section, before the acceptance matrix. The two Docs head items carried from the reviews of C16, held
+until the Docs reader programme released `pwa/src/docs/docs.css` and `pwa/browser/docs-compact-head.browser.test.ts`. No
+product behaviour changes.
+
+**Why.** Review 1725 F4: the four focus-ring cases (the `…` unfold cases, two drafts in each skin) say they put focus on the
+first crumb, and their error text says "not the first crumb", but they asserted only that the focused element has the class
+`docs-crumb`, which every crumb has. With the first crumb out of the Tab order, Tab lands on a later crumb and all four stayed
+green. Review 1723 N5: two comment lines that C16's fix round 1 added to `docs.css` run to 121 characters.
+
+**What was done.** The ring cases now read the focused element's text and assert it equals `DOCS_HEAD_TEXT.index`, as the
+deeper cases' first Tab stop already does; the ring assertions are unchanged. The two comment blocks in `docs.css` are
+rewrapped from their long line on, so no line of either passes 120 characters, every word kept and no CSS rule changed; the
+file's other long lines are left alone. Red first, measured with a mutant that takes the first crumb out of the Tab order: the
+four ring cases are green on `main`'s test and red on the fix (`expected 'demo' to be 'Docs'`). The runs, the line lengths
+before and after and the brief's one misquoted line ending are in `c25.md`.
+
+- **D-8647** - `ring-cases-class-only`: Task C25, issued on 2026-11-15. The desk head's four focus-ring cases checked only
+  that Tab from back reached a crumb, not the first one, so a first crumb out of the Tab order passed them. They now check
+  its words. Departures are named by slug in `c25.md`.
+
+**Acceptance.** `docs-compact-head.browser.test.ts` passes in full at the PR's tip in both skins, and the four ring cases are
+red on the fix with the mutant in place. **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
