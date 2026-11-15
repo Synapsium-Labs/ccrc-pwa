@@ -2455,6 +2455,19 @@ describe('ccrc doctor: docs', () => {
     expect(r.stdout).not.toMatch(/^FAIL docs: /m);
   });
 
+  it('a ccd whose caps hold only a longer word starting with docs-log-v1 still WARNs naming docs-log-v1', () => {
+    const { n, k } = docsCounts(DOCS_INDEX_READY);
+    const home = healthy('ccrc-doctor-docs-caps-longer-word-');
+    // docs-log-v10 starts with the wanted word and is not it; docs-sections-v2 is listed, so only docs-log-v1 is named.
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-log-v10', 'docs-sections-v2']));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe(
+      `WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs; this ccd does not list docs-log-v1, `
+      + 'so Docs here has no per-doc history or no vision and promise sections');
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
   it('a ccd whose caps read fails WARNs naming both', () => {
     const home = healthy('ccrc-doctor-docs-caps-fail-');
     plantDocsCcd(home, `#!/bin/sh\ncase "$1" in\n  caps) exit 1 ;;\n  *) printf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}' ;;\nesac\n`);
