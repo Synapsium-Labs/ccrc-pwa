@@ -97,3 +97,11 @@ number: the programme mints them.
 
 - **deviation-refs-load-timeout** — on the first run, `server/test/deviation-refs.test.ts` "is looking at two real trees"
   timed out at 30.8 s while both heavy test slots were held. Run alone, it was green in 12 s.
+- **browser-suite-local** — the whole browser suite was run locally, three shards one at a time, with two workers
+  (`--maxWorkers=2`). The first try of shard 1 at the default worker count was killed by the test slice's 6 GB memory
+  cap. Results:
+  - shard 2: 33 files and 816 tests passed;
+  - shard 3: 32 files and 1249 tests passed;
+  - shard 1: 1500 of 1514 tests passed, with 12 skipped. The two failures came in a run with two OOM kills.
+    `reader-frame` M8.20 read `fallback` where it expected `ready`, and `refined-phone`'s panel case measured
+    "the control is 42 tall". Each file passed alone (24/24 and 53/53).
