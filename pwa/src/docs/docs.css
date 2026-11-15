@@ -187,9 +187,10 @@
      `Crumbs`' inline style always outranks it with the number it draws: the count stays written once, in `Crumbs`, and
      the token is still one a stylesheet defines (css-vars.test.ts). Without the inline style the floor is three's. */
   --docs-crumbs-n: initial;
-  /* The crumbs take the row's spare room first (a grow a hundred thousand times anything else's). Two other things grow,
-     each only in its own state: GitHub's refusal at the last stage, which gets what is left once the crumbs stand at
-     their whole words (review 1704 F2), and, under a coarse pointer, the actions holding GitHub's may-differ note. */
+  /* The crumbs take the row's spare room first (a grow a hundred thousand times anything else's). Two other things
+     grow, each only in its own state: GitHub's refusal at the last stage, which gets what is left once the crumbs stand
+     at their whole words (review 1704 F2), and, under a coarse pointer, the actions holding GitHub's may-differ
+     note. */
   flex: 100000 1 calc(var(--docs-crumbs-n, 3) * (var(--tap-min) + 1ch + 2 * var(--sp-1)) + 1ch - var(--sp-1));
   min-width: 0; max-width: max-content; overflow: hidden;
 }
@@ -218,11 +219,11 @@
    before the page's name (review 1722 F2: readable wins over compact, as Task B's fix rounds ruled). Before the last
    stage it is an ordinary item at its whole width: where the row cannot hold it whole with the name, the actions wrap,
    `HeadRow` finds that the row does not fit, and the next stage hides the words, then folds the crumbs. So wherever the
-   name is whole and the words or the unfolded middle crumbs show, the sentence is whole. At the last stage (`data-fold`,
-   the user not having unfolded the crumbs) `contain: inline-size` keeps its words out of the actions' own width, so
-   the row breaks its line on a floor of `12ch` and not on the whole sentence (review 1704 F2), and the actions grow
-   into what the crumbs leave. It shortens to an ellipsis, its whole words in its `title`, against the icons beside it;
-   on a touch screen, which shows no `title`, the Share sheet draws a refusal as text. */
+   name is whole and the words or the unfolded middle crumbs show, the sentence is whole. At the last stage
+   (`data-fold`, the user not having unfolded the crumbs) `contain: inline-size` keeps its words out of the actions' own
+   width, so the row breaks its line on a floor of `12ch` and not on the whole sentence (review 1704 F2), and the
+   actions grow into what the crumbs leave. It shortens to an ellipsis, its whole words in its `title`, against the
+   icons beside it; on a touch screen, which shows no `title`, the Share sheet draws a refusal as text. */
 .docs-full .docs-actions > .docs-action-off {
   flex: 0 1 auto; min-width: 0; text-align: end; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
