@@ -20,7 +20,7 @@ import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
-import type { DelegationDurability } from './delegation-checkpoint.js';
+import type { DelegationDurability } from './delegation-durability.js';
 import type { ParentIncarnation } from './gitref.js';
 import type { DelegationCircuitBreakerState } from './delegation-policy.js';
 import { formatDelegationInstant, type DelegationCensusRecord, type DelegationCheckpointV1, type DelegationLeaseRow } from './delegation-model.js';

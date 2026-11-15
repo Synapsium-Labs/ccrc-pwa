@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the fifteen separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These fifteen are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the sixteen separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These sixteen are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -411,6 +411,9 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // The push outbox (Overlord W1) brings the fifteenth: how long a terminal unbound outbox row is kept after it settles before
     // the purge, the retention docs/superpowers/plans/2026-11-14-overlord-w1/w1-push-outbox.md sets, ruled separate by the
     // coordinator (ask 435). It is unrelated to token rotation, and it does not import the token interval.
+    // The portfolio's closed-waves window (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-portfolio.md` Task 1,
+    // "waves closed in 7 and 28 days") is the sixteenth, ruled a separate quantity by the coordinator (ask 437): a reporting
+    // window unrelated to token rotation, and it does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
@@ -420,6 +423,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'server/src/coord/coordCalls.ts:CALL_SEEN_WINDOW_MS',
       'server/src/coord/delegation-lease-state.ts:DELEGATION_LEASE_EXPIRY_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
+      'server/src/coord/portfolio.ts:WEEK_MS',
       'server/src/coord/runCloseSwitch.ts:RUN_CLOSE_TALLY_MS',
       'server/src/coord/runStuck.ts:NEVER_STARTED_AFTER_MS',
       'server/src/coord/runStuckPass.ts:PROGRAMME_GONE_KEEP_MS',

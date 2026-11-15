@@ -24,6 +24,7 @@ import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
+import type { QuizLanePort } from './continuity/quizLane.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
@@ -194,6 +195,9 @@ export interface Deps {
   linearJournal?: LinearJournal;
   /** D-8181: the plan tables through their port (`planStorePort(coord.db)`), built once in `index.ts`; the plan routes' store. Absent (a test, a script): they answer `unavailable`. */
   plan?: PlanStorePort;
+  /** The weekly replay quiz lane's port (Overlord W1a, `continuity/quizStore.ts#quizLanePortOf`), built once in `index.ts`.
+   *  Absent (a test, a script): the lane does not run. */
+  quiz?: QuizLanePort;
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;

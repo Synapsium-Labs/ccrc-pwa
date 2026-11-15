@@ -71,6 +71,13 @@
   "server/src/continuity/renewalOrder.ts#overlordFirst": 1,
   "server/src/continuity/renewalDrain.ts#drainVerdict": 1,
   "server/src/continuity/compactOwner.ts#compactRefusal": 1,
+  "server/src/continuity/quiz.ts#quizBaseline": 1,
+  "server/src/continuity/quiz.ts#validQuizReport": 1,
+  "server/src/continuity/quiz.ts#quizLaneVerdict": 1,
+  "server/src/continuity/quiz.ts#quizWeek": 1,
+  "server/src/coord/portfolio.ts#portfolioOrder": 1,
+  "server/src/coord/portfolio.ts#itemWaitMs": 1,
+  "server/src/coord/portfolio.ts#portfolioFor": 1,
   "shared/overlordHistory.ts#readOverlordHistoryRequest": 1,
   "shared/overlordHistory.ts#readOverlordHistoryAnswer": 1,
   "ccd/history/lib.mjs#decideScope": 1,
@@ -87,5 +94,8 @@
   "shared/practice-triggers.ts#parseSignature": 1,
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
-  "shared/poolset.ts#parsePoolSet": 1
+  "shared/poolset.ts#parsePoolSet": 1,
+  "server/src/chainedJournal.ts#decodeChainedLine": 1,
+  "server/src/chainedJournal.ts#ChainVerifier": 1,
+  "server/src/chainedJournal.ts#chainedTailHealPlan": 1
 }

@@ -12,7 +12,7 @@ import type { FleetState } from '../fleetstate.js';
 import { LEASE_MARK_LOCK_CAP, ORPHAN_LEASE_CAP, capSupported, ccdCan } from '../ccdargv.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
-import type { DelegationDurability, DelegationLeaseActOutcome } from './delegation-checkpoint.js';
+import type { DelegationDurability, DelegationLeaseActOutcome } from './delegation-durability.js';
 import { formatDelegationInstant, type DelegationCheckpointV1 } from './delegation-model.js';
 import { DELEGATION_LEASE_EXPIRY_MS } from './delegation-lease-state.js';
 import { conflictingTreeKeys } from './delegation-conflicts.js';

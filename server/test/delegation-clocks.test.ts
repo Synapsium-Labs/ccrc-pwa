@@ -17,7 +17,7 @@ import { localIO } from '../src/io.js';
 import { FleetWatcher } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
-import type { DelegationDurability } from '../src/coord/delegation-checkpoint.js';
+import type { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_EVENTS_CAP } from '../src/coord/delegation-model.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { quietAtTestEnd } from './laneQuiet.js';
