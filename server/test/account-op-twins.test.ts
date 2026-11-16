@@ -118,6 +118,16 @@ describe.each(ARMS)('the account-op spawn, through %s (D-7057 characterization)'
     expect(environ).toContain(`HOME=${home}\n`);
   });
 
+  it('a `set` of the two serviceability facts reaches the verb as one argv word per flag (H16)', async () => {
+    const { home, rec } = fixtureHome('printf \'%s\\n\' "$@" > "$rec/argv"; printf \'{"ok":true}\'');
+    const fields: AccountOpFields = { fableBilling: 'credits', continuity: 'on' };
+    expect(await run(home, 'set', 'lane-a', fields, undefined, BIG)).toMatchObject({ kind: 'exited', code: 0 });
+    const argv = readFileSync(path.join(rec, 'argv'), 'utf8').split('\n');
+    expect(argv).toEqual(expect.arrayContaining(['account', 'set']));
+    expect(argv.join(' ')).toMatch(/--fable-billing=credits/);
+    expect(argv.join(' ')).toMatch(/--continuity=on/);
+  });
+
   it('stdout past the cap answers too-large, and the whole group is killed', async () => {
     const { home, rec } = fixtureHome([
       'export rec',

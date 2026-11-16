@@ -12,7 +12,7 @@ import type { ModelClass } from '../../../shared/models.js';
 
 export interface ServiceabilityCase {
   name: string;
-  cls: ModelClass | 'default';
+  cls: ModelClass | 'default' | '';
   /** The lane under test — `claude` is Anthropic, `gpt` is codex in DEFAULT_TEST_ROSTER. */
   lane: 'claude' | 'gpt';
   /** `~/.cc-limits/<lane>.json` bytes, as a function of now; absent = no file. */
@@ -22,7 +22,16 @@ export interface ServiceabilityCase {
   sweep?: { ageS: number; estimate?: number | null };
   expect: 'skipped' | 'servable' | 'unservable' | 'unmeasured';
   /** The why-word both sides print/return on unservable and unmeasured. */
-  why?: 'ceiling' | 'backend' | 'no-figure' | 'stale';
+  why?: 'ceiling' | 'backend' | 'no-figure' | 'stale'
+    | 'credits' | 'billing-unset' | 'billing-unread' | 'no-continuity' | 'continuity-unread';
+  /** Whose question (plan question 5). Absent = `other`, so every row written before the Overlord's arms is unedited.
+   *  `set-side` writes the asking session's `poolset` entry; `other` writes none. */
+  asking?: 'set-side' | 'other';
+  /** For `set-side`: how the session's set reads. Absent = a valid set; the two others are the undecidable words. */
+  side?: 'set' | 'set-malformed' | 'set-unreadable' | 'set-unreadable-link';
+  /** The lane's two roster facts, spelled out. `continuity` is the record's `recordedAt` (absent = no record);
+   *  `projection: 'old'` is an `accounts.sh` that predates both facts, `'old-billing'` one that predates the billing fact alone (the bash arms read `unread`). */
+  facts?: { fableBilling?: 'included' | 'credits'; continuity?: number; projection?: 'old' | 'old-billing' };
   /** The figure both sides agree on for servable/ceiling rows. */
   figurePct?: number;
 }
@@ -34,6 +43,9 @@ const fresh = (five: number, seven: number) => (now: number): string =>
   JSON.stringify({ five, seven, ts: now, fiveResetAt: now + 10_000, sevenResetAt: now + 400_000 });
 const rolled = (now: number): string =>
   JSON.stringify({ five: 10, seven: 50, ts: now - 700_000, fiveResetAt: now - 600_000, sevenResetAt: now - 100 });
+
+/** A continuity record's `recordedAt`, in the past of every case. */
+const REC = 1_790_000_000;
 
 export const SERVICEABILITY_CASES: readonly ServiceabilityCase[] = [
   { name: 'default is skipped whatever the lane says', cls: 'default', lane: 'claude', limits: fresh(99, 99), sweep: { ageS: 1, estimate: 0.99 }, expect: 'skipped' },
@@ -62,4 +74,33 @@ export const SERVICEABILITY_CASES: readonly ServiceabilityCase[] = [
   { name: 'sonnet with no limits file is unmeasured', cls: 'sonnet', lane: 'claude', expect: 'unmeasured', why: 'no-figure' },
   { name: 'haiku with a rolled-over seven-day window is unmeasured, not its inferred 0', cls: 'haiku', lane: 'claude', limits: rolled, expect: 'unmeasured', why: 'no-figure' },
   { name: 'opus on a codex lane reads its own seven-day figure (the backend refusal is fable only)', cls: 'opus', lane: 'gpt', limits: fresh(0, 12), expect: 'servable', figurePct: 12 },
+
+  // THE OVERLORD'S ARMS (serviceability plan Task 2): a `set-side` asker only. Every fact is spelled out (F5).
+  { name: 'set-side fable, included billing, recorded, share 39: servable', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included', continuity: REC }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'servable', figurePct: 39 },
+  { name: 'set-side fable, credits billing, recorded, share 39: credits', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'credits', continuity: REC }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'credits' },
+  { name: 'set-side fable, no billing fact, recorded: billing-unset', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { continuity: REC }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'billing-unset' },
+  { name: 'set-side fable, a projection without the billing function, recorded: billing-unread', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { projection: 'old-billing', continuity: REC }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'billing-unread' },
+  { name: 'set-side opus, credits billing, recorded, seven 50: servable (billing is Fable\'s alone)', cls: 'opus', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'credits', continuity: REC }, limits: fresh(10, 50), expect: 'servable', figurePct: 50 },
+  { name: 'set-side opus, included billing, no record: no-continuity', cls: 'opus', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included' }, limits: fresh(10, 50), expect: 'unservable', why: 'no-continuity' },
+  { name: 'set-side fable, included billing, no record: no-continuity (before the figure)', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included' }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'no-continuity' },
+  { name: 'set-side opus, an old projection: continuity-unread', cls: 'opus', lane: 'claude', asking: 'set-side', facts: { projection: 'old' }, limits: fresh(10, 50), expect: 'unservable', why: 'continuity-unread' },
+  { name: 'set-side fable, an old projection: billing-unread (F1: the billing word outranks continuity-unread)', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { projection: 'old' }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'billing-unread' },
+  { name: 'set-side default, no record: no-continuity (F8: before the default fold)', cls: 'default', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included' }, expect: 'unservable', why: 'no-continuity' },
+  { name: 'set-side empty class, no record: no-continuity (F8)', cls: '', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included' }, expect: 'unservable', why: 'no-continuity' },
+  { name: 'set-side default, recorded: skipped', cls: 'default', lane: 'claude', asking: 'set-side', facts: { continuity: REC }, expect: 'skipped' },
+  { name: 'set-side empty class, recorded: skipped', cls: '', lane: 'claude', asking: 'set-side', facts: { continuity: REC }, expect: 'skipped' },
+  { name: 'set-malformed side fable, credits billing, recorded: credits (the strict arms)', cls: 'fable', lane: 'claude', asking: 'set-side', side: 'set-malformed', facts: { fableBilling: 'credits', continuity: REC }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'credits' },
+  { name: 'set-unreadable side fable, credits billing, recorded: credits (the strict arms)', cls: 'fable', lane: 'claude', asking: 'set-side', side: 'set-unreadable', facts: { fableBilling: 'credits', continuity: REC }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'credits' },
+  // F1: a set-side session on an unrecorded lane never gets less protection than a plain one; continuity applies only on top of a servable, unmeasured or skipped base.
+  { name: 'set-side fable, credits billing, no record: credits (outranks no-continuity)', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'credits' }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'credits' },
+  { name: 'set-side fable, no billing fact, no record: billing-unset (outranks no-continuity)', cls: 'fable', lane: 'claude', asking: 'set-side', facts: {}, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'unservable', why: 'billing-unset' },
+  { name: 'set-side fable at the share ceiling, included billing, no record: ceiling (outranks no-continuity)', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included' }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.40 }, expect: 'unservable', why: 'ceiling', figurePct: 40 },
+  { name: 'set-side opus at the seven-day ceiling, no record: ceiling with the figure', cls: 'opus', lane: 'claude', asking: 'set-side', facts: {}, limits: fresh(0, 98), expect: 'unservable', why: 'ceiling', figurePct: 98 },
+  { name: 'set-side opus, no limits file, no record: no-continuity (an unmeasured base)', cls: 'opus', lane: 'claude', asking: 'set-side', facts: {}, expect: 'unservable', why: 'no-continuity' },
+  { name: 'set-side fable, stale pass, no record: no-continuity (an unmeasured base)', cls: 'fable', lane: 'claude', asking: 'set-side', facts: { fableBilling: 'included' }, limits: fresh(10, 10), sweep: { ageS: 28_801, estimate: 0.01 }, expect: 'unservable', why: 'no-continuity' },
+  { name: 'set-side fable on a codex lane, no record: backend (outranks no-continuity)', cls: 'fable', lane: 'gpt', asking: 'set-side', facts: {}, limits: fresh(0, 0), sweep: { ageS: 1, estimate: 0 }, expect: 'unservable', why: 'backend' },
+  // F4: the dangling-symlink half of the existence check: an entry that is only a broken link is an undecidable set, so the set-side arms apply.
+  { name: 'set-unreadable (a DANGLING poolset link) opus, no record: no-continuity', cls: 'opus', lane: 'claude', asking: 'set-side', side: 'set-unreadable-link', facts: {}, limits: fresh(10, 50), expect: 'unservable', why: 'no-continuity' },
+  { name: 'other fable, credits billing, no record, share 39: servable (unchanged for everyone else)', cls: 'fable', lane: 'claude', asking: 'other', facts: { fableBilling: 'credits' }, limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.39 }, expect: 'servable', figurePct: 39 },
+  { name: 'set-side fable on a codex lane, credits billing, recorded: backend (before billing)', cls: 'fable', lane: 'gpt', asking: 'set-side', facts: { fableBilling: 'credits', continuity: REC }, limits: fresh(0, 0), sweep: { ageS: 1, estimate: 0 }, expect: 'unservable', why: 'backend' },
 ];

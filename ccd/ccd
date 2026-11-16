@@ -1841,7 +1841,7 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
 # what the generator writes, so a field added there reds here until it is named.
 _CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM CCRC_PAY_PER_USE)
-_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_secrets_file _ccrc_auth_dir)
+_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_fable_billing _ccrc_continuity _ccrc_secrets_file _ccrc_auth_dir)
 # The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
 # so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
 # ccd-tick-budget.test.ts, is exact). The file is a few KB. `-f` first, as the
@@ -19801,7 +19801,7 @@ print(int(est * 100 + 0.5))
 PY
 }
 
-_serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasured | 3 skipped (class default/empty); stdout: the figure (0, or 1 at the ceiling), `backend` (1, fable on a non-Anthropic lane), `no-figure`/`stale` (2)
+_serviceable() {   # wrapper class [id] -> rc 0 servable | 1 unservable | 2 unmeasured | 3 skipped (class default/empty); stdout: the figure (0, or 1 at the ceiling), `backend` (1, fable on a non-Anthropic lane), `no-figure`/`stale` (2); with an id whose side is a set, also (1) `credits`/`billing-unset`/`billing-unread` (fable) and `no-continuity`/`continuity-unread` (any class, default included)
   # Routing spec §5.4, the bash twin of shared/serviceability.ts's serviceability(); one fixture table drives both
   # (server/test/fixtures/serviceability.ts). THREE ANSWERS, NEVER TWO: an absent file, an absent row, a null estimate
   # and a stale pass are all `unmeasured` — never servable (a fabricated fact) and never unservable (a fabricated
@@ -19809,10 +19809,24 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
   # figure is read — a codex lane's share estimate is 0 and reading that as "servable" would place Fable where there
   # is none. Other classes read the lane's seven-day figure through _limit_field, which already retracts a rolled-over
   # window, against SWAP_CEILING — the same test _avail makes, so a candidate _avail admits is servable for them.
-  local w="$1" c="${2:-}" fig rc
-  [[ -z "$c" || "$c" == default ]] && return 3
+  # The Overlord's arms (serviceability plan Task 2): only for an id whose poolset entry exists (no fork otherwise, F7) and
+  # whose side is a set; the continuity arm runs before the default fold (F8), the billing arm after the backend test.
+  # F1: the continuity word `cw` applies ON TOP of the base answer, never instead of it: a set-side session never gets less
+  # protection than a plain one, so the backend, billing and ceiling words outrank it and cw replaces only a servable,
+  # unmeasured or skipped answer.
+  local w="$1" c="${2:-}" fig rc side="" cw=""
+  if [[ -n "${3:-}" ]] && [[ -e "$REG/$3.poolset" || -L "$REG/$3.poolset" ]]; then side=$(_session_pool_side "$3" ""); fi
+  if _pool_side_is_set "$side"; then
+    if ! declare -F _ccrc_continuity >/dev/null 2>&1; then cw=continuity-unread
+    elif [[ -z "$(_ccrc_continuity "$w")" ]]; then cw=no-continuity; fi
+  fi
+  [[ -z "$c" || "$c" == default ]] && { [[ -n "$cw" ]] && { printf '%s' "$cw"; return 1; }; return 3; }
   if [[ "$c" == fable ]]; then
     _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
+    if _pool_side_is_set "$side"; then
+      declare -F _ccrc_fable_billing >/dev/null 2>&1 || { printf 'billing-unread'; return 1; }
+      case "$(_ccrc_fable_billing "$w")" in included) ;; credits) printf 'credits'; return 1 ;; *) printf 'billing-unset'; return 1 ;; esac
+    fi
     _share_pct_to fig "$w"; rc=$?
     # EVERY NON-ZERO RC IS UNMEASURED, and the `*` arm is the whole fix (final
     # review finding 1). This named 1 and 2 ALONE, so any other exit code fell
@@ -19830,19 +19844,19 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
     # because the vocabulary is shared with the L0 twin, which has no
     # interpreter to lose, and because that is literally what happened —
     # nobody produced a figure. rc 2 keeps its own word.
-    case "$rc" in 0) ;; 2) printf 'stale'; return 2 ;; *) printf 'no-figure'; return 2 ;; esac
-    printf '%s' "$fig"
-    [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && return 1
-    return 0
+    case "$rc" in 0) ;; 2) printf '%s' "${cw:-stale}"; [[ -n "$cw" ]] && return 1; return 2 ;; *) printf '%s' "${cw:-no-figure}"; [[ -n "$cw" ]] && return 1; return 2 ;; esac
+    [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && { printf '%s' "$fig"; return 1; }
+    [[ -n "$cw" ]] && { printf '%s' "$cw"; return 1; }
+    printf '%s' "$fig"; return 0
   fi
   _limit_field_to fig "$w" seven
-  [[ -z "$fig" ]] && { printf 'no-figure'; return 2; }
-  printf '%s' "$fig"
-  [[ "$fig" -ge "$SWAP_CEILING" ]] && return 1
-  return 0
+  [[ -z "$fig" ]] && { printf '%s' "${cw:-no-figure}"; [[ -n "$cw" ]] && return 1; return 2; }
+  [[ "$fig" -ge "$SWAP_CEILING" ]] && { printf '%s' "$fig"; return 1; }
+  [[ -n "$cw" ]] && { printf '%s' "$cw"; return 1; }
+  printf '%s' "$fig"; return 0
 }
 
-_class_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured
+_class_gate() {   # wrapper class [id] -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured; an id asks `_serviceable` even for an empty or default class (F8)
   # The shape every decision site needs: `skipped` folds into 0 because a session with no class has nothing to gate on.
   #
   # NAMED FOR THE CLASS, NOT FOR `_svc_` (controller ruling S3-R1). It shipped
@@ -19851,9 +19865,9 @@ _class_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (s
   # inside the platform sentinels — `_svc_` is that guard's pinned launchd/systemd
   # vocabulary, and a routing helper borrowing the prefix made a real platform
   # helper's escape one `Set` entry away from unnoticed. The exemption is gone with the name.
-  [[ -z "${2:-}" || "$2" == default ]] && return 0
-  _serviceable "$1" "$2" >/dev/null
-  case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+  [[ -z "${3:-}" ]] && [[ -z "${2:-}" || "$2" == default ]] && return 0
+  _serviceable "$1" "${2:-}" "${3:-}" >/dev/null
+  case $? in 0|3) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
 }
 
 # `from` AND `to` NAME THE MOVE, NOT THE FIELD, which is why the two helpers
@@ -20228,11 +20242,12 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # about — keep/take (0), measured-unservable (1, fall through to the
   # candidate loop: the session MUST LEAVE a lane that cannot serve its class),
   # and UNMEASURED (2, rc 5: nobody decides, and the next tick tries again five
-  # seconds later). With no class `_class_gate` answers 0 for every lane, so
+  # seconds later). With no class and no id `_class_gate` answers 0 for every lane (a set-side session still meets the
+  # continuity arm through its id), so
   # all three lines below are today's lines byte for byte.
   if [[ "$hrc" -eq 0 && "$cur" == "$home" ]]; then
     if [[ -z "$force" ]] && _avail "$home"; then                             # home is fine: stay — if it can serve the class
-      _class_gate "$home" "$cls"; src=$?
+      _class_gate "$home" "$cls" "$1"; src=$?
       [[ "$src" -eq 0 ]] && return 0
       [[ "$src" -eq 2 ]] && return 5
     fi                                                                       # 1: home is at the class's ceiling — must leave; fall through
@@ -20259,7 +20274,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       && ! _authdead "$home" && _avail "$home" \
       && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; } \
       && { [[ -z "${4:-}" ]] || [[ -n "$(_limit_score "$home")" ]] || { hfb="$home"; false; }; }; then   # D-8123: a wake move wants MEASURED room only, and a rescue the CALLER forced (`${4:-}`, NOT the `force=pool` a wrong-pool current account sets above, which is a retag relocation and keeps its one-move affinity return) ranks an unmeasured home after every measured account with room, never ahead of it; the unforced affinity return home is unchanged. `hfb` keeps an otherwise-recovered unmeasured home as the rank-100 fallback the loop below returns when it finds nothing: the loop only walks `_pool_for` candidates that pass `_pool_ok`, so it would never rediscover a crossed home or a hand-set pool list that leaves home out
-      _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
+      _class_gate "$home" "$cls" "$1"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
       # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling
       # S3-R4, fix round 1). The arm carries no `[[ -z "$force" ]]` condition
@@ -20277,7 +20292,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       [[ "$src" -eq 2 ]] && { [[ -n "$force" ]] || return 5; }
     fi
     if [[ -z "$force" ]] && _avail "$cur"; then                              # cur still works, home down: stay put — if it can serve the class
-      _class_gate "$cur" "$cls"; src=$?
+      _class_gate "$cur" "$cls" "$1"; src=$?
       [[ "$src" -eq 0 ]] && return 0
       [[ "$src" -eq 2 ]] && return 5
     fi
@@ -20388,7 +20403,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       # was a hand-rolled copy of the empty/`default` fold `_class_gate` already
       # does. Measured behaviourally identical, and now said once: rc 0 is
       # "servable, or no class to apply" and falls through to the ranking below.
-      _class_gate "$cand" "$pcls"
+      _class_gate "$cand" "$pcls" "$1"
       case $? in
         1) unserv=$((unserv + 1)); continue ;;
         # UNMEASURED BLOCKS ONLY THE INTENDED CLASS. On pass 1 an unmeasured
@@ -20517,7 +20532,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # to rank, so a forced rescue never turns "home was eligible" into a strand. It is consulted BEFORE an overflow lane
     # (`obest`), because an overflow lane is a last resort chosen only when no home-able candidate, home included, passed.
     # It answers only if home can serve the intended class, exactly as the arm it fell out of would have asked.
-    if [[ -n "$hfb" && "$pass" -eq 1 ]]; then _class_gate "$hfb" "$cls" && { echo "$hfb"; return 0; }; fi
+    if [[ -n "$hfb" && "$pass" -eq 1 ]]; then _class_gate "$hfb" "$cls" "$1" && { echo "$hfb"; return 0; }; fi
     [[ -n "$obest" ]] && break                                                   # only an overflow lane found at this class
     [[ -z "$cls" ]] && break                                                     # no class: nothing more to try
     [[ "$unmeas" -gt 0 ]] && return 5                                            # a lane nobody measured: nobody decides
@@ -21252,7 +21267,7 @@ _affinity_cur_serves() {   # id wrapper aff-verb hard-blocked -> rc 0 iff cur st
   [[ -z "$4" && "$3" != auto-pool ]] || return 1
   _avail "$2" || return 1
   _route_peek_to cls "$1" class; [[ "$cls" == default ]] && cls=""
-  _class_gate "$2" "$cls"; [[ $? -ne 1 ]]
+  _class_gate "$2" "$cls" "$1"; [[ $? -ne 1 ]]
 }
 _swap_stagger_off() { [[ -e "$REG/swap-stagger-off" || -L "$REG/swap-stagger-off" ]]; }   # D-6181's brake: present -> today's undelayed dispatch
 
@@ -26663,7 +26678,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # route row asserting a ceiling figure nobody read. `local why` is
       # declared above, on its own line, so this bare assignment's `$?` is
       # `_serviceable`'s own rc, not `local`'s.
-      why=$(_serviceable "$wrapper" "$rclass"); srv=$?
+      why=$(_serviceable "$wrapper" "$rclass" "$id"); srv=$?
       # WHAT A DEGRADE BUYS DIFFERS BY CLASS, and only the fable rung changes
       # ELIGIBILITY (final review finding 2, the settle's half of it).
       # `fable`'s rc 1 is the share ceiling or the roster's backend word, so
@@ -26681,9 +26696,12 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # rung drop that buys exactly that and nothing else. At `haiku` the
       # ladder bottoms out (`below` empty), nothing is stamped, and the
       # intended class is composed unchanged.
-      case "$srv" in
-        0) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
-        1) below=$(_class_below "$rclass")
+      case "$srv:$why" in
+        0:*) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
+        1:no-continuity|1:continuity-unread)   # F1/F4: no rung serves a lane with no record, so no stamp and no restore; the base answer (no id) rules what is composed
+           _serviceable "$wrapper" "$rclass" >/dev/null && rdeg=""
+           echo "$(date '+%F %T') continuity-unmet $id: $wrapper ($why); composing ${rdeg:-$rclass}, a standing degraded stamp left as it is" >> "$REG/swap.log" ;;
+        1:*) below=$(_class_below "$rclass")
            if [[ -n "$below" ]]; then
              # THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R7, mirroring
              # `_auto_swap_check`'s rc-6 arm). Unlike a tick, a settle cannot

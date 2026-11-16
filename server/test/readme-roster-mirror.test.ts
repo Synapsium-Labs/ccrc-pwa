@@ -44,6 +44,8 @@ describe('README: the roster mirror table', () => {
       '`hidden`', '`exec.secretsFile`', '`exec.provider`', '`exec.baseUrl`', '`exec.models`',
       // codex-bridge Stage 2, Task 10: the codex arm's two additive words.
       '`exec.bridge`', '`exec.upstream`',
+      // Overlord W1 serviceability, Task 1: the two account facts.
+      '`fableBilling`', '`continuity`',
     ]);
   });
 

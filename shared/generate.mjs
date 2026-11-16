@@ -213,6 +213,15 @@ function idArray(ids) {
  * copies nobody can see. `hidden` is deliberately outside the digest and stays
  * there.
  *
+ * ── `_ccrc_fable_billing` and `_ccrc_continuity` ──
+ *
+ * The two account facts the Overlord's serviceability reads (H16, `shared/rosterFacts.ts`): `included` or `credits`
+ * for whether Fable bills usage credits, and the epoch seconds the operator recorded the continuity at. Emitted
+ * ALWAYS, even with no arms, exactly as `_ccrc_pool` is, so `declare -F _ccrc_fable_billing` is ccd's probe for "this
+ * box's projection knows the facts" and an accounts.sh from before them reads as unread, never as unset. Empty
+ * stdout at rc 0 is an account with no such fact AND an unknown id; `_is_valid_wrapper` gates ids first. Both
+ * values are a word from a closed set or a non-negative integer, so `echo` of them raw is safe.
+ *
  * ── `_ccrc_secrets_file` ──
  *
  * The roster's `exec.secretsFile`, HOME-relative, for an account that declares
@@ -318,6 +327,20 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
     .join('\n');
 
+  // One arm per account carrying each Overlord fact, filtered like `poolArms` and for the same reason: only a value a
+  // producer admitted is emitted, so an unvalidated value reached through a structural caller gets no arm. Both
+  // producers carry the same field names, so no shape split is needed here. The two words are spelled once more in
+  // this file only as the closed set an arm may echo; `roster-exec-parity.test.ts` pins them to `FABLE_BILLINGS`.
+  const billingArms = roster.byIdLengthDesc
+    .filter((a) => a.fableBilling === 'included' || a.fableBilling === 'credits')
+    .map((a) => `    ${a.id}) echo ${a.fableBilling} ;;`)
+    .join('\n');
+  const continuityArms = roster.byIdLengthDesc
+    .filter((a) => typeof a.continuity === 'object' && a.continuity !== null
+      && Number.isSafeInteger(a.continuity.recordedAt) && a.continuity.recordedAt >= 0)
+    .map((a) => `    ${a.id}) echo ${a.continuity.recordedAt} ;;`)
+    .join('\n');
+
   // One arm per account that DECLARES `exec.secretsFile`, the same filter shape
   // as `poolArms` and for the same reason (an unvalidated non-string gets no
   // arm). TWO PRODUCERS, TWO SHAPES: `parseRoster` nests the field under `exec`,
@@ -388,6 +411,16 @@ ${hueArms}
 _ccrc_pool() {
   case "$1" in
 ${poolArms}
+  esac
+}
+_ccrc_fable_billing() {
+  case "$1" in
+${billingArms}
+  esac
+}
+_ccrc_continuity() {
+  case "$1" in
+${continuityArms}
   esac
 }
 _ccrc_secrets_file() {
