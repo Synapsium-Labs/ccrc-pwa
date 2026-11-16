@@ -568,8 +568,8 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
-    // What the row rests on (Overlord W1, portfolio B): the item it cites, else the coordinator that wrote it.
-    const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now(), { kind: itemId === null ? 'coordinator' : 'item' });
+    // What the row rests on is the store's to derive from its own itemId (Overlord W1, portfolio B; review 2240 F6).
+    const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
   });
@@ -862,13 +862,15 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   // nothing between the read and the write. A change emits the waiting frame, as the tick door does; the coordinator is not
   // mailed, and reads the verdict through its goals read.
   app.post('/api/programmes/:slug/goals/ratify', (req, reply) => {
-    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     const slug = (req.params as { slug: string }).slug;
     const version = parseGoalsVersion(req.body);
     if (version === null) return bad(reply, 'the body is { pin: { inShortAt } } or { modification: <id> }');
-    const res = coord.ratifyGoalsVersion(slug, version, deps.now());
+    // The act confers authority, so it keeps the gate's actor (its device and session hash; review 2240 F7).
+    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), String(g.actor));
     if (!res.ok && res.why === 'unknown') return refuseRoute(reply, 'not-found', { detail: 'pin' in version ? `programme ${slug} has no pin` : `no modification ${version.modification} of ${slug}` });
     if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.goalsChanged, { inShortAt: res.inShortAt, detail: 'the goals changed since they were shown: read them again' });
     if (res.changed) deps.bus.emit('waiting');

@@ -70,8 +70,8 @@ export interface PortfolioEntry {
   cycle: Measure;
   /** Done waves with no `dispatchedAt`, or whose dispatch a rebuild stood in for (a rebuilt database). */
   cycleUnmeasured: number;
-  /** The oldest started, still open wave's age. Null only when no wave is `working` or `waiting`: `wip.queued` counts the
-   *  waves that have no `dispatchedAt`. */
+  /** The oldest started, still open wave's age. Null when no wave is `working` or `waiting`, or when every one of them is
+   *  rebuilt (counted in `oldestOpenUnmeasured` instead): `wip.queued` counts the waves that have no `dispatchedAt`. */
   oldestOpenMs: number | null;
   /** Started, still open waves left out of `oldestOpenMs` because a rebuild stood in for their dispatch, so their true age
    *  is unknown and at least what the stand-in says (review 2130 F10). Absent from a server before portfolio B. */

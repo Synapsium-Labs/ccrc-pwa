@@ -2992,13 +2992,14 @@ describe('coord.db: answer_marks, the operator\'s answer marks (Overlord W1; §9
 describe('coord.db: what each goals version rests on (Overlord W1, portfolio B; §3.8, Table 11.1a)', () => {
   /** Found by its DDL, never hard-coded. Responses A (#2884) landed 82, so this is 83 (the coordinator's word). */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;')) + 1;
-  it('FIVE NULLABLE COLUMNS on existing tables and nothing else, the entry after the response record\'s tables', () => {
+  it('SEVEN NULLABLE COLUMNS on existing tables and nothing else, the entry after the response record\'s tables', () => {
     expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE operator_responses (')) + 2);
     expect(SLOT).toBe(83);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean)).toEqual([
       'ALTER TABLE programs ADD COLUMN ratifiedBy TEXT', 'ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER',
       'ALTER TABLE programs ADD COLUMN doneWhenBy TEXT', 'ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT',
-      'ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER',
+      'ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER', 'ALTER TABLE programs ADD COLUMN ratifiedActor TEXT',
+      'ALTER TABLE programme_modifications ADD COLUMN ratifiedActor TEXT',
     ]);
   });
 
@@ -3013,10 +3014,10 @@ describe('coord.db: what each goals version rests on (Overlord W1, portfolio B; 
     raw.close();
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
-    expect(db.prepare("SELECT inShort, ratifiedBy, ratifiedAt, doneWhenBy FROM programs WHERE slug = 'prog-a'").all())
-      .toEqual([{ inShort: 'x', ratifiedBy: null, ratifiedAt: null, doneWhenBy: null }]);
-    expect(db.prepare('SELECT text, ratifiedBy, ratifiedAt FROM programme_modifications').all())
-      .toEqual([{ text: 'y', ratifiedBy: null, ratifiedAt: null }]);
+    expect(db.prepare("SELECT inShort, ratifiedBy, ratifiedAt, ratifiedActor, doneWhenBy FROM programs WHERE slug = 'prog-a'").all())
+      .toEqual([{ inShort: 'x', ratifiedBy: null, ratifiedAt: null, ratifiedActor: null, doneWhenBy: null }]);
+    expect(db.prepare('SELECT text, ratifiedBy, ratifiedAt, ratifiedActor FROM programme_modifications').all())
+      .toEqual([{ text: 'y', ratifiedBy: null, ratifiedAt: null, ratifiedActor: null }]);
     db.close();
   });
 });

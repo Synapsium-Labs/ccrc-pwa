@@ -9,18 +9,27 @@ Operator item 328 (2026-11-16) answered question 1 **yes**: "A coordinator's pin
 coordinator." This is against the plan's recommendation, so the build takes the plan's "If the operator answers yes" path
 at every site tagged "(question 1)" (slug **`coordinator-pin-ratifies`**, citing item 328):
 
-- `shared/ledgers.ts#COORDINATOR_SOURCE_RATIFIES` is `true`, and `goalRatification`'s `coordinator` case answers ratified.
-- The decider's coordinator case and the re-pin case read ratified again (`server/test/ratificationCases.ts`,
-  `server/test/goals-ratification.test.ts`); the mutation floors are measured again (below).
-- The Goals panel says "Ratified by the coordinator", and shows no Ratify button on a coordinator-written version, which
-  reads ratified (`pwa/src/ledgers/ledgerWords.ts#ratificationWords`, `pwa/test/goals-panel.test.tsx`).
-- The card renders a coordinator's goals as ratified (`server/test/continuity-card-facts.test.ts`).
-- Columns, writers, doors and the item arm are as the plan has them. A version that rests on an item still does not
-  ratify (question 3).
+**The pin only (review 2240 F3, the coordinator's ruling).** The item says a coordinator's *pin* counts. A change to the
+definition of done is operator-only (O3, coordinator-autonomy spec), so a coordinator's modification never ratifies. The
+plan's "(question 1)" sites, as built after fix round 1:
 
-**What a merge arms:** a coordinator's goals render as ratified from this pull request's merge, on the card, in the goals
-read and on the Goals panel. Rows written before the migration hold no source and read "Not recorded" until their next
-write.
+- `shared/ledgers.ts#COORDINATOR_SOURCE_RATIFIES` is `true`, and `goalRatification`'s `coordinator` case answers ratified
+  for the pin only: the decider takes the version kind (`of: 'pin' | 'modification'`), and a coordinator's modification
+  reads `source-does-not-ratify` ("Not ratified: written by the coordinator"). An item-cited one reads as before ("rests on
+  item N's answer", until W3), so the honest path is never weaker than the uncited one.
+- The decider's coordinator case and the re-pin case read ratified; the new modification case reads not ratified
+  (`server/test/ratificationCases.ts`, `server/test/goals-ratification.test.ts`); mutant R-10 drops the pin-only scope.
+- The Goals panel says "Ratified by the coordinator" on a coordinator's pin, with no Ratify button, and offers Ratify on a
+  coordinator's modification (`pwa/src/ledgers/ledgerWords.ts#ratifyOffered`, `pwa/test/goals-panel.test.tsx`).
+- The card renders a coordinator's pin goals as ratified, and says so: "ratified by the coordinator" inside the fenced
+  block (`server/test/continuity-card-facts.test.ts`, `server/test/continuity-card-render.test.ts`).
+- Columns, writers, doors and the item arm are as the plan has them. A version that rests on an item still does not
+  ratify (question 3). The spec's §3.8 bullet, C18 step 2 and the item-328 row of the answers table say "pin" (the head
+  commit's `Ledger-Edit` trailer).
+
+**What a merge arms:** a coordinator's pin goals render as ratified from this pull request's merge, on the card, in the
+goals read and on the Goals panel. Rows written before the migration hold no source and read "Not recorded" until their
+next write.
 
 ## Measured
 
@@ -75,9 +84,47 @@ write.
   is ever deleted. `auth-off` says ratifying needs sign-in and takes the button away as well. This is
   `ledgerWords.ts#ratifyFailureOf`, L1.
 - **`rollback-leaves-a-stale-source`**: an older build that re-pins after a rollback writes the text and not the
-  source, so the stored source may describe older text until this build's next write. The migration's comment names it.
-  Nothing refuses it.
+  source. For the pin this is closed in fix round 1 (F2: a source stamped before the text reads unrecorded); for the
+  definition of done it is accepted (`done-when-provenance-survives-a-rollback`). The migration's comment names both.
+
+## Fix round 1 (review 2240)
+
+- **F1, ruling: attribution is the trust model (spec Table 3.8a).** `ccd/ccrc-api`'s `goals.pin`, `goals.modify` and
+  `goals.merged` rows take the pane's pair as `calls.record` and the note door do: a bodyless call is `no-body`, a body that
+  names `byId` or `byUuid` is `bad-body` and is never sent, and the client appends the pane's pair last
+  (`server/test/ccrc-api-goals.test.ts`, measured red with the block removed: 10 of 11). **Residual:** a same-user process
+  holding the box token can still forge the pair with a raw HTTP call; the client stops the accident and the stale case,
+  not that forger (slug `goals-attribution-is-the-pane`).
+- **F2.** The pin's source counts only when `ratifiedAt >= inShortAt` (`shared/ledgers.ts#pinSource`, mutants P-1 to P-4;
+  the rollback sequence is a case of `goals-ratification.test.ts`). The definition-of-done half is accepted as the
+  migration's comment states (slug **`done-when-provenance-survives-a-rollback`**). `writers-map.test.ts`' goals census
+  now covers the text the sources describe: the pin's `specPath`, `inShort`, `inShortAt` and `doneWhen`, and a
+  modification's `text`, `ruling` and `itemId`.
+- **F3, ruling:** above. Slug `coordinator-pin-ratifies` now reads "the pin only".
+- **F4.** The goals read carries `doneWhenVersion` (additive, optional; absent from an older server), the version that
+  wrote the stored list. The panel draws the list beside that version's verdict and Ratify button, or on its own with its
+  verdict and no button when the writer is unrecorded, unreadable or not shown (`ledgerWords.ts#doneWhenPlacement`).
+- **F5.** `ratificationWords` and `ratifyOffered` read the reason and the source through the shared own-key guards
+  (`isRatificationWhy`, `isRatifiedByKind`): a word this build cannot name reads "Could not read whether this is
+  ratified", with no button.
+- **F6.** `setSpecPin` takes a `WrittenSource` (every kind but the operator's), so only `ratifyGoalsVersion` writes
+  `operator`; `addModification` derives its source from the row's `itemId` (`shared/ledgers.ts#modificationSource`, mutants
+  M-1 and M-2), and the route no longer decides it.
+- **F7, ruling.** Migration 83 gains `ratifiedActor` on both tables: the account gate's actor of the operator's ratify
+  (its device label and session hash), NULL for every other source, cleared by a re-pin. In the writers census and the
+  run-close-switch replay; the route test checks it is written.
+- **F8.** The card's ratified goals say who ratified them inside the fenced block ("ratified by the coordinator", "by the
+  operator", "by the answer to an item"; a word it cannot name, "by an unknown source"). `shared/continuity-card.ts`'s
+  stale comment now says every goal is untrusted.
+- **F9.** `doneWhenBy` moves only when the list's text changes: a re-pin with the same list, or with none, keeps the list's
+  provenance. **Residual:** a list an earlier pin wrote follows the current pin's verdict (there is no per-list stamp); in
+  W1 every pin is the coordinator's, and the panel shows that list beside the pin it is ratified with.
+- **F10, ruling: accepted.** "The programme's own coordinator" is the run's current claimant. The reclaim door being open
+  while sign-in is dark is the dark mode's known residual (slug `ratifying-chair-follows-the-claimant`).
+- **Nits.** `shared/portfolio.ts`' `oldestOpenMs` comment names the all-rebuilt case; `RATIFICATION_WHYS` is gone, and its
+  map is consumed by `isRatificationWhy`.
 
 ## For the spec-fixes list
 
-- §3.8 says "Until W3, only this door ratifies". Item 328 makes a coordinator's own pin ratify as well.
+- §3.8 said "Until W3, only this door ratifies". Item 328 makes a coordinator's own pin ratify as well; this pull request
+  corrects §3.8, C18 step 2 and the item-328 row to "pin" (review 2240 F3).

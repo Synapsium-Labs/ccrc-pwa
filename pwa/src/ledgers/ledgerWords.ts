@@ -14,7 +14,7 @@ import { isRunClosed, sessionProgramme } from '../fleet/runWords';
 import { needsYou, needsYouCount } from './needsYou';
 import { waitingPath } from '../lib/routes';
 import type { AskMarkRow } from '../../../shared/answerMarks';
-import type { Ratification, RatificationWhy, RatifiedBy } from '../../../shared/ledgers';
+import { isRatificationWhy, isRatifiedByKind, type GoalsView, type Ratification, type RatificationWhy, type RatifiedBy } from '../../../shared/ledgers';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -474,8 +474,40 @@ const NOT_RATIFIED_WORDS: Readonly<Record<RatificationWhy, (itemId: number | nul
   unrecorded: () => 'Not recorded',
   absent: () => 'Not recorded',
 };
+/** The one word for a verdict this build cannot name: a reason or a source kind a newer server sent (review 2240 F5). */
+export const RATIFICATION_UNREADABLE_WORDS = 'Could not read whether this is ratified';
+/** Whether this build can name every part of a verdict: its source (null, or a kind it knows) and, when not ratified, its
+ *  reason. The one test both `ratificationWords` and `ratifyOffered` ask, through the shared guards (own keys only, so
+ *  `toString` and `__proto__` are unknown words, not inherited ones). */
+const ratificationKnown = (r: Ratification): boolean => {
+  const source: unknown = r.source;
+  const sourceKnown = source === null || (typeof source === 'object' && isRatifiedByKind((source as { kind?: unknown }).kind));
+  return sourceKnown && (r.ratified ? source !== null : isRatificationWhy(r.why));
+};
 export const ratificationWords = (r: Ratification, itemId: number | null): string =>
-  r.ratified ? RATIFIED_WORDS[r.source.kind] : NOT_RATIFIED_WORDS[r.why](itemId);
+  !ratificationKnown(r) ? RATIFICATION_UNREADABLE_WORDS
+    : r.ratified ? RATIFIED_WORDS[r.source.kind] : NOT_RATIFIED_WORDS[r.why](itemId);
+
+/** Whether a version's verdict offers the Ratify button: only an unratified one this build can read whole, and not an
+ *  `absent` one (an older server that has no door to ratify through). Never for a word it cannot name. */
+export const ratifyOffered = (r: Ratification): boolean => ratificationKnown(r) && !r.ratified && r.why !== 'absent';
+
+/** Where the stored definition of done is drawn (review 2240 F4: the operator never ratifies a list they were not shown):
+ *  under the pin's verdict, under the modification's row that wrote it, or `alone` when the writer is not recorded, not
+ *  readable, absent from an older server, or not one of the versions the panel shows. Null when there is no list. */
+export type DoneWhenPlacement = { at: 'pin' } | { at: 'modification'; id: number } | { at: 'alone' };
+export function doneWhenPlacement(g: GoalsView): DoneWhenPlacement | null {
+  if (g.doneWhen === undefined || g.doneWhen === null || g.doneWhen.length === 0) return null;
+  const v: unknown = g.doneWhenVersion;
+  if (typeof v !== 'object' || v === null) return { at: 'alone' };
+  const pin = (v as { pin?: unknown }).pin;
+  if (typeof pin === 'object' && pin !== null) {
+    const stamp = (pin as { inShortAt?: unknown }).inShortAt;
+    return g.inShortAt !== null && g.inShort !== null && stamp === g.inShortAt ? { at: 'pin' } : { at: 'alone' };
+  }
+  const id = (v as { modification?: unknown }).modification;
+  return typeof id === 'number' && g.modifications.some((m) => m.id === id) ? { at: 'modification', id } : { at: 'alone' };
+}
 
 /** What a failed ratify means to the Goals card. `unavailable` takes the Ratify button away and says why: a 404, which is an
  *  older server without the door (an unknown route answers `not-found` too, and the door's own `not-found` cannot meet a

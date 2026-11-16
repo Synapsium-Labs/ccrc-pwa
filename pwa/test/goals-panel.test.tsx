@@ -209,3 +209,65 @@ describe('Goals: ratification verdicts and the Ratify button', () => {
     expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
   });
 });
+
+describe('Goals: the stored definition of done beside the version that wrote it (review 2240 F4)', () => {
+  const no = (why: Extract<Ratification, { ratified: false }>['why']): Ratification => ({ ratified: false, why, source: null });
+  const LIST = ['the first condition', 'the second condition'];
+  const withList = (over: Partial<GoalsView>): GoalsView => goals({ doneWhen: LIST, pinRatification: no('unrecorded'), ...over });
+
+  it('beside the pin\'s verdict and Ratify button when the pin wrote it', () => {
+    const { container } = render(<GoalsPanel goals={withList({ doneWhenVersion: { pin: { inShortAt: T0 } }, modifications: [mod(4, { ratification: no('unreadable') })] })} homeProject="project-a" onRatify={vi.fn()} />);
+    const short = container.querySelector('.pg-goals-short') as HTMLElement;
+    expect(within(short).getByText('Definition of done')).toBeTruthy();
+    for (const t of LIST) expect(within(short).getByText(t)).toBeTruthy();
+    expect(within(short).getByRole('button', { name: 'Ratify' })).toBeTruthy();
+    const changes = container.querySelector('.pg-goals-changes') as HTMLElement;
+    expect(within(changes).queryByText('Definition of done')).toBeNull();
+    expect(screen.getAllByText('Definition of done')).toHaveLength(1);
+  });
+
+  it('beside modification N\'s row and button when it wrote it, and nowhere else', () => {
+    const onRatify = vi.fn();
+    render(<GoalsPanel goals={withList({ doneWhenVersion: { modification: 4 }, modifications: [mod(5, { ratification: no('unreadable') }), mod(4, { ratification: no('unreadable') })] })} homeProject="project-a" onRatify={onRatify} />);
+    const rows = screen.getAllByRole('listitem').filter((r) => r.classList.contains('pg-goals-mod'));
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]!).queryByText('Definition of done')).toBeNull();
+    expect(within(rows[1]!).getByText('Definition of done')).toBeTruthy();
+    for (const t of LIST) expect(within(rows[1]!).getByText(t)).toBeTruthy();
+    fireEvent.click(within(rows[1]!).getByRole('button', { name: 'Ratify' }));
+    expect(onRatify).toHaveBeenLastCalledWith({ modification: 4 });
+    expect(screen.getAllByText('Definition of done')).toHaveLength(1);
+  });
+
+  it.each([['absent', undefined], ['null', null], ['a version not shown', { modification: 99 }]] as const)(
+    'alone, with its own verdict words and no button, when doneWhenVersion is %s', (_name, version) => {
+      const view = withList({ doneWhenRatification: { ratified: true, source: { kind: 'operator' } }, ...(version === undefined ? {} : { doneWhenVersion: version }) });
+      const { container } = render(<GoalsPanel goals={view} homeProject="project-a" onRatify={vi.fn()} />);
+      const alone = container.querySelector('.pg-goals-donewhen-alone') as HTMLElement;
+      expect(within(alone).getByText('Definition of done')).toBeTruthy();
+      for (const t of LIST) expect(within(alone).getByText(t)).toBeTruthy();
+      expect(within(alone).getByText('Ratified by you')).toBeTruthy();
+      expect(within(alone).queryByRole('button')).toBeNull();
+      expect(screen.getAllByText('Definition of done')).toHaveLength(1);
+    });
+
+  it('alone with no verdict from an older server reads Not recorded', () => {
+    const { container } = render(<GoalsPanel goals={withList({})} homeProject="project-a" />);
+    expect(within(container.querySelector('.pg-goals-donewhen-alone') as HTMLElement).getByText('Not recorded')).toBeTruthy();
+  });
+
+  it('draws nothing when there is no stored definition of done', () => {
+    render(<GoalsPanel goals={withList({ doneWhen: null, doneWhenVersion: { pin: { inShortAt: T0 } } })} homeProject="project-a" onRatify={vi.fn()} />);
+    expect(screen.queryByText('Definition of done')).toBeNull();
+    cleanup();
+    render(<GoalsPanel goals={goals()} homeProject="project-a" />);
+    expect(screen.queryByText('Definition of done')).toBeNull();
+  });
+
+  it('a verdict word this build cannot name reads the fixed word and draws no Ratify button', () => {
+    const odd = { ratified: false, why: 'future-reason', source: null } as unknown as Ratification;
+    render(<GoalsPanel goals={goals({ pinRatification: odd })} homeProject="project-a" onRatify={vi.fn()} />);
+    expect(screen.getByText('Could not read whether this is ratified')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
+  });
+});

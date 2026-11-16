@@ -111,7 +111,7 @@ describe('the store: three states per group, default shadow', () => {
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
-    fresh.exec('ALTER TABLE programs DROP COLUMN ratifiedBy; ALTER TABLE programs DROP COLUMN ratifiedAt; ALTER TABLE programs DROP COLUMN doneWhenBy; ALTER TABLE programme_modifications DROP COLUMN ratifiedBy; ALTER TABLE programme_modifications DROP COLUMN ratifiedAt;');
+    fresh.exec('ALTER TABLE programs DROP COLUMN ratifiedBy; ALTER TABLE programs DROP COLUMN ratifiedAt; ALTER TABLE programs DROP COLUMN doneWhenBy; ALTER TABLE programme_modifications DROP COLUMN ratifiedBy; ALTER TABLE programme_modifications DROP COLUMN ratifiedAt; ALTER TABLE programs DROP COLUMN ratifiedActor; ALTER TABLE programme_modifications DROP COLUMN ratifiedActor;');
     fresh.exec('DROP TABLE response_boots; DROP TABLE response_receipts; DROP TABLE operator_responses;');
     fresh.exec('DROP TABLE overlord_authority_head; DROP TABLE answer_marks; DROP TABLE continuity_soft_renewals; DROP TABLE continuity_renew_calls; DROP TABLE continuity_checkpoints;');
     fresh.exec('DROP TABLE continuity_start_loads; DROP TABLE continuity_quiz_runs; DROP TABLE portfolio_rank_revision; DROP TABLE portfolio_rank; DROP TABLE push_outbox_meta; DROP TABLE push_outbox; ALTER TABLE asks DROP COLUMN reachedOperatorAt; ALTER TABLE operator_items DROP COLUMN reachedOperatorAt;');

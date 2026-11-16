@@ -219,9 +219,10 @@ describe('the closed route table', () => {
     [['items', 'return', '7'], 'POST', '/api/items/7/return'],
     [['items', 'withdraw', '7'], 'POST', '/api/items/7/withdraw'],
     [['items', 'block', '7'], 'POST', '/api/items/7/blocking'],
-    [['goals', 'pin', 'prog-a'], 'POST', '/api/programmes/prog-a/spec'],
-    [['goals', 'modify', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications'],
-    [['goals', 'merged', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications/merged'],
+    // The three goals writes fill the pane's pair and refuse a body that names it (review 2240 F1), so each runs in a pane.
+    [['goals', 'pin', 'prog-a', '--json', '-'], 'POST', '/api/programmes/prog-a/spec'],
+    [['goals', 'modify', 'prog-a', '--json', '-'], 'POST', '/api/programmes/prog-a/modifications'],
+    [['goals', 'merged', 'prog-a', '--json', '-'], 'POST', '/api/programmes/prog-a/modifications/merged'],
     // The goals read (autonomy-default wave A2, D-8126): the pin, `doneWhen` and the open items, behind `goals-read-v1`.
     [['goals', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/goals'],
     // The thirteen Linear rows (D-7669, #1444; `link` since D-8141): every one derives the pane's identity into its query, so each runs in a pane.
@@ -273,7 +274,7 @@ describe('the closed route table', () => {
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
+      || args[0] === 'calls' || (args[0] === 'goals' && args[1] !== 'show') || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -590,7 +591,8 @@ describe('goals show is gated on goals-read-v1 the way the claimant rows are gat
 
   it('the other goals rows are not gated by the goals word', async () => {
     writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
-    await run(['goals', 'pin', 'prog-a', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    plantPane('demo-ws');
+    await run(['goals', 'pin', 'prog-a', '--json', '-'], '{"specPath":"docs/superpowers/specs/2026-11-01-x-design.md"}', { TMUX_PANE: '%7' });
     expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/spec']);
   });
 

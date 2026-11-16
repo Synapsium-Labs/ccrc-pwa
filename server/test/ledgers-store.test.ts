@@ -370,9 +370,9 @@ describe('the spec pin and the modifications (plan PL2)', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
     expect(s.goalsFor('prog-a')).toEqual({ program: 'prog-a', specPath: null, inShort: null, inShortAt: null, doneWhen: null,
-      pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, modifications: [] });
+      pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
     expect(s.goalsFor('prog-z')).toEqual({ program: 'prog-z', specPath: null, inShort: null, inShortAt: null, doneWhen: null,
-      pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, modifications: [] });
+      pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
   });
 
   it('setSpecPin replaces the pin and its In short copy, and stamps the time', () => {
@@ -387,14 +387,14 @@ describe('the spec pin and the modifications (plan PL2)', () => {
   it('goalsFor lists modifications newest first with merged from mergedAt', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
-    const m1 = s.addModification('prog-a', { text: 'First change.', ruling: 'ledger entry 4', itemId: null, pr: 10 }, NOW, { kind: 'coordinator' });
-    const m2 = s.addModification('prog-a', { text: 'Second change.', ruling: null, itemId: 3, pr: 11 }, NOW + 10, { kind: 'coordinator' });
-    const other = s.addModification('prog-b', { text: 'Not ours.', ruling: null, itemId: null, pr: 10 }, NOW + 20, { kind: 'coordinator' });
+    const m1 = s.addModification('prog-a', { text: 'First change.', ruling: 'ledger entry 4', itemId: null, pr: 10 }, NOW);
+    const m2 = s.addModification('prog-a', { text: 'Second change.', ruling: null, itemId: 3, pr: 11 }, NOW + 10);
+    const other = s.addModification('prog-b', { text: 'Not ours.', ruling: null, itemId: null, pr: 10 }, NOW + 20);
     expect(s.markModificationsMerged('prog-a', 10, NOW + 30)).toBe(1);
     const g = s.goalsFor('prog-a');
     expect(g.modifications).toEqual([
-      { id: m2, at: NOW + 10, text: 'Second change.', ruling: null, itemId: 3, pr: 11, merged: false, ratification: { ratified: true, source: { kind: 'coordinator' } } },
-      { id: m1, at: NOW, text: 'First change.', ruling: 'ledger entry 4', itemId: null, pr: 10, merged: true, ratification: { ratified: true, source: { kind: 'coordinator' } } },
+      { id: m2, at: NOW + 10, text: 'Second change.', ruling: null, itemId: 3, pr: 11, merged: false, ratification: { ratified: false, why: 'unreadable', source: { kind: 'item' } } },
+      { id: m1, at: NOW, text: 'First change.', ruling: 'ledger entry 4', itemId: null, pr: 10, merged: true, ratification: { ratified: false, why: 'source-does-not-ratify', source: { kind: 'coordinator' } } },
     ]);
     expect(g.modifications.map((m) => m.id)).not.toContain(other);
     // The other programme's modification on the same PR number was not marked.
@@ -403,8 +403,8 @@ describe('the spec pin and the modifications (plan PL2)', () => {
 
   it('markModificationsMerged marks once: a second call changes nothing and keeps the first time', () => {
     const s = mk();
-    s.addModification('prog-a', { text: 'Change.', ruling: null, itemId: null, pr: 10 }, NOW, { kind: 'coordinator' });
-    s.addModification('prog-a', { text: 'No PR yet.', ruling: null, itemId: null, pr: null }, NOW + 1, { kind: 'coordinator' });
+    s.addModification('prog-a', { text: 'Change.', ruling: null, itemId: null, pr: 10 }, NOW);
+    s.addModification('prog-a', { text: 'No PR yet.', ruling: null, itemId: null, pr: null }, NOW + 1);
     expect(s.markModificationsMerged('prog-a', 10, NOW + 5)).toBe(1);
     expect(s.markModificationsMerged('prog-a', 10, NOW + 99)).toBe(0);
     expect(s.db.prepare('SELECT mergedAt FROM programme_modifications WHERE pr = 10').get()).toEqual({ mergedAt: NOW + 5 });

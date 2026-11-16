@@ -684,23 +684,29 @@ describe('coordinator_calls: one writer per column, every write in coordCallsSto
 // Overlord W1, portfolio B (plan `w1-portfolio.md` Task 4; Table 11.1a, "`ratifiedBy` on each goals version"): the goals
 // versions' ratification columns have the writers the plan names and no other. `ratifiedBy` and `ratifiedAt` are written
 // by `setSpecPin` (a re-pin records its own source) and the operator's `ratifyGoalsVersion` on `programs`, and by
-// `addModification` and `ratifyGoalsVersion` on `programme_modifications`; `doneWhenBy` only in the statements that write
-// `doneWhen` (`setSpecPin`, `setDoneWhen`). MAY ONLY SHRINK. KNOWN WIDTH: a statement split from its verb across string
-// pieces is not seen, as in the census above.
+// `addModification` and `ratifyGoalsVersion` on `programme_modifications`; `ratifiedActor` (review 2240 F7) by the same
+// writers of `programs` and by `ratifyGoalsVersion` alone on a modification (an insert leaves it NULL); `doneWhenBy` only in
+// the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). Review 2240 F2 widened it to the TEXT the source
+// describes: the pin's `specPath`, `inShort`, `inShortAt` and `doneWhen`, and a modification's `text`, `ruling` and
+// `itemId` (keyed by table, since those names are common), so a writer of the text that skips the source is a new entry.
+// MAY ONLY SHRINK. KNOWN WIDTH: a statement split from its verb across string pieces is not seen, as in the census above.
 describe('the goals versions\' ratification columns: every write in ledgersStore.ts, by the plan\'s writers', () => {
-  const COLS = /\b(ratifiedBy|ratifiedAt|doneWhenBy)\b/g;
+  const COLS = /\b(ratifiedBy|ratifiedAt|ratifiedActor|doneWhenBy|doneWhen|inShort|inShortAt|specPath)\b/g;
+  const MOD_TEXT = /\b(text|ruling|itemId)\b/g;
   const writes = (files: readonly string[]): Record<string, string[]> => {
     const out: Record<string, Set<string>> = {};
     for (const f of files) {
       const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-      if (!/ratifiedBy|ratifiedAt|doneWhenBy/.test(text)) continue;
+      if (!/ratifiedBy|ratifiedAt|ratifiedActor|doneWhen|inShort|specPath|programme_modifications/.test(text)) continue;
       const syms = parseFile(f).symbols;
       for (const m of text.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
         const lit = m[0];
         if (!/\b(?:UPDATE|INSERT)\b/.test(lit)) continue;
         const at = m.index!;
         const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
-        for (const c of lit.matchAll(COLS)) (out[c[1]!] ??= new Set()).add(`${rel(f)}#${inner?.name ?? '(module)'}`);
+        const by = `${rel(f)}#${inner?.name ?? '(module)'}`;
+        for (const c of lit.matchAll(COLS)) (out[c[1]!] ??= new Set()).add(by);
+        if (/\bprogramme_modifications\b/.test(lit)) for (const c of lit.matchAll(MOD_TEXT)) (out[`programme_modifications.${c[1]!}`] ??= new Set()).add(by);
       }
     }
     return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, [...s].sort()]));
@@ -709,9 +715,17 @@ describe('the goals versions\' ratification columns: every write in ledgersStore
   const F = `${STORE}#`;
   // `addModification.insert` is the insert closure inside `addModification` (the row and a new list are one act there).
   const EXPECTED = {
+    doneWhen: [`${F}setDoneWhen`, `${F}setSpecPin`],
     doneWhenBy: [`${F}setDoneWhen`, `${F}setSpecPin`],
+    inShort: [`${F}setSpecPin`],
+    inShortAt: [`${F}setSpecPin`],
+    'programme_modifications.itemId': [`${F}addModification.insert`],
+    'programme_modifications.ruling': [`${F}addModification.insert`],
+    'programme_modifications.text': [`${F}addModification.insert`],
+    ratifiedActor: [`${F}ratifyGoalsVersion`, `${F}setSpecPin`],
     ratifiedAt: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
     ratifiedBy: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    specPath: [`${F}setSpecPin`],
   };
 
   it('CONTROL: an UPDATE and an INSERT naming a column are found by their function; a SELECT and a comment are not', async () => {

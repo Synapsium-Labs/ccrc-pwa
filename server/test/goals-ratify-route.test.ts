@@ -66,6 +66,16 @@ describe('the ratify door, armed', () => {
     expect(r.frames()).toBe(1);
   });
 
+  it('(review 2240 F7) the act keeps the account gate\'s actor: its device label and the session hash\'s first 8 hex', async () => {
+    const r = await rig({ armed: true });
+    expect((await ratify(r, 'prog-a', { pin: { inShortAt: PIN_AT } })).statusCode).toBe(200);
+    const row = r.coord.db.prepare("SELECT ratifiedActor FROM programs WHERE slug = 'prog-a'").get() as { ratifiedActor: string | null };
+    expect(row.ratifiedActor).toMatch(/^.+ [0-9a-f]{8}$/);
+    const mod = r.coord.addModification('prog-a', { text: 'ours', ruling: null, itemId: null, pr: null }, PIN_AT);
+    expect((await ratify(r, 'prog-a', { modification: mod })).statusCode).toBe(200);
+    expect(r.coord.db.prepare('SELECT ratifiedActor FROM programme_modifications WHERE id = ?').get(mod)).toEqual({ ratifiedActor: row.ratifiedActor });
+  });
+
   it('a second call answers changed: false, writes nothing and emits no frame', async () => {
     const r = await rig({ armed: true });
     expect((await ratify(r, 'prog-a', { pin: { inShortAt: PIN_AT } })).statusCode).toBe(200);
@@ -87,7 +97,7 @@ describe('the ratify door, armed', () => {
 
   it('another programme\'s modification id, and a programme with no pin, are not-found', async () => {
     const r = await rig({ armed: true });
-    const theirs = r.coord.addModification('prog-b', { text: 'theirs', ruling: null, itemId: null, pr: null }, PIN_AT, { kind: 'item' });
+    const theirs = r.coord.addModification('prog-b', { text: 'theirs', ruling: null, itemId: null, pr: null }, PIN_AT);
     expect((await ratify(r, 'prog-a', { modification: theirs })).json()).toMatchObject({ ok: false, error: 'not-found' });
     expect((await ratify(r, 'prog-b', { pin: { inShortAt: PIN_AT } })).json()).toMatchObject({ ok: false, error: 'not-found' });
     expect(r.frames()).toBe(0);
@@ -95,7 +105,7 @@ describe('the ratify door, armed', () => {
 
   it('a modification of this programme is ratified by its id', async () => {
     const r = await rig({ armed: true });
-    const mod = r.coord.addModification('prog-a', { text: 'ours', ruling: null, itemId: null, pr: null }, PIN_AT, { kind: 'item' });
+    const mod = r.coord.addModification('prog-a', { text: 'ours', ruling: null, itemId: null, pr: null }, PIN_AT);
     expect((await ratify(r, 'prog-a', { modification: mod })).json()).toMatchObject({ ok: true, changed: true });
     expect((await goalsRead(r)).modifications[0]!.ratification).toEqual({ ratified: true, source: { kind: 'operator' } });
   });

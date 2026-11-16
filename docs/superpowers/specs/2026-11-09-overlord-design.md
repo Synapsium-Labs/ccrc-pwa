@@ -2717,13 +2717,14 @@ holds private data and can change state, so it must never take untrusted text ra
     decision model's answer, the Overlord's own notes, and goal text a session wrote. Content informs. It never
     instructs, and no authority flows from it.
 - **Goals carry authority only when they are ratified.** Every goals version carries `ratifiedBy`: an item answer, a
-  request, the operator's door, or `coordinator`. A version the programme's own coordinator wrote counts as ratified,
-  and is shown as "ratified by the coordinator", never as the operator's (item 328). A version any other session wrote
-  counts only once the operator ratifies it. The operator's door is the ratify door,
+  request, the operator's door, or `coordinator`. A pin the programme's own coordinator wrote counts as ratified, and
+  is shown as "ratified by the coordinator", never as the operator's (item 328). A modification it wrote does not: a
+  change to the definition of done is the operator's (O3), so it counts only once the operator ratifies it, as does a
+  version any other session wrote. The operator's door is the ratify door,
   `POST /api/programmes/:slug/goals/ratify`. It names the version by its stamp, the pin's `inShortAt` or a modification
   id, and refuses a pin that changed since the operator read it, so the operator never ratifies text they were not
   shown. It confers authority, so it calls the account gate and refuses `auth-off` while sign-in is dark (the portfolio
-  plan, its question 4). Until W3, only this door and the coordinator's own write ratify: an item answer ratifies from
+  plan, its question 4). Until W3, only this door and the coordinator's own pin ratify: an item answer ratifies from
   W3, when effects exist (§6.3). Only a ratified version counts as goal evidence (§6.3). A bare message id never
   ratifies, because the goals text is the coordinator's own. A version that rests on a relayed request is listed under
   "Changed that matters" with the quote beside it (§4.1). It counts as goal evidence once the operator has opened it
@@ -4067,7 +4068,7 @@ it: the evidence floor and the ask-or-act decider.
     live grant covers it through its effect (§7.2), or, for `state-a-fact`, a cited stated entry resting on an
     operator message covers it (§6.7).
   - **2. Goals and rulings.** Read the programme's goals, `doneWhen`, ledger and recorded rulings. Only a ratified goals
-    version counts as goal evidence: one the operator ratified, or one the programme's own coordinator wrote, shown as
+    version counts as goal evidence: one the operator ratified, or a pin the programme's own coordinator wrote, shown as
     "ratified by the coordinator" (§3.8, item 328).
   - **2b. Precedents.** Read the nearest past questions and how the operator settled them (H21, below).
   - **3. Entries.** Read the five best operator-model entries for this question, quoted in the third person.
@@ -8393,7 +8394,7 @@ table keeps the trail. The body states only the result.
 |---|---|---|
 | 345 | "May the Overlord earn tech-detail decisions from measured outcomes, instead of from your answers?" "Approve §9.5.1 as written." | §9.5.1 is approved and no longer a proposal. Each sentence its table quoted now reads in its new form: §6.3 (H34), §6.5, §6.9 (H44), §7.5, §9.5, Tables 9.5a and 9.5b, §14's switching-on bullet, and the detail horizon in Table 11.5b. It builds in W3 |
 | 327 | "Should the server keep a copy of each Overlord reply when it is written?" "Record each reply in the private store when the turn ends." | Each reply is a row of the private store, `operator-model.db`, written by its one reply writer when the Overlord's turn ends, as the hook's report of that end reaches the server. §9.4's rules apply: the egress mask on the way in, the five callers, no text in `coord.db`, the highest reply id in the privacy journal, and a reply to a message sent off the record is off the record. The checkpoint's thread reads the replies from that record (§3.3.2), and a reply's response row names it (§4.3). The chat plan builds it (its question 8, Task 5) |
-| 328 | "Does a coordinator's own goal count as ratified in the portfolio you rank?" "A coordinator's pin counts, shown as ratified by the coordinator." | A version the programme's own coordinator wrote counts as ratified, shown as "ratified by the coordinator", never as the operator's; a version any other session wrote still needs the operator's ratify door (§3.8). The portfolio plan builds it (its question 1) |
+| 328 | "Does a coordinator's own goal count as ratified in the portfolio you rank?" "A coordinator's pin counts, shown as ratified by the coordinator." | A pin the programme's own coordinator wrote counts as ratified, shown as "ratified by the coordinator", never as the operator's; its modifications, and a version any other session wrote, still need the operator's ratify door (§3.8; O3). The portfolio plan builds it (its question 1) |
 
 *Table B8. What the operator's answers of 2026-11-16 changed.*
 
