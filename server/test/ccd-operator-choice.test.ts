@@ -1643,13 +1643,82 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
 });
 
 // A LONG-LIVED ROLE'S TYPED /model (Overlord W1 ccd arms, Task 5; spec §3.4 H16, "A change of model inside a generation
-// is drift"). Step 1's characterization: on `main` before the skip, a coordinator's acknowledged `/model` is promoted to
-// its route's `class` like any session's.
-describe('a long-lived role\'s typed /model (the Overlord W1 ccd arms)', () => {
-  it('characterization: profile=coordinator, an acknowledged /model opus is promoted to class=opus at the keep', () => {
-    seed(); record({ class: 'fable', profile: 'coordinator' }); const t = now() - 600;
+// is drift"). A `/model` typed into a long-lived role's pane (the route's `profile` names a long-lived launch row, or one
+// ccd cannot decide: `_role_long_lived` rc 0 or 2) is never written to its route: its class is the designation's. One
+// line says so; its `/effort` is promoted as today. On `main` before the skip, a coordinator's /model was promoted
+// (Step 1's characterization, now flipped). `_role_long_lived` is read once per call, lazily, at the first model line.
+describe('a long-lived role\'s typed /model is never adopted (the Overlord W1 ccd arms)', () => {
+  const skipped = (id = ID): string[] => swapLog().split('\n')
+    .filter((l) => l.includes(`operator-choice ${id}: /model opus is not adopted for a long-lived role; its class is the designation's`));
+
+  it.each([['overlord'], ['coordinator'], ['nosuchrole']])('profile %s: an acknowledged /model opus is not promoted, one line says so, and /effort high still is', (p) => {
+    seed(); record({ class: 'fable', effort: 'low', profile: p }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 30, 'effort', 'high'), ack(t + 30, EFFORT_ACK('high'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(skipped()).toHaveLength(1);
+  });
+
+  it.each([['plain'], [null]])('profile %s: the /model is promoted as today, and nothing is said of a long-lived role', (p) => {
+    seed(); record({ class: 'fable', ...(p ? { profile: p } : {}) }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
     expect(keep()).toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('opus');
+    expect(swapLog()).not.toContain('long-lived role');
+  });
+
+  it('a /model older than the class field says nothing (the record wins when newer, as today)', () => {
+    seed(); record({ class: 'fable', profile: 'coordinator' }, ID, 60); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(skipped()).toEqual([]);
+  });
+
+  it('_role_long_lived is asked once per call: an acknowledged /model and a later unacknowledged one, one read, no drift line', () => {
+    seed(); record({ class: 'fable', profile: 'coordinator' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 30, 'model', 'sonnet'), turn(t + 31)]);
+    const count = 'eval "$(declare -f _role_long_lived | sed \'1s/^_role_long_lived/_rll_real/\')"; '
+      + '_role_long_lived() { echo read >> "$HOME/rll-reads"; _rll_real "$@"; };';
+    expect(h.sh(`${count} _operator_choice_keep ${ID}; echo "rc=$?"`)).toBe('rc=0');
+    expect(fs.readFileSync(path.join(h.home, 'rll-reads'), 'utf8')).toBe('read\n');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(driftLines(), 'a long-lived role\'s /model drift is not its to report').toEqual([]);
+    expect(skipped()).toHaveLength(1);
+  });
+
+  it('control: the same two model lines under profile plain promote the acknowledged one and report the drift once', () => {
+    seed(); record({ class: 'fable', profile: 'plain' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 30, 'model', 'sonnet'), turn(t + 31)]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(driftLines()).toHaveLength(1);
+  });
+
+  it('no model line: _role_long_lived is never asked', () => {
+    seed(); record({ class: 'fable', profile: 'coordinator' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'effort', 'high'), ack(t, EFFORT_ACK('high'))]);
+    const count = 'eval "$(declare -f _role_long_lived | sed \'1s/^_role_long_lived/_rll_real/\')"; '
+      + '_role_long_lived() { echo read >> "$HOME/rll-reads"; _rll_real "$@"; };';
+    expect(h.sh(`${count} _operator_choice_keep ${ID}; echo "rc=$?"`)).toBe('rc=0');
+    expect(fs.existsSync(path.join(h.home, 'rll-reads'))).toBe(false);
+    expect(h.reg(ID, 'effort')).toBe('high');
+  });
+
+  it('the rotation path (_sync_uuid with an incoming transcript) skips it too', () => {
+    const NEXT = 'deadbeef-0000-4000-8000-000000000001';
+    seed(); record({ class: 'fable', effort: 'low', profile: 'overlord' });
+    writeTranscript([cmd(now() - 600, 'effort', 'high'), ack(now() - 600, EFFORT_ACK('high'))]);
+    const inc = path.join(path.dirname(h.sh(`_transcript_path ${ID}`)), `${NEXT}.jsonl`);
+    fs.writeFileSync(inc, [cmd(now() - 5, 'model', 'opus'), ack(now() - 5, MODEL_ACK('Opus 5.5'))].join('\n') + '\n');
+    const dir = path.join(h.home, '.claude', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: NEXT }));
+    expect(h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; }; _sync_uuid ${ID}; printf 'rc=%s' "$?"`)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(NEXT);
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(skipped()).toHaveLength(1);
   });
 });

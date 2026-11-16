@@ -24091,7 +24091,7 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
 }
 
 _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid AND the config dir the caller already resolved for it (the promotion makes no call into the registry context for it; no config dir, no incoming read), that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
-  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv cx=""
+  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv cx="" ll=""
   local -A ackv=() acka=() ackn=() drifta=()
   local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
@@ -24150,7 +24150,7 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
-      model|drift-model)   [[ -n "$cx" ]] && continue; field=class ;;
+      model|drift-model)   [[ -n "$cx" ]] && continue; [[ -n "$ll" ]] || { _role_long_lived "$id"; ll=$(( $? != 1 )); }; field=class ;;   # ll: read once, lazily (Overlord W1: a long-lived role's /model is not adopted, below)
       effort|drift-effort) field=effort ;;
       *)                   continue ;;
     esac
@@ -24159,8 +24159,8 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
       (( 10#$fm >= 10#$at )) && continue
     fi
     case "$kind" in
-      drift-*) (( drift++ )) || _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;   # once per keep, both kinds or one
-      model)   want=$(_model_class_of "$val") || want="" ;;
+      drift-*) [[ "$kind$ll" == drift-model1 ]] && continue; (( drift++ )) || _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;   # once per keep, both kinds or one
+      model)   [[ "$ll" == 1 ]] && { _operator_choice_say "$id" "/model $val is not adopted for a long-lived role; its class is the designation's"; continue; }; want=$(_model_class_of "$val") || want="" ;;
       effort)  want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
     esac
     if [[ -z "$want" ]]; then
