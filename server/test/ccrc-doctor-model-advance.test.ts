@@ -17,7 +17,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster } from './fixtures/advanceCases.js';
 
@@ -347,7 +347,8 @@ describe('model-sessions-behind', () => {
     plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
     plantSession(h);
     expect(check(h, 'model-sessions-behind').out.split('\n')[1]).toBe(RELAUNCH);
-    const ccd = fs.readFileSync(join(REPO, 'ccd', 'ccd'), 'utf8');
+    // ccd's path is spelled once, in ccdWsHelpers.ts (`single-definition/core-vocab.test.ts`).
+    const ccd = fs.readFileSync(CCD, 'utf8');
     expect(ccd).toMatch(/^ {2}stop\)\s+shift; cmd_stop "\$@" ;;$/m);
     expect(ccd).toMatch(/^ {2}start\)\s+shift; cmd_start "\$@" ;;$/m);
     expect(ccd).not.toMatch(/^ {2}restart\)/m);

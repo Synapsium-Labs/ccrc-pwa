@@ -5458,7 +5458,7 @@ describe('a stale catalogue under a class model with no measured window (D-8685,
   const MEASURED_OLD = { 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 };
   const UNMEASURED_OLD = { 'model-6-alpha': 400000, 'model-6-beta': 400000 };
   const CLIENT_ROOM = { tokens: 200000, rule: 'default', unmeasured: ['model-6.1-gamma'], model: 'model-6.1-gamma',
-    source: 'client' };
+    source: 'client' as const };
   /** The move notice (D-8384) the lane already carries in case (a). */
   const MOVE_NOTICE = unmeasuredMoveNotice('lane-a', { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
     fromTokens: 400000, how: 'advance', cause: 'newer' }, 200000);
