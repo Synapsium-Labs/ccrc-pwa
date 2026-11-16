@@ -11,8 +11,8 @@ by slug, measurements and what is left for landing. The coordinator folds them i
   site of a new lane source; `ccrc-api programme remaining`; the wave-boundary reference paragraph.
 - **Live at merge.** The door needs the box token, attribution and ownership. Nothing reads the two tables yet but the
   tests. `EDGE_CLEARING_SHIPPED` is `false`.
-- **Migration slot.** It is entry 83 by position on this branch. Responses B (#2914) and portfolio B (#2904) each add one
-  ahead of it, so it lands at 85 or later, renumbered at landing on the coordinator's word.
+- **Migration slot.** It is entry 84 by position on this branch after one merge of `main` (the coordinator's word): portfolio
+  B (#2904) landed 83. Other open PRs hold 84 too; whoever lands second renumbers at landing, on the coordinator's word.
 
 ## Departures, by slug
 
@@ -50,7 +50,9 @@ by slug, measurements and what is left for landing. The coordinator folds them i
 - **The landing-order holder's consent is narrow.** It covers exactly two hunks of `server/src/coord/routes.ts` (the
   import and the registration beside the call record's) and, in `README.md`, `eighty-five` to `eighty-six` at
   `b99bc6390`. A recount at landing (another lane landing first) needs that holder's fresh consent for the new words.
-- **Count words to re-derive after merging `main`:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
+- **Counts re-derived after the merge of `main`** (route 247 behind the ratify door's 246; HTTP 244, gated 148, exempt 95;
+  `user_version` 84; `run-close-switch.test.ts` replays thirty-one; the lane words and the `ccrc-api` rows unchanged, since
+  the ratify door is session-gated and adds no client row). **To re-derive again if another lands first:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
   count word in `run-close-switch.test.ts`, `ROUTES.length` and the HTTP, gated and exempt counts in `auth-gate.test.ts`,
   the route count in `gate.ts`'s header, the machine-lane words in `gate.ts`, `README.md` and `box-token-census.test.ts`,
   and the `ccrc-api` row count (three sites).

@@ -299,7 +299,9 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
   // The portfolio (Overlord W1): the operator's read and the rank door.
   '/api/portfolio', '/api/portfolio/rank',
   // The answer marks (Overlord W1): the operator's two marks on a Waiting on you row; they work dark and record `flag-off`.
-  '/api/answer-marks'];
+  '/api/answer-marks',
+  // The ratify door (Overlord W1, portfolio B): the operator ratifies a goals version; it takes the account gate, so dark it refuses.
+  '/api/programmes/:slug/goals/ratify'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The

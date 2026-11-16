@@ -37,6 +37,8 @@
 #     measure of a leased tree; it writes nothing, and starts protected as its writer does)
 #   delegation-adopt <any tail>                   — likewise (delegation broker wave 5 PR8b, D-8112: the server's raise or
 #     lower of the adoption switch, the one writer of $REG/delegation-adopt)
+#   keep-awake <any tail>                         — likewise (the Overlord W1 ccd arms: the server's set or clear of one
+#     session's two sleep markers, their one writer in the tree)
 #   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
 #   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
@@ -67,8 +69,8 @@
 # stopped by it, and the window between hashing the body and Bash opening it
 # is not closed.
 #
-# THE BODY'S LIBRARIES (#1279). The body loads four more files beside it, `lib/disk-retention.sh`,
-# `lib/train-proof.sh`, `lib/delegation-lease.sh` and `lib/pool-set.sh`, and pins each file's SHA-256 in its own text, which THIS digest covers: the launcher pins the
+# THE BODY'S LIBRARIES (#1279). The body loads five more files beside it, `lib/disk-retention.sh`,
+# `lib/train-proof.sh`, `lib/delegation-lease.sh`, `lib/pool-set.sh` and `lib/long-lived.sh`, and pins each file's SHA-256 in its own text, which THIS digest covers: the launcher pins the
 # body, the body pins the libraries.
 # The body reads the library once, hashes what it read and evaluates what it hashed; a missing, linked or changed
 # file refuses the start with status 125 before any verb runs. The path comes from the body's own location, so no
@@ -167,7 +169,7 @@ def folds_to(token, word):
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):

@@ -614,6 +614,15 @@ describe('POST /api/programmes/:slug/spec (plan PL3, Review Focus 5)', () => {
     expect(r.waiting()).toBe(1);
   });
 
+  it('(question 1) the pin records the coordinator as its source, and reads ratified by it (Overlord W1, portfolio B)', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'What the programme builds.', doneWhen: ['It ships.'] });
+    expect(r.coord.db.prepare("SELECT ratifiedBy, doneWhenBy FROM programs WHERE slug = 'prog-a'").get()).toEqual({ ratifiedBy: 'coordinator', doneWhenBy: 'pin' });
+    expect(r.coord.goalsFor('prog-a')).toMatchObject({
+      pinRatification: { ratified: true, source: { kind: 'coordinator' } }, doneWhenRatification: { ratified: true, source: { kind: 'coordinator' } },
+    });
+  });
+
   it.each([
     ['a path with ..', 'docs/superpowers/specs/../x.md'],
     ['a plans path', 'docs/superpowers/plans/x.md'],
@@ -699,6 +708,17 @@ describe('the definition of done on the pin and the modification (D-8126)', () =
     const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', itemId: mine, doneWhen: ['z'] });
     expect(res.statusCode).toBe(200);
     expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['z']);
+    // Overlord W1, portfolio B: the row rests on the item it cites, and the definition of done takes that row's verdict,
+    // which is not ratified until the item is answered (and, in W1, not even then: question 3).
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.modifications[0]!.ratification).toEqual({ ratified: false, why: 'item-not-answered', source: { kind: 'item' } });
+    expect(g.doneWhenRatification).toEqual(g.modifications[0]!.ratification);
+  });
+
+  it('a modification with no itemId rests on the coordinator that wrote it (Overlord W1, portfolio B)', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', ruling: 'agreed' });
+    expect(r.coord.db.prepare("SELECT ratifiedBy FROM programme_modifications WHERE program = 'prog-a'").get()).toEqual({ ratifiedBy: 'coordinator' });
   });
 
   it('a modification with doneWhen and neither ruling nor itemId is done-when-needs-ruling and writes neither', async () => {

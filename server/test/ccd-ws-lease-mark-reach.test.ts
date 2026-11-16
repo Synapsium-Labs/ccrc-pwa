@@ -63,6 +63,9 @@ const SHAPES: ReadonlyArray<readonly [string, readonly string[]]> = [
   // PR8b (D-8112, review 1665 N1): the adoption switch's one writer, protected as ws-lease-mark is.
   ['delegation-adopt alone', ['delegation-adopt']],
   ['delegation-adopt on', ['delegation-adopt', '--state', 'on']],
+  // The Overlord W1 ccd arms (plan Task 3): the sleep markers' one writer, protected as delegation-adopt is.
+  ['keep-awake alone', ['keep-awake']],
+  ['keep-awake on', ['keep-awake', '--session', 'demo-quiet-basin', '--state', 'on']],
 ];
 
 describe('ws-lease-mark, ws-lease-audit and delegation-adopt are protected shapes at both classifiers', () => {
@@ -92,8 +95,10 @@ describe('ws-lease-mark, ws-lease-audit and delegation-adopt are protected shape
     expect(echoed().flags.includes('p')).toBe(true);
     expect(direct(['DELEGATION-ADOPT', '--state', 'on'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
     expect(echoed().flags.includes('p')).toBe(true);
+    expect(direct(['Keep-Awake', '--session', 'x', '--state', 'on'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
+    expect(echoed().flags.includes('p')).toBe(true);
     for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark'], ['ws-lease-auditx'], ['caps', 'ws-lease-audit'],
-      ['delegation-adoptx'], ['caps', 'delegation-adopt']]) {
+      ['delegation-adoptx'], ['caps', 'delegation-adopt'], ['keep-awakex'], ['caps', 'keep-awake']]) {
       expect(direct(argv).code).toBe(0);
       expect(echoed().flags.includes('p'), argv.join(' ')).toBe(false);
     }
@@ -124,5 +129,39 @@ describe('delegation-adopt through the installed direct entry, on the real body'
     }
     expect(direct(['delegation-adopt', '--state', 'on']).code, 'CONTROL: the exact verb raises it').toBe(0);
     expect(fs.existsSync(marker())).toBe(true);
+  }, 60_000);
+});
+
+// The Overlord W1 ccd arms (plan Task 3): the REAL body behind the rendered launcher. `on` and `off` work through it, and a
+// case-folded spelling under an inherited `nocasematch` starts under `-p`, where the dispatcher compares exactly, matches no
+// verb, and writes nothing.
+describe('keep-awake through the installed direct entry, on the real body', () => {
+  const ID = 'demo-quiet-basin';
+  const reg = (f: string): string => path.join(h.home, '.cc-sessions', `${ID}.${f}`);
+  const seed = (): void => { fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true }); fs.writeFileSync(reg('uuid'), 'u\n'); };
+
+  it('on and off still work through the launcher', () => {
+    de = installDirectEntry(h.home);
+    seed();
+    const on = direct(['keep-awake', '--session', ID, '--state', 'on']);
+    expect([on.code, on.stdout.trim()], on.stderr).toEqual([0, `awake ${ID}`]);
+    expect(fs.readFileSync(reg('no-roll'), 'latin1')).toBe('keep-awake v1');
+    expect(fs.readFileSync(reg('no-hibernate'), 'latin1')).toBe('keep-awake v1');
+    const off = direct(['keep-awake', '--session', ID, '--state', 'off']);
+    expect([off.code, off.stdout.trim()], off.stderr).toEqual([0, `released ${ID}`]);
+    expect(fs.existsSync(reg('no-roll'))).toBe(false);
+    expect(fs.existsSync(reg('no-hibernate'))).toBe(false);
+  }, 60_000);
+
+  it('KEEP-AWAKE with BASHOPTS=nocasematch exits non-zero and writes nothing, while the exact verb writes both', () => {
+    de = installDirectEntry(h.home);
+    seed();
+    for (const verb of ['KEEP-AWAKE', 'Keep-Awake']) {
+      const r = direct([verb, '--session', ID, '--state', 'on'], { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' });
+      expect(r.code, `${verb}: ${r.stderr.slice(0, 200)}`).not.toBe(0);
+      expect(fs.existsSync(reg('no-roll')), `${verb} wrote a marker`).toBe(false);
+    }
+    expect(direct(['keep-awake', '--session', ID, '--state', 'on']).code, 'CONTROL: the exact verb writes them').toBe(0);
+    expect(fs.existsSync(reg('no-roll'))).toBe(true);
   }, 60_000);
 });
