@@ -3410,9 +3410,9 @@ export const MIGRATIONS: readonly string[] = [
   // there after 48 hours. `programme_pairs`: one row per EPISODE of a pair key (`<kind>:<a>:<b>`), at most one standing
   // (closedAt NULL), written by `programmePairsStore.ts`. Every column PR B writes (mailedAt, ruled, ruledAt, ruledBy) is here.
   // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 84` takes rule 3, never names
-  // them. Granted 87 by the coordinator (84 to 86 are granted to queued W1 and W2 pieces); it is 84 by position here, and
-  // the coordinator renumbers it at landing. RE-MEASURE the slot before the PR and before merge (it must print 83 before
-  // this entry is counted):
+  // them. The next slot on the main this branch merged (83 there); other open PRs hold 84 too, so the second to land
+  // renumbers at landing, on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 83
+  // before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
