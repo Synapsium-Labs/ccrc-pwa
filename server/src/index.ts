@@ -14,6 +14,7 @@ import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
 import { bootPushOutbox } from './pushSender.js';
+import { responseStampNow } from './responses/stamp.js';
 import { PerfRecorder } from './perf/recorder.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { recordCcdVerbs } from './fleetstate.js';
@@ -130,6 +131,10 @@ if (!landingReplay.ok) {
 // connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
 // belongs to a process that died.
 bootPushOutbox(coord, time.clock);
+// The response record's boot (Overlord W1, question 17): one `response_boots` row, before anything can push, so every
+// response row this process writes carries this boot's epoch (or `unmeasured` when the row could not be written).
+const responseBoot = coord.recordResponseBoot(build?.sha ?? null, time.clock.wall());
+if (!responseBoot.ok) console.warn(`ccrc-server: response record: ${responseBoot.detail}; this process's response rows are stamped unmeasured`);
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -395,6 +400,7 @@ const masker = new SecretMasker({
   },
 });
 deps.masker = masker;
+deps.responseStamp = () => responseStampNow(responseBoot);
 push?.setMasker(masker);
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
 // ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher

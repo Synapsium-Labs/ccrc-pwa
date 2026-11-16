@@ -64,7 +64,8 @@ import { landingStoreOver } from './landingFixture.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { stepRoster } from './fixtures/advanceCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
-import { installPush, pushDeps, pushSeam, type PushSeam } from './pushSeam.js';
+import { installPush as installSeam, pushDeps, pushSeam, type PushSeam } from './pushSeam.js';
+import type { ResponseStamp } from '../../shared/responses.js';
 import { doorInsOf } from './questionDoorIns.js';
 import {
   CHILD as AF_CHILD, PARENT as AF_PARENT, TOK as AF_TOK, hookInput, requestBody, standardFixture, uuidOf, type Approvals,
@@ -97,7 +98,17 @@ afterEach(async () => {
   removeTmpFixtures();
 });
 
-const strict = (got: readonly PushPayload[], want: readonly PushPayload[]): void => { expect([...got]).toStrictEqual([...want]); };
+/** Each payload as it was, and one named field more (Overlord W1 responses A, C67): `pushId`, the outbox row's id, on a
+ *  push whose response row was written, as 32 lowercase hex. Nothing else of a payload changes. */
+const strict = (got: readonly PushPayload[], want: readonly PushPayload[]): void => {
+  for (const p of got) if ('pushId' in p) expect(p.pushId).toMatch(/^[0-9a-f]{32}$/);
+  expect(got.map(({ pushId: _id, ...p }) => p)).toStrictEqual([...want]);
+};
+/** Every rig's deps carry the response record's stamp, as `index.ts` sets it, so a push with a store and a clock gets its
+ *  response row and its push id (the seam itself is unchanged for the other suites that install it). */
+const STAMP: ResponseStamp = { boot: { kind: 'measured', epoch: 1 }, restore: { kind: 'unmeasured' } };
+const installPush = <T extends object>(deps: T, seam: PushSeam | null): T =>
+  installSeam(Object.assign(deps, { responseStamp: (): ResponseStamp => STAMP }), seam);
 
 const SID = 'lane-a-project-a';       // the session under test
 const SID_B = 'lane-b-project-a';     // a second session of the same project

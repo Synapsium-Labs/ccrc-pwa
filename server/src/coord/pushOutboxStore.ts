@@ -14,6 +14,7 @@ import { NEEDED_BY_LEVELS, type NeededBy } from '../../../shared/ledgers.js';
 import type { PushPayload } from '../push.js';
 import { asSendVerdict, type PreparedPush, type PushDue } from '../pushOutbox.js';
 import { operatorWasShown } from './ledgersStore.js';
+import { insertPushResponseInTx, landPushVerdictInTx, type PushResponseOf } from './responsesStore.js';
 import { tx } from './tx.js';
 
 /** The payload the outbox stores: a `PushPayload` with its collapse key, so every row written with a payload has a tag,
@@ -60,6 +61,41 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 
 function mustMove(from: OutboxState | null, to: OutboxState, actor: OutboxActor, fn: string): void {
   if (!outboxMoveAllowed(from, to, actor)) throw new Error(`${fn}: ${actor} may not move a row ${from ?? '(new)'} -> ${to}`);
+}
+
+/** One statement group in a transaction: its own when none is open, inline in the caller's when one is, since
+ *  `tx.ts#tx` does not nest (plan w1-responses Task 3). */
+const inTx = <T>(db: DatabaseSync, fn: () => T): T => (db.isTransaction ? fn() : tx(db, fn));
+
+/** The response row's side of an outbox write (Overlord W1, the response record, C67). Whether the push's response row
+ *  stands under its push id after this write, and when a write of it threw, why. A throw is caught here, inside the
+ *  outbox's transaction, so a failed response write never costs the move it rides (fail closed toward the operator);
+ *  the sender logs the detail, once per cause, so it names no push id. */
+export interface ResponseSide { readonly responseWritten: boolean; readonly responseDetail?: string }
+const hasActions = (p: OutboxPayload): boolean => (p.actions?.length ?? 0) > 0;
+/** The push row for a push about to be sent: inserted with `response` when given (its tag and actions read from the
+ *  payload being sent; slug tag-and-actions-from-the-claimed-payload), or, with none (an unbound row's retry, which has
+ *  no label to hand), whether one already stands under the id. Either way `responseWritten` says the row is there. */
+function pushResponseSide(db: DatabaseSync, pushId: string, payload: OutboxPayload, response: PushResponseOf | undefined, at: number): ResponseSide {
+  try {
+    if (response === undefined) {
+      return { responseWritten: stmt(db, "SELECT 1 FROM operator_responses WHERE kind = 'push' AND pushId = ?").get(pushId) !== undefined };
+    }
+    insertPushResponseInTx(db, { ...response, pushId, tag: payload.tag, hasActions: hasActions(payload), at });
+    return { responseWritten: true };
+  } catch (e) {
+    return { responseWritten: false, responseDetail: `a push's response row was not written (${message(e)}); it is sent with no push id` };
+  }
+}
+/** A landed verdict's side on the push row (`landPushVerdictInTx`, the sender's), caught as `pushResponseSide` is. */
+function landResponse(db: DatabaseSync, pushId: string, verdict: PushSendVerdict | null, to: OutboxState, at: number): string | undefined {
+  const accepted = verdict?.kind === 'sent' ? verdict.subs.filter((x) => x.verdict === 'accepted').map((x) => x.endpointHash) : [];
+  try {
+    landPushVerdictInTx(db, pushId, { accepted, terminal: isTerminal(to), answered: to !== 'unknown' }, at);
+    return undefined;
+  } catch (e) {
+    return `a push's verdict did not land on its response row (${message(e)})`;
+  }
 }
 
 const COLS = 'id, pushId, sourceKind, sourceId, payload, tag, state, createdAt, armedAt, claimSeq, attempts, claimedAt, '
@@ -233,16 +269,20 @@ export function armBoundRowInTx(db: DatabaseSync, source: OutboxSource, sourceId
  *  still send (C67). It always commits in its own transaction and never joins a caller's open one: a row a caller's
  *  rollback took back would hand its id, and its attempt's late verdict, to the next insert (review 2150 F7, slug
  *  unbound-insert-commits-alone), so inside a transaction it writes nothing and the push is sent with no row. */
-export function insertUnboundRow(db: DatabaseSync, row: { readonly pushId: string; readonly payload: OutboxPayload; readonly at: number }):
-  { readonly ok: true; readonly id: number; readonly claimSeq: number } | { readonly ok: false; readonly detail: string } {
+export function insertUnboundRow(db: DatabaseSync, row: { readonly pushId: string; readonly payload: OutboxPayload; readonly at: number },
+  response?: PushResponseOf): ({ readonly ok: true; readonly id: number; readonly claimSeq: number } & ResponseSide) | { readonly ok: false; readonly detail: string } {
   if (db.isTransaction) return { ok: false, detail: 'push_outbox insert refused inside an open transaction' };
   try {
     mustMove(null, 'sending', 'sender', 'insertUnboundRow');
     const insert = stmt(db, 'INSERT INTO push_outbox (pushId, payload, tag, state, createdAt, armedAt, claimSeq, attempts, claimedAt) '
       + "VALUES (?, ?, ?, 'sending', ?, ?, 1, 1, ?)");
-    const write = (): number => Number(insert.run(row.pushId, JSON.stringify(row.payload), row.payload.tag, row.at, row.at, row.at).lastInsertRowid);
-    const id = tx(db, write);
-    return { ok: true, id, claimSeq: 1 };
+    // The push's response row commits with the insert, before anything is sent (C67; plan w1-responses Task 3).
+    const write = (): { id: number; side: ResponseSide } => {
+      const id = Number(insert.run(row.pushId, JSON.stringify(row.payload), row.payload.tag, row.at, row.at, row.at).lastInsertRowid);
+      return { id, side: response === undefined ? { responseWritten: false } : pushResponseSide(db, row.pushId, row.payload, response, row.at) };
+    };
+    const { id, side } = tx(db, write);
+    return { ok: true, id, claimSeq: 1, ...side };
   } catch (e) {
     return { ok: false, detail: `push_outbox insert failed: ${message(e)}` };
   }
@@ -250,24 +290,29 @@ export function insertUnboundRow(db: DatabaseSync, row: { readonly pushId: strin
 
 /** A won claim: its number, and what the attempt's verdict is decided over (the backoff's count since the last arm, the
  *  horizon's start) and sends (the stored payload; null only for a row that cannot be read, sealed by the sender). */
-export interface OutboxClaim {
+export interface OutboxClaim extends ResponseSide {
   readonly changed: true; readonly claimSeq: number; readonly attempts: number; readonly armedAt: number;
-  readonly payload: OutboxPayload | null;
+  readonly payload: OutboxPayload | null; readonly pushId: string;
 }
 
 /** One attempt's claim: `pending` (whatever the clock) or a `retrying` row whose `nextAttemptAt` has come to `sending`,
  *  `attempts + 1` and `claimSeq + 1`, in one statement. A row in any other state is not claimed (a drain or a boot won
  *  it), nor a retry before its time, and either answers `changed: false` with no claim number. */
-export function claimOutboxRow(db: DatabaseSync, id: number, at: number): OutboxClaim | { readonly changed: false } {
+export function claimOutboxRow(db: DatabaseSync, id: number, at: number, response?: PushResponseOf): OutboxClaim | { readonly changed: false } {
   mustMove('pending', 'sending', 'sender', 'claimOutboxRow');
   mustMove('retrying', 'sending', 'sender', 'claimOutboxRow');
-  const r = stmt(db, "UPDATE push_outbox SET state = 'sending', attempts = attempts + 1, claimSeq = claimSeq + 1, claimedAt = ? "
-    + "WHERE id = ? AND (state = 'pending' OR (state = 'retrying' AND nextAttemptAt <= ?)) RETURNING claimSeq, attempts, armedAt, payload")
-    .get(at, id, at) as { claimSeq: number; attempts: number; armedAt: number; payload: unknown } | undefined;
-  if (r === undefined) return { changed: false };
-  let payload: OutboxPayload | null;
-  try { payload = r.payload === null ? null : payloadOf(r.payload); } catch { payload = null; }
-  return { changed: true, claimSeq: Number(r.claimSeq), attempts: Number(r.attempts), armedAt: Number(r.armedAt), payload };
+  // The claim and the push's response row in one transaction (C67: the row before the send).
+  return inTx(db, (): OutboxClaim | { readonly changed: false } => {
+    const r = stmt(db, "UPDATE push_outbox SET state = 'sending', attempts = attempts + 1, claimSeq = claimSeq + 1, claimedAt = ? "
+      + "WHERE id = ? AND (state = 'pending' OR (state = 'retrying' AND nextAttemptAt <= ?)) RETURNING claimSeq, attempts, armedAt, payload, pushId")
+      .get(at, id, at) as { claimSeq: number; attempts: number; armedAt: number; payload: unknown; pushId: unknown } | undefined;
+    if (r === undefined) return { changed: false };
+    let payload: OutboxPayload | null;
+    try { payload = r.payload === null ? null : payloadOf(r.payload); } catch { payload = null; }
+    const pushId = String(r.pushId);
+    const side = payload === null ? { responseWritten: false } : pushResponseSide(db, pushId, payload, response, at);
+    return { changed: true, claimSeq: Number(r.claimSeq), attempts: Number(r.attempts), armedAt: Number(r.armedAt), payload, pushId, ...side };
+  });
 }
 
 /** A bound row its source re-read settled, or `pushDue` silenced: `pending` or `retrying` to `silent`, its payload nulled. */
@@ -288,16 +333,23 @@ export type OutboxVerdictMove =
 /** One attempt's verdict, landing only on the claim it answers (`claimSeq`), so a late answer from an older attempt
  *  changes nothing (slug claim-seq-ties-the-verdict). The one writer of `pushedAt`, at the first `sent` only; a terminal
  *  move nulls the payload and sets `settledAt`. */
-export function markOutboxVerdict(db: DatabaseSync, id: number, claimSeq: number, move: OutboxVerdictMove, at: number): { changed: boolean } {
+export function markOutboxVerdict(db: DatabaseSync, id: number, claimSeq: number, move: OutboxVerdictMove, at: number):
+  { readonly changed: boolean; readonly responseDetail?: string } {
   const { to, verdict } = move;
   mustMove('sending', to, 'sender', 'markOutboxVerdict');
   const nextAttemptAt = move.to === 'retrying' ? move.nextAttemptAt : null;
   const terminal = isTerminal(to) ? 1 : 0;
-  return changedOf(stmt(db, 'UPDATE push_outbox SET state = ?, verdict = ?, nextAttemptAt = ?, '
-    + "pushedAt = CASE WHEN ? = 'sent' AND pushedAt IS NULL THEN ? ELSE pushedAt END, "
-    + 'payload = CASE WHEN ? = 1 THEN NULL ELSE payload END, settledAt = CASE WHEN ? = 1 THEN ? ELSE settledAt END '
-    + "WHERE id = ? AND state = 'sending' AND claimSeq = ?")
-    .run(to, verdict === null ? null : JSON.stringify(verdict), nextAttemptAt, to, at, terminal, terminal, at, id, claimSeq));
+  // One transaction: the outbox move, and only when it changed, its verdict on the push's response row (C67).
+  return inTx(db, () => {
+    const r = stmt(db, 'UPDATE push_outbox SET state = ?, verdict = ?, nextAttemptAt = ?, '
+      + "pushedAt = CASE WHEN ? = 'sent' AND pushedAt IS NULL THEN ? ELSE pushedAt END, "
+      + 'payload = CASE WHEN ? = 1 THEN NULL ELSE payload END, settledAt = CASE WHEN ? = 1 THEN ? ELSE settledAt END '
+      + "WHERE id = ? AND state = 'sending' AND claimSeq = ? RETURNING pushId")
+      .get(to, verdict === null ? null : JSON.stringify(verdict), nextAttemptAt, to, at, terminal, terminal, at, id, claimSeq) as { pushId: unknown } | undefined;
+    if (r === undefined) return { changed: false };
+    const responseDetail = landResponse(db, String(r.pushId), verdict, to, at);
+    return responseDetail === undefined ? { changed: true } : { changed: true, responseDetail };
+  });
 }
 
 /** Whether an unbound row's push was replaced: a newer row under the same tag that a device took (`sent`), so the older
@@ -319,16 +371,24 @@ export function openOutboxRows(db: DatabaseSync): OutboxRead {
 
 /** The boot pass's seal: a `sending` row (an attempt a dead process claimed) to `unknown`, or a stale `pending` or
  *  `retrying` row to `failed`. */
-export function sealAtBoot(db: DatabaseSync, id: number, to: 'unknown' | 'failed', at: number): { changed: boolean } {
+export function sealAtBoot(db: DatabaseSync, id: number, to: 'unknown' | 'failed', at: number):
+  { readonly changed: boolean; readonly responseDetail?: string } {
   if (to === 'unknown') {
+    // A claim a dead process held may have been taken: its response row stays `pending` (no verdict lands).
     mustMove('sending', 'unknown', 'boot', 'sealAtBoot');
     return changedOf(stmt(db, "UPDATE push_outbox SET state = 'unknown', payload = NULL, settledAt = ? WHERE id = ? AND state = 'sending'")
       .run(at, id));
   }
   mustMove('pending', 'failed', 'boot', 'sealAtBoot');
   mustMove('retrying', 'failed', 'boot', 'sealAtBoot');
-  return changedOf(stmt(db, "UPDATE push_outbox SET state = 'failed', payload = NULL, settledAt = ? "
-    + "WHERE id = ? AND state IN ('pending', 'retrying')").run(at, id));
+  // A stale row was refused, so answered: its never-delivered response row goes with it, in the seal's transaction.
+  return inTx(db, () => {
+    const r = stmt(db, "UPDATE push_outbox SET state = 'failed', payload = NULL, settledAt = ? "
+      + "WHERE id = ? AND state IN ('pending', 'retrying') RETURNING pushId").get(at, id) as { pushId: unknown } | undefined;
+    if (r === undefined) return { changed: false };
+    const responseDetail = landResponse(db, String(r.pushId), null, 'failed', at);
+    return responseDetail === undefined ? { changed: true } : { changed: true, responseDetail };
+  });
 }
 
 /** The held items whose reach the drain stamps: `heldUntil` in `[firstBootAt, now]`, no stamp yet, and shown to the
