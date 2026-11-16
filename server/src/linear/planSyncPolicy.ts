@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 import type { BindingKind, EpicState, PlanEndOutcome, TicketState } from '../../../shared/plan.js';
 import type { LinkingMode } from '../../../shared/linking.js';
+import { rfc8785Json } from '../canonical.js';
 import { redactShapedCount } from '../coord/redact.js';
 import { publicTextVerdict, ticketRefOfBranch } from '../linking/policy.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
@@ -71,13 +72,15 @@ export type SyncNotice = { kind: 'open-issues-left'; count: number };
 
 // ── Fingerprints and ids ──
 
-const canon = (v: unknown): unknown => Array.isArray(v) ? v.map(canon)
+/** What `rfc8785Json` refuses is a fact about the fields: an `undefined` member means "not sent", as `JSON.stringify` read it, so it is dropped here, at every depth, before the canonical writer sees the value. */
+const withoutUndefined = (v: unknown): unknown => Array.isArray(v) ? v.map(withoutUndefined)
   : v !== null && typeof v === 'object'
-    ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])])) : v;
+    ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).map(([k, x]) => [k, withoutUndefined(x)])) : v;
 
-/** The first 16 hex of sha256 over the canonical JSON (keys sorted at every depth). */
+/** The first 16 hex of sha256 over the canonical JSON of `canonical.ts` (RFC 8785; keys sorted at every depth). */
 export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): string {
-  return createHash('sha256').update(JSON.stringify(canon(fields))).digest('hex').slice(0, 16);
+  const json = rfc8785Json(withoutUndefined(fields), (detail) => new Error(`plannedFingerprint: ${detail}`));
+  return createHash('sha256').update(json, 'utf8').digest('hex').slice(0, 16);
 }
 
 /** A v4-shaped UUID from sha256(`<kind>:<localId>:<workspaceId>`), with `:<part>` appended for a part (C5). */
