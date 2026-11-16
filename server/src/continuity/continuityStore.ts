@@ -359,8 +359,14 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       const carried = observedOf(newest?.observed)?.ms ?? 0;
       const n = (intOrNull(newest?.n) ?? 0) + 1;
       if (old !== null) {
+        // An `operator` due ends with its generation (ruling F1 on review 2312): the operator's Renew now was for this
+        // conversation, so an ended row never carries one.
         const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = ?, walk = NULL, deadlineAt = NULL, "
-          + `shadowDeadlineAt = NULL WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
+          + "shadowDeadlineAt = NULL, dueSince = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueSince END, "
+          + "dueSinceObservedMs = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueSinceObservedMs END, "
+          + "dueClass = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueClass END, "
+          + "dueWhy = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueWhy END "
+          + `WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
         if (Number(ended.changes) !== 1) throw new Superseded();
       }
       const mode: WalkMode = old?.walk === 'live' || live ? 'live' : 'shadow';
@@ -1339,13 +1345,17 @@ export function snapshotFacts(db: DatabaseSync, id: string): { ok: true; facts: 
 /** The lane's cursor over the Renew now requests, a row of `continuity_cursor` beside the starts cursor. */
 export const RENEW_REQUESTS_CURSOR = 'renew-requests';
 
-export interface RenewRequestRow { readonly id: number; readonly sessionId: string; readonly actor: string; readonly at: number }
+/** One Renew now. `live`: the `continuity` row was live when the operator pressed it; a press made in shadow is recorded for
+ *  the record only, and the lane never turns it into an `operator` due, then or after the row is armed (the coordinator's
+ *  ruling F1 on review 2312). */
+export interface RenewRequestRow { readonly id: number; readonly sessionId: string; readonly actor: string; readonly at: number; readonly live: boolean }
 export type RenewRequestsRead = { ok: true; rows: RenewRequestRow[] } | { ok: false; detail: string };
 
 /** The door's one write. */
 export function insertRenewRequest(db: DatabaseSync, r: Omit<RenewRequestRow, 'id'>): { ok: true; id: number } | { ok: false } {
   try {
-    const res = stmt(db, 'INSERT INTO continuity_renew_requests (sessionId, actor, at) VALUES (?, ?, ?)').run(r.sessionId, r.actor, r.at);
+    const res = stmt(db, 'INSERT INTO continuity_renew_requests (sessionId, actor, at, live) VALUES (?, ?, ?, ?)')
+      .run(r.sessionId, r.actor, r.at, r.live ? 1 : 0);
     return { ok: true, id: Number(res.lastInsertRowid) };
   } catch {
     return { ok: false };
@@ -1356,16 +1366,16 @@ export function insertRenewRequest(db: DatabaseSync, r: Omit<RenewRequestRow, 'i
 export function renewRequestsAfter(db: DatabaseSync, afterId: number, limit: number, sessionId?: string): RenewRequestsRead {
   try {
     const raws = (sessionId === undefined
-      ? stmt(db, 'SELECT id, sessionId, actor, at FROM continuity_renew_requests WHERE id > ? ORDER BY id LIMIT ?').all(afterId, limit)
-      : stmt(db, 'SELECT id, sessionId, actor, at FROM continuity_renew_requests WHERE id > ? AND sessionId = ? ORDER BY id LIMIT ?')
+      ? stmt(db, 'SELECT id, sessionId, actor, at, live FROM continuity_renew_requests WHERE id > ? ORDER BY id LIMIT ?').all(afterId, limit)
+      : stmt(db, 'SELECT id, sessionId, actor, at, live FROM continuity_renew_requests WHERE id > ? AND sessionId = ? ORDER BY id LIMIT ?')
         .all(afterId, sessionId, limit)) as Record<string, unknown>[];
     const rows: RenewRequestRow[] = [];
     for (const raw of raws) {
-      const id = intOrNull(raw.id); const at = intOrNull(raw.at);
-      if (id === null || at === null || typeof raw.sessionId !== 'string' || typeof raw.actor !== 'string') {
+      const id = intOrNull(raw.id); const at = intOrNull(raw.at); const live = intOrNull(raw.live);
+      if (id === null || at === null || (live !== 0 && live !== 1) || typeof raw.sessionId !== 'string' || typeof raw.actor !== 'string') {
         return { ok: false, detail: `continuity_renew_requests row ${String(raw.id)} does not read` };
       }
-      rows.push({ id, sessionId: raw.sessionId, actor: raw.actor, at });
+      rows.push({ id, sessionId: raw.sessionId, actor: raw.actor, at, live: live === 1 });
     }
     return { ok: true, rows };
   } catch (e) {

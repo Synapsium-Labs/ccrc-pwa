@@ -676,9 +676,6 @@ describe('the scanner is looking at something', () => {
     // /api/coord/renewal-mode`, session-gated and NOT EXEMPT, no box token: the HTTP half 243 -> 246, the gated count 148 -> 151,
     // the exempt-HTTP count stays 94.
     expect(ROUTES.length).toBe(249);
-    // 249 since the renewal hand-offs (Overlord W1a), in `continuity/routes.ts`: `POST /api/sessions/:id/renew` and `GET`/`POST
-    // /api/coord/renewal-mode`, session-gated and NOT EXEMPT, no box token: the HTTP half 243 -> 246, the gated count 148 -> 151,
-    // the exempt-HTTP count stays 94.
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);

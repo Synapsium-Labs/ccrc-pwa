@@ -16,7 +16,7 @@ import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { ListRow, Sheet, cn, toast } from '@ccrc/ui';
 import { api } from '../lib/api';
-import { RENEW_NOW_RECORDED_TEXT, renewNowText } from '../lib/refusalWords';
+import { RENEW_NOW_RECORDED_TEXT, RENEW_NOW_SHADOW_TEXT, renewNowText } from '../lib/refusalWords';
 import { commandDoor } from '../command/door';
 import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
@@ -153,7 +153,8 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
           const target = latest.current.session;
           if (target !== null) {
             api.renewNow(target.id).then(
-              () => toast(RENEW_NOW_RECORDED_TEXT),
+              // A press while continuity is shadow is recorded and renews nothing (review 2312 F1): the toast says so.
+              (r) => toast(r !== 'unreadable' && r.shadow === true ? RENEW_NOW_SHADOW_TEXT : RENEW_NOW_RECORDED_TEXT),
               (err: unknown) => toast(renewNowText(err), 'error'),
             );
           }

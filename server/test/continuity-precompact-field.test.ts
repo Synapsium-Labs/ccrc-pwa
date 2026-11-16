@@ -2,12 +2,16 @@
 // route field. `precompactField` (L1) reads the soft budget's count alone (m8): `refuse` while a renewal is left, `allow` once it
 // is spent. The lane plans the write for a live long-lived generation only while the `continuity` row is live, only when the
 // field differs from what the registry read, and never over a field it could not read; the acts write it through the route
-// writer. Shadow writes nothing. A real coord.db and the fake time ports; nothing reaches the fleet.
+// writer. A field that outlives its reason, the row lowered to shadow or its generation ended unreplaced, is retracted to
+// `allow` on every pass, live or shadow (`precompactRetractions`, the coordinator's ruling F2 on review 2312: ccd's route has no
+// clear form for this field). A real coord.db and the fake time ports; nothing reaches the fleet.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import * as precompactModule from '../src/continuity/precompact.js';
 import { precompactField } from '../src/continuity/precompact.js';
+import { retractionCases } from './sim/handoffSets.js';
 import { generationsPass, type GenerationsDeps, type PlannedAct, type RegistryFacts } from '../src/continuity/generationsLane.js';
 import { runRenewalActs, type PrecompactWrite } from '../src/continuity/renewalActs.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
@@ -30,6 +34,11 @@ describe('precompactField (L1)', () => {
   });
 });
 
+describe('precompactRetractions (L1, ruling F2 on review 2312)', () => {
+  // Written once, in the mutation set, and run here against the real module.
+  for (const [name, run] of Object.entries(retractionCases(precompactModule))) it(name, run);
+});
+
 function fx(live: boolean) {
   const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-precompact-field-'), '.ccrc', 'coord.db')));
   s.db.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 1, 'active')");
@@ -47,10 +56,10 @@ function fx(live: boolean) {
   s.db.prepare("UPDATE continuity_generations SET state = 'active', shadowState = NULL, walk = NULL, deadlineAt = NULL, shadowDeadlineAt = NULL WHERE id = ?").run(w.id);
   s.advanceCursor({ lane: 'generations', from: 0, to: st.id });
   const gen = (): GenRow => { const r = s.liveGenerations(); if (!r.ok) throw new Error(r.detail); return r.rows[0]!; };
-  const pass = (precompact: RegistryFacts['precompact']) => {
+  const pass = (precompact: RegistryFacts['precompact'], more: readonly RegistryFacts[] = []) => {
     const deps: GenerationsDeps = { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set(),
       emptyTries: new Map(), gate: () => null };
-    const registry: RegistryFacts[] = [{ id: COORD, uuid: U1, lane: 'lane-a', child: { kind: 'none' }, ...(precompact === undefined ? {} : { precompact }) }];
+    const registry: RegistryFacts[] = [{ id: COORD, uuid: U1, lane: 'lane-a', child: { kind: 'none' }, ...(precompact === undefined ? {} : { precompact }) }, ...more];
     return generationsPass(deps, { registry, readings: new Map(), listedAt: t.ports.clock.wall() + 1, canRenew: true });
   };
   return { s, t, gen, pass };
@@ -77,10 +86,50 @@ describe('the generations lane plans the PreCompact field (Task 6)', () => {
     expect(fieldActs(f.pass(null).planned)).toEqual([{ kind: 'precompact-field', value: 'refuse' }]);
   });
 
-  it('shadow writes nothing, and a field the registry could not read is never written over', () => {
+  // One fixture a case: each opens a coord.db, and three in one case outran the timeout on a loaded box (review 2312).
+  it('shadow writes nothing', () => {
     expect(fieldActs(fx(false).pass(null).planned)).toEqual([]);
-    expect(fieldActs(fx(true).pass('unread').planned)).toEqual([]);
-    expect(fieldActs(fx(true).pass(undefined).planned)).toEqual([]);
+  });
+
+  it('a field the registry could not read is never written over', () => {
+    const f = fx(true);
+    expect(fieldActs(f.pass('unread').planned)).toEqual([]);
+    expect(fieldActs(f.pass(undefined).planned)).toEqual([]);
+  });
+});
+
+describe('the lane retracts a refuse that outlived its reason (ruling F2 on review 2312)', () => {
+  const OTHER = 'lane-b-project-a';
+  const other = (precompact: RegistryFacts['precompact']): RegistryFacts => ({ id: OTHER, uuid: U1, lane: 'lane-b', child: { kind: 'none' }, precompact });
+
+  it('a lowering to shadow retracts it, for the generation\'s own session and any other row that reads refuse', () => {
+    const f = fx(true);
+    expect(f.pass('refuse').retract).toEqual([]);
+    f.s.setLaneArm(CONTINUITY_LANE, 'shadow', 2);
+    const r = f.pass('refuse', [other('refuse'), other('allow')]);
+    expect(r.live).toBe(false);
+    expect(r.retract).toEqual([COORD, OTHER]);
+    expect(fieldActs(r.planned)).toEqual([]);
+  });
+
+  it('a generation that ends unreplaced retracts it on the next live pass', () => {
+    const f = fx(true);
+    f.s.db.prepare("UPDATE continuity_generations SET state = 'ended'").run();
+    const r = f.pass('refuse');
+    expect(r.live).toBe(true);
+    expect(r.retract).toEqual([COORD]);
+  });
+
+  it('a live generation inside its budget keeps refuse; a row with no generation that reads refuse is retracted', () => {
+    const f = fx(true);
+    const r = f.pass('refuse', [other('refuse')]);
+    expect(r.retract).toEqual([OTHER]);
+    expect(fieldActs(r.planned)).toEqual([]);
+  });
+
+  it('a field that reads allow, is not set or was not read is never retracted', () => {
+    const f = fx(false);
+    expect(f.pass('allow', [other(null), other('unread')]).retract).toEqual([]);
   });
 });
 

@@ -80,7 +80,7 @@ import type { UsageRead } from '../usage.js';
 import { compactionInFlight, compactionsBegunSince, compactionsSince, newestCompactionAt, type CompactionsRead } from './compactions.js';
 import { RENEW_REQUESTS_CURSOR, effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
 import { renewNowStands, renewalModeOf } from './renewNow.js';
-import { precompactField } from './precompact.js';
+import { precompactField, precompactRetractions } from './precompact.js';
 import { markAges, markProgrammesOf, operatorQuietOf, type MarkReading } from './operatorMark.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
@@ -230,6 +230,9 @@ export interface GenerationsResult {
   /** The acts this pass planned (live only; the caller takes them), the steps it recorded in shadow (log lines, each naming
    *  the would-be acts), and the due generations whose renewal waited, by why. */
   readonly planned: readonly PlannedAct[];
+  /** The sessions whose `precompact=refuse` outlived its reason (`precompactRetractions`): the caller writes `allow` for each,
+   *  live or shadow, so the operator's lowering of the row switches the arm off too (ruling F2 on review 2312). */
+  readonly retract: readonly string[];
   readonly recorded: readonly string[];
   readonly waits: Readonly<Partial<Record<PermitWait, number>>>;
   /** Generations whose due write named at least one trigger it could not read. */
@@ -255,6 +258,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   let cardRead = 0; let probesFed = 0; let roundsOpened = 0; let emptyRounds = 0;
   let stopped = false;
   const planned: PlannedAct[] = [];
+  const retract: string[] = [];
   const recorded: string[] = [];
   const waits: Partial<Record<PermitWait, number>> = {};
   // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
@@ -272,7 +276,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const result = (): GenerationsResult => {
     logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds, waits });
     return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, planned,
-      recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
+      retract, recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
@@ -485,15 +489,23 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
   // whatever a shadow walk holds (review 2003 F1).
   const gens = coord.liveGenerations();
+  // The PreCompact field's retraction (ruling F2 on review 2312): it walks the registry rows that carry the field, not only
+  // the live generations, and a shadow pass plans it too, so the field never outlives the row's setting or its generation.
+  retract.push(...precompactRetractions(input.registry ?? [], live, gens.ok ? new Set(gens.rows.map((g) => g.sessionId)) : null));
   if (!gens.ok) { fail('generations', gens.detail, 'no due is recorded'); return result(); }
   // The operator's Renew now requests after the lane's own cursor (slug renew-request-read-by-cursor): a request sets
   // `renewNow` for its session's generation, and the cursor rides the last due write that reads one, so a request is read
-  // once. Requests no judged generation reads (one already walking, or ended) are passed over with the cursor.
+  // once. Requests no judged generation reads (one already walking, or ended) are passed over with the cursor. Only a request
+  // pressed while the row was live is read as one, and only on a live pass (ruling F1 on review 2312): a shadow press, or a
+  // live press read once the row is lowered, is passed over with the cursor and logged, so it never renews, then or later.
   const reqCursor = coord.generationsCursor(RENEW_REQUESTS_CURSOR);
   const reqs = reqCursor.ok ? coord.renewRequestsAfter(reqCursor.lastStartId, RENEW_REQUEST_BATCH) : null;
   if (!reqCursor.ok) fail('cursor', reqCursor.detail, 'no Renew now request is read');
   else if (reqs !== null && !reqs.ok) fail('renew-requests', reqs.detail, 'no Renew now request is read');
-  const requested = new Set(reqs !== null && reqs.ok ? reqs.rows.map((r) => r.sessionId) : []);
+  const requested = new Set(live && reqs !== null && reqs.ok ? reqs.rows.filter((r) => r.live).map((r) => r.sessionId) : []);
+  for (const r of reqs !== null && reqs.ok ? reqs.rows : []) {
+    if (!live || !r.live) deps.log(`ccrc-server: generations: shadow: ${r.sessionId} Renew now ${r.id} read; pressed or read in shadow, so nothing renews`);
+  }
   const lastReq = reqs !== null && reqs.ok ? reqs.rows.at(-1) : undefined;
   const reqAdvance = reqCursor.ok && lastReq !== undefined ? { lane: RENEW_REQUESTS_CURSOR, from: reqCursor.lastStartId, to: lastReq.id } : null;
   const readers = gens.rows.filter((g) => judgedForDue(g) && requested.has(g.sessionId));
@@ -503,7 +515,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const runs = newestClaimedWorkRuns(coord, g.identity);
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
-    const renewNow = renewNowStands(requested.has(g.sessionId), g.dueWhy);
+    const renewNow = renewNowStands(requested.has(g.sessionId), g.dueWhy, live);
     const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass'), renewNow));
     if (d.due) due += 1;
     if (d.blind.length > 0) blind += 1;
@@ -582,7 +594,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     if (owed !== null) planned.push({ target: targetOf(g), act: { kind: 'renew', try: owed } });
     // The PreCompact arm's field (the hand-offs piece, Task 6; slug precompact-field-from-the-budget): `precompactField` of the
     // soft budget's count, planned only when it differs from what the registry read, and never over a field it could not
-    // read or from a count it could not read. Live only: shadow writes nothing (this loop's `live` check above).
+    // read or from a count it could not read. Live only (this loop's `live` check above); a field that outlives the row's
+    // setting or its generation is retracted by step THREE's `precompactRetractions`.
     const reg = registry.get(g.sessionId);
     const have = reg === undefined || reg.precompact === undefined ? 'unread' : reg.precompact;
     const used = softRenewalsInWindowOf(coord, g);

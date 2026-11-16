@@ -17,6 +17,10 @@ describe('promptRenewing (L1)', () => {
     expect(GENERATION_STATES.filter((s) => promptRenewing(s)).sort()).toEqual(['carded', 'clearing']);
     expect(promptRenewing(null)).toBe(false);
   });
+
+  it('checkpointed is deliberately not held (review 2312 F4): the old conversation is live and asked for its handover note', () => {
+    expect(promptRenewing('checkpointed')).toBe(false);
+  });
 });
 
 describe('POST /api/sessions/:id/prompt between conversations (Task 2)', () => {

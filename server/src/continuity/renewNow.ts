@@ -5,9 +5,11 @@
 // - `renewDoorVerdict`: may the operator's Renew now be recorded for this session? Only a session with a live generation of a
 //   long-lived role (the renewal lane mints generations for nothing else, so a generation is the measured "long-lived", and
 //   the one the request will act on), and only once until the lane has read the request before it.
-// - `renewNowStands`: the `operator` row's input, `renewNow`. A request the lane reads this pass, or an operator due the
-//   generation already carries, so a Renew now whose renewal waits (a capability, the Overlord first) stays due until the
-//   renewal starts or the generation ends, rather than for one pass.
+// - `renewNowStands`: the `operator` row's input, `renewNow`. While the `continuity` row is live, a live-pressed request the
+//   lane reads this pass, or an operator due the generation already carries, so a Renew now whose renewal waits (a
+//   capability, the Overlord first) stays due until the renewal starts or the generation ends, rather than for one pass.
+//   In shadow it is never true (ruling F1 on review 2312): a shadow pass never writes an `operator` due, and its due write
+//   clears one a lowered row left, so a Renew now never renews at the flip.
 // - `promptRenewing`: the console's prompt route answers `renewing` while the session's live generation's `state` is
 //   `clearing` or `carded`: the session is between conversations, and a prompt typed now would land in neither.
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
@@ -30,12 +32,16 @@ export function renewDoorVerdict(f: RenewDoorFacts): RenewDoorVerdict {
   return f.pending ? 'renew-pending' : 'ok';
 }
 
-/** `renewalDue`'s `renewNow` for one generation: a request read this pass, or the operator due it already carries. */
-export function renewNowStands(requested: boolean, dueWhy: RenewalTrigger | null): boolean {
-  return requested || dueWhy === 'operator';
+/** `renewalDue`'s `renewNow` for one generation: while the `continuity` row is live, a request pressed live and read this
+ *  pass, or the operator due it already carries; in shadow, never. */
+export function renewNowStands(requested: boolean, dueWhy: RenewalTrigger | null, live: boolean): boolean {
+  return live && (requested || dueWhy === 'operator');
 }
 
-/** The states in which a session is between conversations (the renewal's `clearing`, and `carded` before its card is read). */
+/** The states in which a session is between conversations (the renewal's `clearing`, and `carded` before its card is read).
+ *  `checkpointed` is deliberately not one (review 2312 F4): the old conversation is live then and is being asked for its
+ *  handover note, so a prompt typed in it is answered and can enter the note; the spec holds prompts only between
+ *  conversations. */
 const BETWEEN: ReadonlySet<GenerationState> = new Set<GenerationState>(['clearing', 'carded']);
 
 /** Does the prompt route answer `renewing`? It reads the live generation's `state`, never `shadowState`: `state` moves only

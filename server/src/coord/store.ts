@@ -5445,7 +5445,7 @@ export class CoordStore {
   recordSoftRenewal(g: { id: number; identity: string; term: number }, observedMs: number): { ok: boolean } { return recordSoftRenewal(this.db, g, observedMs); }
   /** Overlord §3.3.9 C50, §3.3.11 (the hand-offs piece, `continuityStore.ts`): the Renew now door's request and the lane's read
    *  of it, the prompt route's mark and the lane's quiet of it, and the Setting "when soft renewals happen". */
-  insertRenewRequest(r: { sessionId: string; actor: string; at: number }): ReturnType<typeof timers.insertRenewRequest> { return timers.insertRenewRequest(this.db, r); }
+  insertRenewRequest(r: { sessionId: string; actor: string; at: number; live: boolean }): ReturnType<typeof timers.insertRenewRequest> { return timers.insertRenewRequest(this.db, r); }
   renewRequestsAfter(afterId: number, limit: number, sessionId?: string): timers.RenewRequestsRead { return timers.renewRequestsAfter(this.db, afterId, limit, sessionId); }
   putOperatorMark(programme: string, at: number): { ok: boolean } { return timers.putOperatorMark(this.db, programme, at); }
   operatorMarks(): timers.OperatorMarksRead { return timers.operatorMarks(this.db); }

@@ -286,8 +286,6 @@ export type SettingsScope = (typeof SETTINGS_SCOPE)[keyof typeof SETTINGS_SCOPE]
 /** One card's head: whose it is, its name, and what it is for. */
 export interface SettingsCardText { scope: SettingsScope; title: string; purpose: string }
 
-/** Each card's head, by section, in §3.3's order. A section page renders its cards from its own list here, so the
- *  order is written once (Updates' list is C5's one-line insert point for the Claude Code card). */
 /** Overlord W1a hand-offs: the soft-renewal mode's words (Table 11.1d). One sentence each; the choices are L0's. */
 export const RENEWAL_MODE_TEXT = {
   legend: 'When soft renewals happen',
@@ -301,6 +299,8 @@ export const RENEWAL_MODE_TEXT = {
   unread: 'The server could not read this row, so soft renewals follow the default.',
 } as const;
 
+/** Each card's head, by section, in §3.3's order. A section page renders its cards from its own list here, so the
+ *  order is written once (Updates' list is C5's one-line insert point for the Claude Code card). */
 export const SETTINGS_CARDS = {
   updates: {
     fleetVersion: {

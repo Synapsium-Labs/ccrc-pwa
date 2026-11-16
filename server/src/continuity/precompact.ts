@@ -21,6 +21,18 @@ export function precompactField(softRenewalsInWindow: number): PrecompactField {
   return Number.isInteger(softRenewalsInWindow) && softRenewalsInWindow >= 0 && softRenewalsInWindow < SOFT_BUDGET.count ? 'refuse' : 'allow';
 }
 
+/** One registry row as the retraction reads it: its id, and its `precompact` field (null: not set; `unread`: not read). */
+export interface PrecompactRow { readonly id: string; readonly precompact?: string | null | 'unread' }
+
+/** The rows whose `refuse` outlived its reason (ruling F2 on review 2312): every row that reads `refuse` while the
+ *  `continuity` row is not live, or, while it is, that has no live generation (`liveSessions`, the sessions of the live
+ *  generations; null when they could not be read, which retracts nothing on a live pass). Each is written `allow`, since
+ *  ccd's `route` has no clear form for this field. A field that reads `allow`, is not set or was not read is left alone. */
+export function precompactRetractions(rows: readonly PrecompactRow[], live: boolean, liveSessions: ReadonlySet<string> | null): string[] {
+  if (live && liveSessions === null) return [];
+  return rows.filter((r) => r.precompact === 'refuse' && (!live || !liveSessions!.has(r.id))).map((r) => r.id);
+}
+
 /** What the arm decides: block the compaction (and record a `refused` line), or let it through. */
 export type PrecompactVerdict = 'refuse' | 'pass';
 

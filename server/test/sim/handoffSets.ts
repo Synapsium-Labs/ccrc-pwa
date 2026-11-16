@@ -1,6 +1,8 @@
 // The renewal hand-offs' oracles and mutant sets (Overlord W1a, plan `w1a-renewal-handoffs.md` Tasks 5 and 7; its Global
 // Constraints' "Mutation floors"). Each widening registers one floor: `rollTargetVerdict` (the roll's hand-off to the renewal
-// lane) and `stallRestartedVerdict` (the D5 arm widened to long-lived sessions). Their cases are written ONCE here, as suite
+// lane) and `stallRestartedVerdict` (the D5 arm widened to long-lived sessions); fix round 1 of review 2312 adds
+// `renewNowStands` (a Renew now never becomes a due in shadow, ruling F1) and `precompactRetractions` (the PreCompact field
+// never outlives its reason, ruling F2). Their cases are written ONCE here, as suite
 // cases over a module: `roll-target.test.ts` and `stall-restarted.test.ts` run them against the real modules, and
 // `mutation-floors.test.ts` runs them against each textual mutant.
 import path from 'node:path';
@@ -13,6 +15,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 
 export type RollTargetModule = typeof import('../../src/coord/rollTarget.js');
 export type StallModule = typeof import('../../src/coord/stall.js');
+export type RenewNowModule = typeof import('../../src/continuity/renewNow.js');
+export type PrecompactModule = typeof import('../../src/continuity/precompact.js');
 
 const TARGETS = ['all', 'coordinators', 'off'] as const;
 const ROLES = ['coordinator', 'child', null] as const;
@@ -128,8 +132,67 @@ const STALL_RESTARTED_SET: MutantSet<StallModule> = {
   suite: restartedHandoffCases,
 };
 
+// ── Renew now and the PreCompact field, fix round 1 of review 2312 ───────────────────────────────────────────────────
+
+/** `renewNowStands`' cases: while live, a request or a standing operator due; in shadow never, so no shadow pass writes one. */
+export function renewNowCases(m: RenewNowModule): Record<string, SuiteCase> {
+  return {
+    'live: a request read this pass, or the operator due already carried, stands; nothing else does': () => {
+      expect(m.renewNowStands(true, null, true)).toBe(true);
+      expect(m.renewNowStands(false, 'operator', true)).toBe(true);
+      expect(m.renewNowStands(false, 'hard-cap', true)).toBe(false);
+      expect(m.renewNowStands(false, null, true)).toBe(false);
+    },
+    'shadow: nothing stands, so a shadow pass never writes an operator due and clears one a lowering left (ruling F1)': () => {
+      expect(m.renewNowStands(true, null, false)).toBe(false);
+      expect(m.renewNowStands(false, 'operator', false)).toBe(false);
+      expect(m.renewNowStands(true, 'operator', false)).toBe(false);
+    },
+  };
+}
+
+const RENEW_NOW_SET: MutantSet<RenewNowModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/renewNow.ts'),
+  mutants: [
+    { id: 'N1 the due written in shadow', old: "return live && (requested || dueWhy === 'operator');", new: "return requested || dueWhy === 'operator';" },
+    { id: 'N2 a standing due kept in shadow', old: "return live && (requested || dueWhy === 'operator');", new: "return (live && requested) || dueWhy === 'operator';" },
+    { id: 'N3 a request read in shadow', old: "return live && (requested || dueWhy === 'operator');", new: "return requested || (live && dueWhy === 'operator');" },
+  ],
+  suite: renewNowCases,
+};
+
+/** `precompactRetractions`' cases: shadow retracts every `refuse`, live those with no live generation, unread nothing. */
+export function retractionCases(m: PrecompactModule): Record<string, SuiteCase> {
+  const rows = [{ id: 'a', precompact: 'refuse' }, { id: 'b', precompact: 'refuse' }, { id: 'c', precompact: 'allow' },
+    { id: 'd', precompact: null }, { id: 'e', precompact: 'unread' }, { id: 'f' }];
+  return {
+    'shadow retracts every row that reads refuse, and nothing else': () => {
+      expect(m.precompactRetractions(rows, false, null)).toEqual(['a', 'b']);
+      expect(m.precompactRetractions(rows, false, new Set(['a']))).toEqual(['a', 'b']);
+    },
+    'live retracts a refuse with no live generation, keeps one with a live generation, and retracts nothing when unread': () => {
+      expect(m.precompactRetractions(rows, true, new Set(['a']))).toEqual(['b']);
+      expect(m.precompactRetractions(rows, true, new Set(['a', 'b']))).toEqual([]);
+      expect(m.precompactRetractions(rows, true, null)).toEqual([]);
+    },
+  };
+}
+
+const RETRACTION_SET: MutantSet<PrecompactModule> = {
+  modulePath: path.join(ROOT, 'server/src/continuity/precompact.ts'),
+  mutants: [
+    { id: 'P1 shadow retracts nothing', old: "r.precompact === 'refuse' && (!live || !liveSessions!.has(r.id))", new: "r.precompact === 'refuse' && live && !liveSessions!.has(r.id)" },
+    { id: 'P2 a live generation retracted', old: "r.precompact === 'refuse' && (!live || !liveSessions!.has(r.id))", new: "r.precompact === 'refuse'" },
+    { id: 'P3 any field retracted', old: "r.precompact === 'refuse' && (!live", new: "r.precompact !== 'allow' && (!live" },
+    { id: 'P4 an unread live pass retracts', old: '  if (live && liveSessions === null) return [];\n', new: '  if (live && liveSessions === null) return rows.filter((r) => r.precompact === \'refuse\').map((r) => r.id);\n' },
+  ],
+  suite: retractionCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const HANDOFF_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/rollTarget.ts#rollTargetVerdict': ROLL_TARGET_SET as MutantSet<never>,
   'server/src/coord/stall.ts#stallRestartedVerdict': STALL_RESTARTED_SET as MutantSet<never>,
+  'server/src/continuity/renewNow.ts#renewNowStands': RENEW_NOW_SET as MutantSet<never>,
+  'server/src/continuity/precompact.ts#precompactRetractions': RETRACTION_SET as MutantSet<never>,
 };

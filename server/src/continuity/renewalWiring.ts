@@ -25,6 +25,8 @@ export interface RenewalWiring {
   readonly canRenew: boolean;
   readonly drainOf: (id: string) => Promise<DrainRead>;
   readonly run: (planned: readonly PlannedAct[]) => Promise<ActsResult>;
+  /** Write `precompact=allow` for each session the pass retracts (`GenerationsResult.retract`), live or shadow. */
+  readonly retract: (sessionIds: readonly string[]) => Promise<void>;
 }
 
 /** The pass's renewal pieces. `serial` is the stop-and-done serialiser (null before the sleep lanes start), which the
@@ -48,6 +50,14 @@ export function renewalActsOf(
     log: (line) => console.warn(line),
     around: (id, fn) => (serial === null ? deps.queue.run(id, fn) : serial(() => deps.queue.run(id, fn))),
   });
+  // The PreCompact arm's field (the renewal hand-offs, Task 6): one `route --set precompact=` behind the `route` verb's cap.
+  const routePrecompact = async (id: string, value: 'refuse' | 'allow'): Promise<PrecompactWrite> => {
+    if (!isRegistryId(id)) return { kind: 'refused', reason: 'not a registry id' };
+    if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
+    const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
+    if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };
+    return res.ok ? { kind: 'written' } : { kind: 'refused', reason: res.stderr.split('\n')[0]?.trim() || 'no stderr' };
+  };
   return {
     canRenew: capSupported(deps.fleetState, HIBERNATE_FRESH_CAP),
     drainOf: async (id) => {
@@ -61,15 +71,16 @@ export function renewalActsOf(
     },
     run: (planned) => runRenewalActs({
       coord, host, now, log: (line) => console.warn(line), memo,
-      // The PreCompact arm's field (the renewal hand-offs, Task 6): one `route --set precompact=` behind the `route` verb's cap.
-      routePrecompact: async (id, value): Promise<PrecompactWrite> => {
-        if (!isRegistryId(id)) return { kind: 'refused', reason: 'not a registry id' };
-        if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
-        const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
-        if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };
-        return res.ok ? { kind: 'written' } : { kind: 'refused', reason: res.stderr.split('\n')[0]?.trim() || 'no stderr' };
-      },
+      routePrecompact,
       mail: (toId, subject, body) => queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body }).queued,
     }, planned),
+    retract: async (ids) => {
+      for (const id of ids) {
+        const w = await routePrecompact(id, 'allow');
+        if (w.kind !== 'written') {
+          console.warn(`ccrc-server: renewal: ${id}: precompact=allow (retraction) was not written (${w.kind}${'reason' in w ? `: ${w.reason}` : 'detail' in w ? `: ${w.detail}` : ''})`);
+        }
+      }
+    },
   };
 }

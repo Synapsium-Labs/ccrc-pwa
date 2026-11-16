@@ -60,8 +60,9 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // for a minute and counts no attempt.
   'turn-running': 'Claude is in the middle of a turn — the message waits until it finishes.',
   // Overlord W1a hand-offs: the console's prompt route refuses, before anything is typed, while the session is between
-  // conversations. The failed bubble keeps the text and Retry resends it.
-  renewing: 'Renewing — your message is kept; send it again in a moment.',
+  // conversations: a renewal, or a long-lived session's start or wake before its card is read (review 2312 F7). The failed
+  // bubble keeps the text and Retry resends it.
+  renewing: 'Between conversations (starting or renewing) — your message is kept; send it again in a moment.',
 };
 
 /**
@@ -90,6 +91,8 @@ export const RENEW_NOW_REFUSAL_TEXT: Readonly<Record<Exclude<HandoffRefusal, 're
   'renew-pending': 'A Renew now for this session is already waiting.',
 };
 export const RENEW_NOW_RECORDED_TEXT = 'Renew now recorded: the session renews once its turn ends.';
+/** The door's answer for a press while the `continuity` row is shadow (review 2312 F1, F5): recorded, and nothing renews. */
+export const RENEW_NOW_SHADOW_TEXT = 'Renew now recorded in shadow: no renewal happens while continuity is in shadow.';
 /** A failed Renew now in words: the door's own sentence, else the PWA's generic failure text. */
 export const renewNowText = (err: unknown): string => refusalText(err, RENEW_NOW_REFUSAL_TEXT) ?? failedTo('renew', err);
 

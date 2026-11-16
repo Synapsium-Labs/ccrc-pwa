@@ -64,11 +64,18 @@ const choose = async (): Promise<void> => {
 
 describe('choosing Renew now', () => {
   it('calls renewNow with the session id and says it was recorded', async () => {
-    const spy = vi.spyOn(api, 'renewNow').mockResolvedValue(undefined);
+    const spy = vi.spyOn(api, 'renewNow').mockResolvedValue({ ok: true, id: 1, shadow: false });
     mount();
     await choose();
     expect(spy).toHaveBeenCalledWith('lane-a-project-a');
     expect(await screen.findByText('Renew now recorded: the session renews once its turn ends.')).toBeInTheDocument();
+  });
+
+  it('says a press while continuity is shadow renews nothing (review 2312 F1)', async () => {
+    vi.spyOn(api, 'renewNow').mockResolvedValue({ ok: true, id: 1, shadow: true });
+    mount();
+    await choose();
+    expect(await screen.findByText('Renew now recorded in shadow: no renewal happens while continuity is in shadow.')).toBeInTheDocument();
   });
 
   it('says the refusal\'s sentence for renew-pending', async () => {

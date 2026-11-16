@@ -3406,7 +3406,8 @@ export const MIGRATIONS: readonly string[] = [
   // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
   // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
   // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
-  // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`). `operator_marks`: the
+  // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
+  // `continuity` row was live at the press, and the lane never turns a shadow press into a due (ruling F1 on review 2312). `operator_marks`: the
   // `operator-at-programme` mark, its `at` written only by the console's prompt route; `operator_mark_quiet`: the mark's
   // observed quiet, written only by the generations lane, keyed on the `at` it was kept for (the coordinator's ruling F5 on
   // review 1902: a row of the lane's own, so the route and the lane never write one row, and a `quiet` kept for an older `at`
@@ -3419,7 +3420,8 @@ export const MIGRATIONS: readonly string[] = [
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
-  CREATE TABLE continuity_renew_requests (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, actor TEXT NOT NULL, at INTEGER NOT NULL);
+  CREATE TABLE continuity_renew_requests (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, actor TEXT NOT NULL, at INTEGER NOT NULL,
+    live INTEGER NOT NULL CHECK (live IN (0, 1)));
   CREATE INDEX continuity_renew_requests_by_session ON continuity_renew_requests(sessionId, id);
   CREATE TABLE operator_marks (programme TEXT PRIMARY KEY, at INTEGER NOT NULL);
   CREATE TABLE operator_mark_quiet (programme TEXT PRIMARY KEY, at INTEGER NOT NULL, quiet TEXT NOT NULL);

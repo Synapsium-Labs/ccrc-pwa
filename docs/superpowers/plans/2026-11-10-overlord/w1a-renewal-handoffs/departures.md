@@ -80,7 +80,26 @@ The card's role read would leave a coordinator with no open run, whose intent is
 
 A Renew now request is read once (the cursor). But `renewNow` also stands while the generation still carries the
 `operator` due (`renewNowStands`). Otherwise a renewal that waits, for the box's `hibernate-fresh` or for the Overlord
-first, would lose the request after one pass. The due clears when the renewal starts or the generation ends.
+first, would lose the request after one pass. The due clears when the renewal starts or the generation ends: the mint that
+ends a generation clears an `operator` due on the ended row (review 2312 F1).
+
+### renew-now-never-renews-from-shadow
+
+The coordinator's ruling F1 on review 2312: a Renew now pressed in shadow never renews anything, then or later.
+
+- The request row carries `live`, whether the `continuity` row was live when the operator pressed it (a column of this
+  piece's own table, in its own migration entry). The door answers `{ ok, id, shadow }`, and the console's toast says a
+  press in shadow is recorded and that nothing renews while continuity is in shadow.
+- The lane reads a request only when it was pressed live and is read on a live pass. A shadow press, or a live press first
+  read once the row is lowered, is passed over with the cursor and logged as a shadow line, so it never becomes a due.
+- `renewNowStands(requested, dueWhy, live)` is false in shadow, so a shadow pass never writes an `operator` due, and its
+  due write clears one a live pass left before the row was lowered.
+- Tests (`continuity-renew-now.test.ts`): the flip (press in shadow, read in shadow, row armed, the next pass renews
+  nothing), the race (press in shadow first read on a live pass), the lowering (a live `operator` due cleared by the next
+  shadow pass) and the end (the ended row carries no `operator` due). Mutants, measured: the
+  mutation set `renewNowStands` (`handoffSets.ts`: N1 the due written in shadow, N2 a standing due kept in shadow, N3 a
+  request read in shadow; floor in `mutation-floors.json`); and the lane read with neither live check (every request read,
+  `renewNow` ignoring the row): `continuity-renew-now.test.ts` 4 failed, 14 passed.
 
 The prompt route and the door share one lookup, `sessionLiveGeneration` (`continuityStore.ts`), which
 `runSessionCensus.ts` names as no binding site: a generation row's own session, no run.
@@ -114,23 +133,67 @@ and only when the value differs from what the registry read. It never writes ove
 or from a soft-renewal count it could not read. The write refuses an id that is not a registry id before `routeSet` composes
 its argv (`id-argv-census.test.ts`'s `precompact-id` gate), as the renewal act's own `renew` does.
 
+### precompact-retracted-to-allow
+
+The coordinator's ruling F2 on review 2312: the field never outlives its reason. Every pass, live or shadow, walks the
+registry rows that carry the field (not only the live generations) and retracts `refuse` on a row while the `continuity`
+row is not live, or, while it is, on a row with no live generation (`precompactRetractions`, L1, `precompact.ts`). The
+retraction writes `allow`, not a clear: ccd's `route` clears only `compact`, `compactwindow`, `poolset`, `acctorder` and
+`profiledigest` on an empty value, and `precompact` takes `refuse` or `allow` alone. It rides `GenerationsResult.retract`,
+which the watcher hands to the wiring's `retract` whatever the row, through the same `routeSet` writer and its id gate.
+This departs from "shadow writes nothing" for this one field, by the ruling. Tests (`continuity-precompact-field.test.ts`):
+a lowering to shadow retracts it, a generation that ends unreplaced retracts it, a live generation inside its budget keeps
+`refuse`. Mutants, measured: the mutation set `precompactRetractions` (P1 shadow retracts nothing, P2 a live generation
+retracted, P3 any field retracted, P4 an unread live pass retracts); and the lane's `retract.push` deleted:
+`continuity-precompact-field.test.ts` 3 failed, 11 passed.
+
 ### restarted-from-the-coordinator-sweep
 
 The widened D5 arm reaches the long-lived sessions the stall watch already judges run-less: the run coordinators
 (`judgeStallCoordinator`), each read through `roleFactsOf` as a claimant of open runs, so a row whose child marker reads a
-child is never told. The Overlord's role joins in W1 with the role (slug lost-task-nudge-is-the-d5-arm).
+child is never told. The Overlord's role joins in W1 with the role (slug lost-task-nudge-is-the-d5-arm). The watcher asks
+`longLivedOf` (L1) for the session's long-life rather than reading the role table inline (review 2312 F3).
+
+### roll-act-rereads-continuity
+
+Review 2312 F6: the roll's act-time re-check (`atAct`) and `afterAct` re-read the `continuity` row
+(`continuityLiveOf`, `rollLane.ts`) instead of the pass's snapshot. A row armed while the pass ran then holds a session the
+pass judged in shadow: its long-life was not read (null), which is `role-unknown` while live. Test: `roll-sweep-handoff.test.ts`, the row armed between the
+pass read and the act (inside the stubbed `release` read the re-check makes). Mutant, measured: the `atAct` re-read deleted,
+1 failed, 2 passed.
+
+### wiring-tests-at-the-watcher
+
+Review 2312 F9: two watcher-level tests reach the wiring the L1 tests cannot. Both measured red on their mutant:
+
+- `roll-sweep-handoff.test.ts` drives `FleetWatcher.sweepRoll` with the `continuity` row live and a long-lived coordinator,
+  which is skipped `renewal-owns` with no `hibernate` call (a shadow control rolls it). Deleting `continuity: coord, ` from
+  the `rollPass` call: 1 failed, 2 passed.
+- `stall-restarted-watch.test.ts` drives the stall sweep's run-less coordinator path with `stall-watch-w2-live` armed: one
+  `restarted:` self-mail with no run, none on a second sweep (a dark control sends none). Deleting
+  `...stallRestartedVerdicts(si, now), ` from `judgeStallCoordinator`'s array: 1 failed, 1 passed.
+
+### checkpointed-not-held
+
+Review 2312 F4: `promptRenewing` holds prompts in `clearing` and `carded` only. `checkpointed` is deliberately not held: the
+old conversation is live then and is being asked for its handover note, so a prompt typed in it is answered and can enter
+the note, and the spec does not ask for it. `continuity-prompt-renewing.test.ts` pins today's behaviour.
 
 ### renew-now-offered-to-coordinators
 
 The console offers "Renew now" in the session's ⋯ menu for a row whose `role` is `coordinator`, the one long-lived role the
 fleet frame names today. The door refuses `renew-not-long-lived` for any such row that has no live generation, and the
-console says so.
+console says so. Review 2312 F5 asked to hide the item on plain rows if the frame can tell them apart without a new read. It
+cannot: `FleetSession.role` is `sessionRoleOf(child)`, the child axis only, so it reads `coordinator` for any
+coordinator-or-plain row, and which of them holds a long-lived generation is a coord.db read. The item stays offered, and
+the door's refusal is the answer. The prompt's `renewing` sentence now says "Between conversations (starting or renewing)",
+since a long-lived session's start or wake holds prompts in `carded` too (F7).
 
 ### migration-slot
 
-The migration is entry 84 on this branch: portfolio B (#2904) landed 83 on main, and this branch absorbed it. Responses B
-holds 84 on its branch, and the coordinator's word (2026-11-16) is 85 for this entry once responses B lands, so whichever
-lands second renumbers. Re-measure the slot before merge, as its comment says.
+The migration is entry 85 on this branch: responses B (#2914) landed 84 on main, and fix round 1 of review 2312 absorbed it,
+as the coordinator ordered. Others may hold 85 too; the second to land renumbers on the coordinator's word. Re-measure the
+slot before merge, as its comment says.
 
 ## Stable exports for W1's consumers
 
@@ -139,7 +202,7 @@ Designation B (Restart) and private store B read these:
 - `renewDoorVerdict`, `renewNowStands`, `promptRenewing` and `renewalModeOf` (`server/src/continuity/renewNow.ts`).
 - `liveStateOf` and `markOperatorPrompt` (`server/src/continuity/promptHandoffs.ts`).
 - `markProgrammesOf` and `operatorQuietOf` (`server/src/continuity/operatorMark.ts`).
-- `precompactField` (`server/src/continuity/precompact.ts`).
+- `precompactField` and `precompactRetractions` (`server/src/continuity/precompact.ts`).
 - `longLivedOf` (`server/src/coord/rollTarget.ts`).
 - `RENEW_REQUESTS_CURSOR` and `sessionLiveGeneration` (`continuityStore.ts`).
 - The refusal words `HANDOFF_REFUSALS` (`renewing`, `renew-not-long-lived`, `renew-pending`).

@@ -208,7 +208,6 @@ import {
 import { renderMailNudge } from './coord/envelope.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
-import { FLEET_ROLES } from '../../shared/fleetRoles.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -288,7 +287,7 @@ import {
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
-import { rollTargetsOf } from './coord/rollTarget.js';
+import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -6147,6 +6146,8 @@ export class FleetWatcher {
         canRenew: acts.canRenew,
       });
       if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
+      // The PreCompact field's retraction runs live or shadow (ruling F2 on review 2312): a `refuse` never outlives its reason.
+      if (pass.retract.length > 0) await acts.retract(pass.retract);
     });
   }
 
@@ -7058,7 +7059,7 @@ export class FleetWatcher {
       sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
-      longLived: role.kind === 'role' && FLEET_ROLES[role.role].longLived,
+      longLived: longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {

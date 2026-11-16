@@ -1,8 +1,9 @@
 // Overlord W1a, the renewal hand-offs, Task 1 (plan `w1a-renewal-handoffs.md`): the operator's Renew now. The door
 // `POST /api/sessions/:id/renew` records a request (session-gated, in `CONTINUITY_SESSION_DOORS`) and decides nothing about the
 // renewal; the generations lane reads it after its own `renew-requests` cursor, once, and makes the session's live generation
-// due `operator` (hard): live, the walk starts; in shadow it is recorded on the shadow column and nothing is renewed. A real
-// coord.db, fixture HOMEs and the fake time ports; nothing reaches the fleet.
+// due `operator` (hard): live, the walk starts. A press in shadow, or one read on a shadow pass, is passed over with the cursor
+// and never becomes a due, then or after the row is armed (the coordinator's ruling F1 on review 2312). A real coord.db,
+// fixture HOMEs and the fake time ports; nothing reaches the fleet.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -13,7 +14,9 @@ import { buildServer } from '../src/server.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { RENEW_REQUESTS_CURSOR, type GenRow } from '../src/continuity/continuityStore.js';
 import { generationsPass, type GenerationsDeps, type RegistryFacts } from '../src/continuity/generationsLane.js';
-import { renewDoorVerdict, renewNowStands } from '../src/continuity/renewNow.js';
+import * as renewNowModule from '../src/continuity/renewNow.js';
+import { renewDoorVerdict } from '../src/continuity/renewNow.js';
+import { renewNowCases } from './sim/handoffSets.js';
 import type { FleetRole } from '../../shared/fleetRoles.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { HANDOFF_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
@@ -80,12 +83,8 @@ describe('renewDoorVerdict and renewNowStands (L1)', () => {
     expect(renewDoorVerdict({ live: { role: 'coordinator' }, pending: 'unmeasured' })).toBe('unmeasured');
   });
 
-  it('renewNow stands for a request read this pass, and for the operator due the generation already carries', () => {
-    expect(renewNowStands(true, null)).toBe(true);
-    expect(renewNowStands(false, 'operator')).toBe(true);
-    expect(renewNowStands(false, 'hard-cap')).toBe(false);
-    expect(renewNowStands(false, null)).toBe(false);
-  });
+  // `renewNowStands`' cases are written once, in the mutation set, and run here against the real module.
+  for (const [name, run] of Object.entries(renewNowCases(renewNowModule))) it(`renewNowStands: ${name}`, run);
 
   it('the door words are 409 each, from the one table', () => {
     for (const w of ['renew-not-long-lived', 'renew-pending', 'renewing'] as const) {
@@ -118,20 +117,29 @@ const cookieOf = async (a: FastifyInstance): Promise<string> => {
 };
 const renew = (a: FastifyInstance, id: string, headers: Record<string, string> = {}) =>
   a.inject({ method: 'POST', url: `/api/sessions/${id}/renew`, headers, payload: {} });
-const requests = (coord: CoordStore): unknown[] => coord.db.prepare('SELECT id, sessionId, actor FROM continuity_renew_requests ORDER BY id').all();
+const requests = (coord: CoordStore): unknown[] => coord.db.prepare('SELECT id, sessionId, actor, live FROM continuity_renew_requests ORDER BY id').all();
 
 describe('POST /api/sessions/:id/renew (the door)', () => {
   it('with sign-in off, a coordinator with a live generation is recorded (200), once: a second waits for the lane (renew-pending)', async () => {
     const { app: a, coord } = await server(false);
     mint(coord, COORD, 'coordinator');
     const res = await renew(a, COORD);
-    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, id: 1 }]);
-    expect(requests(coord)).toEqual([{ id: 1, sessionId: COORD, actor: 'flag-off' }]);
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, id: 1, shadow: true }]);
+    expect(requests(coord)).toEqual([{ id: 1, sessionId: COORD, actor: 'flag-off', live: 0 }]);
     expect(refused(await renew(a, COORD))).toEqual([409, 'renew-pending']);
     expect(requests(coord)).toHaveLength(1);
     // Once the lane has read it (its cursor past the request), the operator may ask again.
     expect(coord.advanceCursor({ lane: RENEW_REQUESTS_CURSOR, from: 0, to: 1 })).toEqual({ changed: true });
     expect((await renew(a, COORD)).statusCode).toBe(200);
+  });
+
+  it('with the continuity row live, the press is recorded live and the answer says so (shadow: false)', async () => {
+    const { app: a, coord } = await server(false);
+    coord.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    mint(coord, COORD, 'coordinator');
+    const res = await renew(a, COORD);
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, id: 1, shadow: false }]);
+    expect(requests(coord)).toEqual([{ id: 1, sessionId: COORD, actor: 'flag-off', live: 1 }]);
   });
 
   it('a session with no live generation, or one of a role that is not long-lived, is renew-not-long-lived and records nothing', async () => {
@@ -169,8 +177,8 @@ function laneFixture() {
   const deps: GenerationsDeps = { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc: 'p1', log: (l) => logs.push(l),
     retried: new Set(), emptyTries: new Map(), gate: () => null };
   const pass = () => generationsPass(deps, { registry, readings: new Map(), listedAt: t.ports.clock.wall() + 1, canRenew: true });
-  const request = (sessionId = COORD): number => {
-    const w = s.insertRenewRequest({ sessionId, actor: 'flag-off', at: t.ports.clock.wall() });
+  const request = (sessionId = COORD, live = true): number => {
+    const w = s.insertRenewRequest({ sessionId, actor: 'flag-off', at: t.ports.clock.wall(), live });
     if (!w.ok) throw new Error('request not recorded');
     return w.id;
   };
@@ -178,17 +186,69 @@ function laneFixture() {
 }
 
 describe('the generations lane reads Renew now requests (Task 1)', () => {
-  it('shadow: the request makes the generation due operator (hard) and the walk is recorded on the shadow column; nothing is renewed', () => {
+  it('shadow: a press is passed over with the cursor and logged; no operator due is written and nothing walks (ruling F1)', () => {
     const f = laneFixture();
     mint(f.s, COORD, 'coordinator');
     atRest(f.s, COORD);
-    const id = f.request();
+    const id = f.request(COORD, false);
     const r = f.pass();
     expect(r.live).toBe(false);
     expect(r.planned).toEqual([]);
-    expect(liveOf(f.s, COORD)).toMatchObject({ state: 'active', shadowState: 'draining', dueWhy: 'operator', dueClass: 'hard', walk: 'shadow' });
-    expect(r.recorded.some((l) => l.includes(`${COORD} n=1 active -> draining on due`))).toBe(true);
+    expect(liveOf(f.s, COORD)).toMatchObject({ state: 'active', shadowState: null, dueWhy: null, dueSince: null, walk: null });
+    expect(f.logs.some((l) => l.includes(`${COORD} Renew now ${id} read; pressed or read in shadow, so nothing renews`))).toBe(true);
     expect(cursorOf(f.s)).toBe(id);
+  });
+
+  it('the flip: a press in shadow, read in shadow, then the row armed: the next live pass renews nothing (ruling F1)', () => {
+    const f = laneFixture();
+    mint(f.s, COORD, 'coordinator');
+    atRest(f.s, COORD);
+    f.request(COORD, false);
+    f.pass();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.t.advance(30_000);
+    const r = f.pass();
+    expect(r.live).toBe(true);
+    expect(liveOf(f.s, COORD)).toMatchObject({ state: 'active', dueWhy: null, walkClass: null });
+    expect(r.planned.filter((p) => p.act.kind === 'renew')).toEqual([]);
+  });
+
+  it('the race: a press in shadow that the lane first reads once the row is armed renews nothing either', () => {
+    const f = laneFixture();
+    mint(f.s, COORD, 'coordinator');
+    atRest(f.s, COORD);
+    const id = f.request(COORD, false);
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    const r = f.pass();
+    expect(r.live).toBe(true);
+    expect(liveOf(f.s, COORD)).toMatchObject({ state: 'active', dueWhy: null });
+    expect(cursorOf(f.s)).toBe(id);
+  });
+
+  it('a lowering: an operator due a live pass wrote is cleared by the next shadow pass, so re-arming renews nothing', () => {
+    const f = laneFixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    mint(f.s, COORD, 'coordinator');
+    atRest(f.s, COORD);
+    f.s.db.prepare("UPDATE continuity_generations SET dueSince = 1, dueWhy = 'operator', dueClass = 'hard', dueSinceObservedMs = 0").run();
+    f.s.setLaneArm(CONTINUITY_LANE, 'shadow', 2);
+    f.pass();
+    expect(liveOf(f.s, COORD)).toMatchObject({ dueWhy: null, dueSince: null });
+  });
+
+  it('an operator due ends with its generation: the ended row carries none (ruling F1)', () => {
+    const f = laneFixture();
+    const g = mint(f.s, COORD, 'coordinator');
+    f.s.db.prepare("UPDATE continuity_generations SET dueSince = 1, dueWhy = 'operator', dueClass = 'hard', dueSinceObservedMs = 0 WHERE id = ?").run(g.id);
+    const s2 = f.s.insertStart({ sessionId: COORD, reportId: 'r-end', uuid: U1, source: 'startup', model: 'claude-opus-5-5',
+      rowIncarnation: INC, reportedAt: FAKE_T0, receivedAt: FAKE_T0 });
+    if (!s2.ok) throw new Error('start');
+    const w = f.s.mintGeneration({ identity: COORD, sessionId: COORD, role: 'coordinator', term: 1, rowIncarnation: INC, startId: s2.id,
+      startReportedAt: FAKE_T0, resumed: false, model: 'claude-opus-5-5', lane: 'lane-a', host: null, outcome: 'woken', mono: 2_000,
+      proc: 'p1', now: FAKE_T0 }, { term: g.term, n: g.n, state: g.state, shadowState: g.shadowState, walk: g.walk }, false);
+    expect(w.ok).toBe(true);
+    expect(f.s.db.prepare('SELECT state, dueWhy, dueSince, dueClass FROM continuity_generations WHERE id = ?').get(g.id))
+      .toEqual({ state: 'ended', dueWhy: null, dueSince: null, dueClass: null });
   });
 
   it('live: the request starts the renewal walk on `state` (draining, hard)', () => {
@@ -244,6 +304,7 @@ describe('the generations lane reads Renew now requests (Task 1)', () => {
 
   it('a due write that is refused leaves the cursor, so the next pass reads the request again', () => {
     const f = laneFixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
     mint(f.s, COORD, 'coordinator');
     atRest(f.s, COORD);
     const id = f.request();

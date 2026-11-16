@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError, sendErrorText } from '../src/lib/api';
 import { createSessionStore } from '../src/stores/session';
 
-const SENTENCE = 'Renewing — your message is kept; send it again in a moment.';
+const SENTENCE = 'Between conversations (starting or renewing) — your message is kept; send it again in a moment.';
 
 describe('a send refused `renewing`', () => {
   it('keeps the message as a failed pending send, with the code and the sentence', async () => {

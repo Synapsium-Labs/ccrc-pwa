@@ -757,10 +757,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * `POST /api/sessions/:id/renew`: the operator's Renew now (Table 11.1e, W1a; the hand-offs piece, Task 1). Session-gated
    * like the timer doors above, in `CONTINUITY_SESSION_DOORS`. It records a request (`continuity_renew_requests`, this door its
    * one writer) and decides nothing about the renewal: the generations lane reads the request after its own cursor and makes
-   * the session's live generation due `operator` (hard), so every check the lane makes still applies, and in shadow it records
-   * the walk and renews nothing. Refused `renew-not-long-lived` (409) for a session with no live generation of a long-lived
-   * role, `renew-pending` (409) while a request of its waits for the lane, `unmeasured` (502) when a row could not be read.
-   * `200 { ok, id }`.
+   * the session's live generation due `operator` (hard), so every check the lane makes still applies. The request carries
+   * whether the `continuity` row was live when it was pressed: a press in shadow is recorded for the record only, and the lane
+   * never turns it into a due, then or after the row is armed (ruling F1 on review 2312). Refused `renew-not-long-lived`
+   * (409) for a session with no live generation of a long-lived role, `renew-pending` (409) while a request of its waits for
+   * the lane, `unmeasured` (502) when a row could not be read. `200 { ok, id, shadow }`, `shadow` true for a press in shadow.
    */
   app.post('/api/sessions/:id/renew', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -775,9 +776,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (verdict !== 'ok') {
       return refuseRoute(reply, verdict, verdict === 'unmeasured' ? { detail: 'the generations or the requests could not be read' } : {});
     }
-    const w = coord.insertRenewRequest({ sessionId: id, actor: deps.operatorActor?.(req) ?? 'flag-off', at: deps.wall() });
+    const armed = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
+    const w = coord.insertRenewRequest({ sessionId: id, actor: deps.operatorActor?.(req) ?? 'flag-off', at: deps.wall(), live: armed });
     if (!w.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_renew_requests could not be written' });
-    return reply.code(200).send({ ok: true, id: w.id });
+    return reply.code(200).send({ ok: true, id: w.id, shadow: !armed });
   });
 
   /** `GET`/`POST /api/coord/renewal-mode` — Settings › Automation › "When soft renewals happen" (the hand-offs piece, Task 4;

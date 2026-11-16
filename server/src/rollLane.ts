@@ -169,9 +169,7 @@ interface Pass {
  *  renewal lane holds a live generation for it. A read that fails leaves the id unread (null), which holds it while live. */
 function handoffOf(c: RollSweepDeps['continuity'], records: readonly SessionRecord[]): Pick<Pass, 'continuityLive' | 'longLived'> {
   const longLived = new Map<string, boolean | null>();
-  if (c === undefined || !laneArmRowViewOf(CONTINUITY_LANE, c.laneArmSetting(CONTINUITY_LANE), laneArmGate(CONTINUITY_LANE)).live) {
-    return { continuityLive: false, longLived };
-  }
+  if (c === undefined || !continuityLiveOf(c)) return { continuityLive: false, longLived };
   const gens = c.liveGenerations();
   const owned = gens.ok ? new Set(gens.rows.map((g) => g.sessionId)) : null;
   let openCoordinators: ReadonlySet<string> | 'unmeasured';
@@ -185,6 +183,13 @@ function handoffOf(c: RollSweepDeps['continuity'], records: readonly SessionReco
     longLived.set(rec.id, longLivedOf(role, owned === null ? 'unmeasured' : owned.has(rec.id)));
   }
   return { continuityLive: true, longLived };
+}
+
+/** The `continuity` row as the generations lane reads it: live or not. The pass reads it once, and the act-time re-check and
+ *  `afterAct` read it again (review 2312 F6), so a row armed while the pass ran never rolls a session the pass judged in
+ *  shadow: its long-life was not read (null), which holds it while live. */
+function continuityLiveOf(c: RollSweepDeps['continuity']): boolean {
+  return c !== undefined && laneArmRowViewOf(CONTINUITY_LANE, c.laneArmSetting(CONTINUITY_LANE), laneArmGate(CONTINUITY_LANE)).live;
 }
 
 /** The pass's facts the executor's asks read, carried on the deps it is handed. */
@@ -240,7 +245,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
     },
     atAct: async (deps, f, row, rec) => {
       const { live, startedAt } = await liveOf(deps, rec);
-      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()) };
+      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()), continuityLive: continuityLiveOf(deps.continuity) };
       const at = deps.now();
       const store = idleHoursBindings(deps)(row.id);
       return { v: ask(deps, p, f.names, row, store, live, startedAt, at), store };
@@ -252,7 +257,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       if (targets === null) return 'setting-unreadable';
       const fresh = deps.act === null ? { ok: false as const } : await deps.act.rowAtAct(rec);
       if (!fresh.ok) return AFTER_UNMEASURED;
-      const t = rollTargetVerdict(targets, fresh.row.role, deps.pass.longLived.get(rec.id) ?? null, deps.pass.continuityLive);
+      const t = rollTargetVerdict(targets, fresh.row.role, deps.pass.longLived.get(rec.id) ?? null, continuityLiveOf(deps.continuity));
       return t.take ? null : t.skip;
     },
   },

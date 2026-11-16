@@ -595,8 +595,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
     limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
     /** Overlord W1a hand-offs: the operator's "Renew now" for a long-lived session. `POST /api/sessions/:id/renew`, body
-     *  `{}`; `409 renew-not-long-lived` / `409 renew-pending` raise `ApiError` with the word. Session-gated. */
-    renewNow: (id: string) => post(`${sid(id)}/renew`, {}),
+     *  `{}`; `409 renew-not-long-lived` / `409 renew-pending` raise `ApiError` with the word. Session-gated. Its answer says
+     *  whether the press was made while continuity was shadow (`shadow`, review 2312 F1); an unreadable answer is `unreadable`. */
+    renewNow: (id: string) => postRead<{ readonly ok: true; readonly id: number; readonly shadow?: boolean } | 'unreadable'>(
+      `${sid(id)}/renew`, 'unreadable', {}),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
