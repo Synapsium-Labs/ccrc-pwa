@@ -414,6 +414,28 @@ describe('the header and a banner name the version (refinement (q))', () => {
     expect(document.querySelector('.docs-more-panel .docs-truth-source')?.textContent).toBe(DOCS_HEAD_TEXT.sourceNone);
   });
 
+  it('a version page that opens nothing draws no badge from the latest\'s drafts', async () => {
+    const withheld = { section: 'specs', path: 'n.md', committed: null, draft: draftOf('untracked', { fp: null }) } as const;
+    const tree = treeOk({ entries: [withheld], drafts: holder() });
+    expect(entryView(withheld, tree.drafts, 'ref').badge, 'the fixture withholds a new draft').not.toBeNull();
+    const url = `/docs/demo/specs/n.md?ref=ws/a&at=${VERSION}`;
+    // The truth line (full head) and the phone row, each on its own render.
+    open(url, fakeLoaders({ tree: okTree(tree) }));
+    expect(await screen.findByText(DOCS_VIEW_TEXT.nothingToShow)).toBeInTheDocument();
+    await settle();
+    expect(document.querySelector('.docs-truth-source')?.textContent).toBe(DOCS_HEAD_TEXT.sourceNone);
+    expect(document.querySelector('.docs-truth .docs-badge')).toBeNull();
+    cleanup();
+    atWidth(412);
+    open(url, fakeLoaders({ tree: okTree(tree) }));
+    expect(await screen.findByText(DOCS_VIEW_TEXT.nothingToShow)).toBeInTheDocument();
+    await settle();
+    expect(document.querySelector('.docs-compact-where')).not.toBeNull();
+    expect(document.querySelector('.docs-compact-where .docs-badge')).toBeNull();
+    expect(document.querySelector('.docs-more-panel .docs-truth .docs-badge')).toBeNull();
+    expect(document.querySelector('.docs-more-panel .docs-truth-source')?.textContent).toBe(DOCS_HEAD_TEXT.sourceNone);
+  });
+
   it('a version page shows no banner about the latest\'s drafts', async () => {
     const entries = [
       entry('specs', 'a.md', { draft: draftOf('deleted', { kind: 'absent', fp: null, size: null }) }),

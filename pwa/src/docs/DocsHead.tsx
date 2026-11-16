@@ -503,7 +503,7 @@ function TruthLine(p: {
       leaf = (
         <>
           {SEP}{source}
-          {k.view.badge !== null && s.kind !== 'draft' && s.kind !== 'version' && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
+          {k.view.badge !== null && s.kind !== 'draft' && page.at === null && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
           {file.s === 'ok' && <>{SEP}<span className="docs-truth-size">{kib(file.answer.show.size)}</span></>}
         </>
       );
@@ -1016,7 +1016,8 @@ function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBad
   const s = leafSource(tree, page, openedPin(tree, page, file));
   if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
   if (s.kind === 'version') return { word: truthSource(tree, page, openedPin(tree, page, file)), badged: true };
-  return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
+  // A version page draws no entry badge: the entry's is the latest's (a version page's source is `version` or `none`).
+  return k.view.badge === null || page.at !== null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
