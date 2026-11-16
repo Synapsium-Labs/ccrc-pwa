@@ -25,6 +25,8 @@ import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
+import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
+import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
@@ -198,6 +200,12 @@ export interface Deps {
   /** The weekly replay quiz lane's port (Overlord W1a, `continuity/quizStore.ts#quizLanePortOf`), built once in `index.ts`.
    *  Absent (a test, a script): the lane does not run. */
   quiz?: QuizLanePort;
+  /** The Overlord authority journal and its guard (Overlord W1, authority journal plan Tasks 3 and 4), built once in `index.ts`
+   *  over `~/.ccrc/overlord-authority.jsonl`, the guard passed to the journal as its `AuthorityGuardPort`. The designation and
+   *  ladder stores append through `overlordAuthority.appendInTx`; gates B's step 3 reads `overlordAuthorityGuard.state()`.
+   *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
+  overlordAuthority?: OverlordAuthorityJournal;
+  overlordAuthorityGuard?: OverlordAuthorityGuard;
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;

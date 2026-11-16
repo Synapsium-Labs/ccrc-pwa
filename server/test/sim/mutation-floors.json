@@ -109,5 +109,10 @@
   "server/src/coord/answerMarks.ts#askMarkable": 1,
   "shared/serviceability.ts#serviceability": 1,
   "shared/serviceability.ts#askingOf": 1,
-  "shared/rosterFacts.ts#factsChangeWidens": 1
+  "shared/rosterFacts.ts#factsChangeWidens": 1,
+  "server/src/coord/overlordAuthority.ts#authorityEntry": 1,
+  "server/src/coord/overlordAuthority.ts#authorityDirection": 1,
+  "server/src/coord/overlordAuthority.ts#authorityFold": 1,
+  "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
+  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1
 }

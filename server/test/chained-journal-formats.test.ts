@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChainedJournalFormat, ChainedRefusal } from '../src/chainedJournal.js';
 import { DELEGATION_JOURNAL_FORMAT } from '../src/coord/delegation-journal.js';
+import { OVERLORD_AUTHORITY_FORMAT } from '../src/coord/overlordAuthority.js';
 import { PROBE_JOURNAL_FORMAT, ProbeJournalError, ProbeJsonError } from './sim/chainedJournalSets.js';
 import { walkSrc } from './rings/walkSrc.js';
 import { parsedFile } from './scan/symbols.js';
@@ -29,6 +30,11 @@ const FORMATS: Record<string, Registered> = {
     sample: { kind: 'lease-carrier-seen', leaseId: 'lease-1', generation: 1, at: '2026-11-14T10:00:00.000Z' },
   },
   probe: { format: PROBE_JOURNAL_FORMAT, binding: null, sample: { kind: 'probe', n: 1 } },
+  overlordAuthority: {
+    format: OVERLORD_AUTHORITY_FORMAT as unknown as AnyFormat,
+    binding: 'server/src/coord/overlordAuthority.ts#OVERLORD_AUTHORITY_FORMAT',
+    sample: { kind: 'authority-latch-raise', opKey: 'op-1', cause: 'restore-detected', cap: 'chat' },
+  },
 };
 
 const KERNEL = 'server/src/chainedJournal.ts';
@@ -145,8 +151,8 @@ function kindLeaks(registry: Record<string, Registered>): { leaks: string[]; pai
 describe('the kinds census', () => {
   const names = Object.keys(FORMATS);
 
-  it('registers the delegation format and the fixture format', () => {
-    expect(names.sort()).toEqual(['delegation', 'probe']);
+  it('registers the delegation format, the fixture format and the Overlord authority format', () => {
+    expect(names.sort()).toEqual(['delegation', 'overlordAuthority', 'probe']);
     for (const n of names) expect(FORMATS[n]!.format.kinds.length, n).toBeGreaterThan(0);
   });
 
