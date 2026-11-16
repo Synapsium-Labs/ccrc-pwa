@@ -5,6 +5,8 @@
 // or opted-out session, or one hibernation will take within 30 minutes, is skipped by name; the setting off rolls
 // nothing. Pure: no fixture HOME, no process, no network.
 import { describe, expect, it } from 'vitest';
+import * as rollTargetModule from '../src/coord/rollTarget.js';
+import { rollHandoffCases } from './sim/handoffSets.js';
 import { VIEWER_OPEN_TTL_MS, type ChildMark } from '../../shared/api.js';
 import { sessionRoleOf } from '../src/roleOf.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets } from '../../shared/claudeVersion.js';
@@ -162,32 +164,8 @@ describe('the role (D-8276): every idle session under all, coordinators only und
 });
 
 describe('the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
-  const TARGETS = ['all', 'coordinators', 'off'] as const;
-  const ROLES = ['coordinator', 'child', null] as const;
-  const LONG = [true, false, null] as const;
-
-  it('CHARACTERIZATION: with continuity shadow every case answers as it did before the hand-off, whatever longLived reads', () => {
-    const before = (t: (typeof TARGETS)[number], r: (typeof ROLES)[number]) => (t === 'off' ? { take: false, skip: 'setting-off' }
-      : t === 'all' ? { take: true } : r === null ? { take: false, skip: 'role-unknown' } : r !== 'coordinator' ? { take: false, skip: 'not-coordinator' }
-        : { take: true });
-    for (const t of TARGETS) for (const r of ROLES) for (const l of LONG) {
-      expect(rollTargetVerdict(t, r, l, false), `${t} ${r} ${l}`).toEqual(before(t, r));
-    }
-  });
-
-  it('live: a long-lived session is skipped renewal-owns under every setting but off, and an unread one is role-unknown', () => {
-    for (const t of ['all', 'coordinators'] as const) for (const r of ROLES) {
-      expect(rollTargetVerdict(t, r, true, true), `${t} ${r}`).toEqual({ take: false, skip: 'renewal-owns' });
-      expect(rollTargetVerdict(t, r, null, true), `${t} ${r}`).toEqual({ take: false, skip: 'role-unknown' });
-    }
-    for (const l of LONG) expect(rollTargetVerdict('off', 'coordinator', l, true)).toEqual({ take: false, skip: 'setting-off' });
-  });
-
-  it('live: a session that is not long-lived (a plain session, a child) is judged as today', () => {
-    for (const t of TARGETS) for (const r of ROLES) {
-      expect(rollTargetVerdict(t, r, false, true), `${t} ${r}`).toEqual(rollTargetVerdict(t, r, false, false));
-    }
-  });
+  // The decider's cases live once in `sim/handoffSets.ts` (its mutation floor runs them against each mutant).
+  for (const [name, run] of Object.entries(rollHandoffCases(rollTargetModule))) it(name, run);
 
   it('autoRollVerdict carries it: an idle coordinator behind on release is renewal-owns while live, and rolled while shadow', () => {
     expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true }))).toEqual({ act: 'skip', reason: 'renewal-owns' });

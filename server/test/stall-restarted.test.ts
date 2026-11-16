@@ -9,6 +9,8 @@ import {
   stallArmHasRung, stallDetail, parseStallDetail, stallRestartedSubject,
   RESTARTED_HEADS_UP_MS, STALL_RESTARTED_PREFIX, ORPHAN_D_IDLE_MS, BACKLOG_HORIZON_MS,
 } from '../src/coord/stall.js';
+import * as stallModule from '../src/coord/stall.js';
+import { restartedHandoffCases } from './sim/handoffSets.js';
 import type {
   StallArm, StallArming, StallMode, StallNotice, StallRunRow, StallSessionInput, StallSessionRole, StallVerdict,
   StallWorker, TurnMark, TurnMarkRead,
@@ -219,33 +221,16 @@ describe('restarted: the mails', () => {
 
 describe('restarted, widened to long-lived sessions (Overlord W1a, the renewal hand-offs, Task 7; W0-21, Proposal 12)', () => {
   const coord = (over: Over = {}): StallSessionInput => ({ ...input(R, { role: 'coordinator', run: null, longLived: true, ...over }), sessionId: COORD });
-  const sent = (subject: string) => [{ id: 9, at: R + MIN, runId: null, fromId: 'operator', toId: COORD, kind: 'status', subject }];
 
-  it('a coordinator whose marker is done, lostBg 1, restartAt > stopAt gets one rung-1 notice, run-less, and no heads-up', () => {
+  // The arm's cases live once in `sim/handoffSets.ts` (its mutation floor runs them against each mutant).
+  for (const [name, run] of Object.entries(restartedHandoffCases(stallModule))) it(name, run);
+
+  it('its mail is the self-notice a run worker reads, addressed to the coordinator; the delivery is the arm\'s, unchanged', () => {
     const one = coord({ mark: mark(R, { lostBg: 1, lostKinds: ['shell'], lostIds: ['b1'] }) });
-    expect(stallRestartedVerdicts(one, NOW)).toEqual([r1()]);
-    expect(stallRestartedVerdict(one, NOW)).toEqual(r1());
-    // Its mail is the self-notice a run worker reads, addressed to the coordinator.
     expect(stallSessionMail(one, r1() as Extract<StallVerdict, { act: 'notify' }>, NOW).subject).toBe(stallRestartedSubject(R));
-  });
-
-  it('shadow without the markers, mail with them: the delivery is the arm\'s, unchanged', () => {
     expect(stallRestartedVerdicts(coord({ arming: DARK }), NOW)).toEqual([r1()]);
     expect(stallNotifyDelivery('restarted', 'worker', DARK)).toBe('shadow');
     expect(stallNotifyDelivery('restarted', 'worker', W2)).toBe('send');
-  });
-
-  it('a second sweep sends nothing: the notice is keyed on its mail subject, one per restart', () => {
-    expect(stallRestartedVerdicts(coord({ mail: sent(stallRestartedSubject(R)) }), NOW)).toEqual([NONE]);
-    // A later restart is a new subject, so it is told again.
-    const later = R + 5 * MIN;
-    expect(stallRestartedVerdicts(coord({ mark: mark(later), mail: sent(stallRestartedSubject(R)), worker: workerAt('idle', later + MIN), liveStartedAt: later - 5_000 }), NOW))
-      .toEqual([r1(later)]);
-  });
-
-  it('a session that is not long-lived gets none (a plain session, or a coordinator the role read does not call long-lived)', () => {
-    expect(stallRestartedVerdicts(coord({ longLived: false }), NOW)).toEqual([NONE]);
-    expect(stallRestartedVerdicts({ ...input(R, { role: 'other', run: null }), sessionId: COORD }, NOW)).toEqual([NONE]);
   });
 
   it('a run worker keeps its two rungs whatever longLived says, so a child is never mailed twice', () => {
@@ -254,8 +239,7 @@ describe('restarted, widened to long-lived sessions (Overlord W1a, the renewal h
     expect(stallRestartedVerdicts(input(R, { run: null, longLived: true }), NOW)).toEqual([NONE]);
   });
 
-  it('a coordinator whose marker is not the candidate (nothing lost, or no restart after the stop) gets none', () => {
-    expect(stallRestartedVerdicts(coord({ mark: mark(R, { lostBg: 0 }) }), NOW)).toEqual([NONE]);
+  it('a coordinator with no restart after its stop gets none', () => {
     expect(stallRestartedVerdicts(coord({ mark: mark(R, { stopAt: R + MIN }) }), NOW)).toEqual([NONE]);
   });
 });

@@ -115,5 +115,7 @@
   "server/src/coord/overlordAuthority.ts#authorityDirection": 1,
   "server/src/coord/overlordAuthority.ts#authorityFold": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
-  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1
+  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
+  "server/src/coord/rollTarget.ts#rollTargetVerdict": 1,
+  "server/src/coord/stall.ts#stallRestartedVerdict": 1
 }
