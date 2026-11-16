@@ -982,3 +982,75 @@ describe('NewSessionSheet — step 2 shows the cached project list at once', () 
     expect(document.querySelector('.proj-skel')).not.toBeNull();
   });
 });
+
+// D-8686 (re-plan R1): on a lane whose roster row is a managed Codex one, the Effort select offers only the levels the
+// catalogue lists for the picked class's model, and choosing a Class that does not list the chosen Effort clears it.
+// `lane-b` is a neutral stand-in: the wrapper fallback does not name it, so only its roster row gives it that list.
+describe("NewSessionSheet's Effort select follows the picked class's catalogue levels (re-plan R1, D-8686)", () => {
+  const LANE_B: RosterWire = {
+    id: 'lane-b', label: 'Lane B', hue: 'violet', homeAble: false, hidden: false, pool: null, provider: 'openai',
+    kind: 'codex', managed: true, telemetry: 'codex',
+  };
+  const read = {
+    kind: 'read', classes: {
+      fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+      opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: ['low', 'medium', 'high', 'xhigh'] },
+      sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: [] },
+      haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: ['low', 'medium'] },
+    },
+  } as const;
+  const openLaneB = async (projects: ProjectRow[] = []): Promise<{ effort: HTMLSelectElement; cls: HTMLSelectElement }> => {
+    const roster = [...pooled(POOLS), LANE_B];
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    vi.spyOn(api, 'laneModels').mockImplementation(async (lane) => ({ ok: true, lane, models: read }));
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Lane B/ }));
+    if (projects.length > 0) fireEvent.click(await screen.findByText(projects[0]!.name));
+    const cls = await screen.findByLabelText('Class') as HTMLSelectElement;
+    // The read has landed once the class options carry the lane's own labels.
+    await within(cls).findByText('Gamma 6.1 — opus');
+    return { effort: await screen.findByLabelText('Effort') as HTMLSelectElement, cls };
+  };
+  const levels = (select: HTMLSelectElement): (string | null)[] => Array.from(select.options).map((o) => o.textContent);
+
+  it('with Class Automatic, all five rungs and no Ultracode', async () => {
+    const { effort } = await openLaneB();
+    expect(levels(effort)).toEqual(['Unset', 'Low', 'Medium', 'High', 'Xhigh', 'Max', 'Auto']);
+  });
+
+  it('choosing Class opus drops Max and keeps Xhigh', async () => {
+    const { effort, cls } = await openLaneB();
+    fireEvent.change(cls, { target: { value: 'opus' } });
+    expect(levels(effort)).toEqual(['Unset', 'Low', 'Medium', 'High', 'Xhigh', 'Auto']);
+  });
+
+  it('an Effort the newly picked class does not list is cleared', async () => {
+    const { effort, cls } = await openLaneB();
+    fireEvent.change(cls, { target: { value: 'opus' } });
+    fireEvent.change(effort, { target: { value: 'xhigh' } });
+    expect(effort.value).toBe('xhigh');
+    fireEvent.change(cls, { target: { value: 'haiku' } });
+    expect(effort.value).toBe('');
+  });
+
+  it('an Effort the newly picked class lists is kept', async () => {
+    const { effort, cls } = await openLaneB();
+    fireEvent.change(effort, { target: { value: 'low' } });
+    fireEvent.change(cls, { target: { value: 'haiku' } });
+    expect(effort.value).toBe('low');
+  });
+
+  // A select shows its first option when its value matches none, so the field alone cannot tell a cleared Effort from
+  // one that is still held: what a start posts is the measure.
+  it('a start posts no Effort the picked class does not list', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { effort, cls } = await openLaneB([proj('demo')]);
+    fireEvent.change(cls, { target: { value: 'opus' } });
+    fireEvent.change(effort, { target: { value: 'xhigh' } });
+    fireEvent.change(cls, { target: { value: 'haiku' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toEqual({ wrapper: 'lane-b', project: 'demo', workdir: '/w/demo', route: { class: 'haiku' } });
+  });
+});

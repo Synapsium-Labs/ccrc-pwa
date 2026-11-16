@@ -7,7 +7,8 @@
 // registry, and the row's label follows it with no code change. When the lane has no registry, or it or its catalogue
 // cannot be read, a row reads its class name alone ("Opus class"), never a model name this file remembers: the
 // labels it used to hard-code went stale on the gpt lane once that lane's registry moved on. `model-name-census.test.ts`
-// keeps a model display name out of `pwa/src` for good.
+// keeps a model display name out of `pwa/src` for good. WHICH LIST a lane gets is the roster's lane kind's to decide
+// (D-8686, re-plan R1), with the temporary wrapper fallback named once, in `modelListProvider`.
 //
 // Routing spec 2026-09-14 §5.3, slice 4, Task 5: a tap no longer sends
 // `/model <alias>` or `/effort <level>` — it writes the routing record
@@ -22,10 +23,11 @@
 // silently landing somewhere — the lane had only three tiers. It has four now.
 // The alias is set in ONE place, the lane's `settings.json` `env` block
 // (`deploy/models-op.mjs`'s materialiser writes it from the registry, `shared/modelenv.mjs` names its keys).
-import type { RouteField } from '../../../shared/api';
-import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
+import type { RosterWire, RouteField } from '../../../shared/api';
+import { CLASSES, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../../shared/models';
 import type { ProviderId } from '../../../shared/providers';
 import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
+import { managedCodex } from '../accounts/connectFlow';
 
 /**
  * Routing slice 6, Task 4: the intended-value override an option list is
@@ -100,17 +102,31 @@ export interface PickOption {
   degradedTo?: string;
 }
 
-/** Whose model list `modelOptions` picks for a lane. The dedicated list belongs to ONE lane, named by its wrapper
- *  id and kept as it is (its own row order, no `Default` row, no ultracode); every other lane gets the Anthropic list,
- *  whatever it runs (departure `model-list-names-its-provider`). Only the ORDER and those two rows differ: every
- *  row's label comes from the lane's own files on both (D-8406). */
-export function modelListProvider(wrapper: string): 'anthropic' | 'openai' {
+/** D-8686 (re-plan R1; spec §2.6, D17): the roster facts a lane's model list is chosen by — `RosterWire`'s lane-kind
+ *  half as the server derives it once (`rosterKindOf`, `shared/roster.ts`), never a field of its own. `undefined` is a
+ *  wrapper the roster has no row for (not arrived yet, or unrostered), as `entryFor` (`lib/accounts.ts`) answers. */
+export type LaneKindFacts = Pick<RosterWire, 'kind' | 'managed' | 'telemetry'>;
+/** The two option lists a picker shows. */
+export type ModelList = 'anthropic' | 'openai';
+
+/** Whose model list `modelOptions` picks for a lane (D-8686). THE ROSTER DECIDES: a lane whose row reads `kind: 'codex'`
+ *  with `managed: true` gets the dedicated list, and one whose row reads `telemetry: 'anthropic'` gets the Anthropic
+ *  list. `managed: true` is part of the test because `kind: 'codex'` alone means only an `openai` provider, including a
+ *  launcher ccrc merely records (runbook step 7; `managedCodex`, `accounts/connectFlow.ts`, is its one definition).
+ *  Only a row that says neither, or no row, leaves the wrapper to decide. The dedicated list has its own row order, no
+ *  `Default` row and no Ultracode; every row's label comes from the lane's own files on both lists (D-8406). */
+export function modelListProvider(wrapper: string, entry: LaneKindFacts | undefined): ModelList {
+  if (managedCodex(entry)) return 'openai';
+  if (entry?.telemetry === 'anthropic') return 'anthropic';
+  // TEMPORARY, the 2026-11-16 route's exception to D17 (the plan's "Re-plan of 2026-11-16", Task 21; spec §2.6's
+  // note): until the owner has measured the server box's roster, a row that says neither keeps the wrapper check.
+  // It goes with the definition of done's item 4, and `models-lane-kind.test.ts`'s census flips to none then.
   return wrapper === 'gpt' ? 'openai' : 'anthropic';
 }
 
 /** The class rows' order on each list, as the picker has always shown them: the dedicated lane leads with its most
  *  capable class, the Anthropic list with the everyday one. Classes only, so a class this build adds is a row here. */
-const CLASS_ORDER: Readonly<Record<'anthropic' | 'openai', readonly ModelClass[]>> = {
+const CLASS_ORDER: Readonly<Record<ModelList, readonly ModelClass[]>> = {
   openai: ['fable', 'opus', 'sonnet', 'haiku'],
   anthropic: ['opus', 'sonnet', 'fable', 'haiku'],
 };
@@ -126,6 +142,16 @@ export function classWord(cls: ModelClass): string {
  *  class unavailable on this lane). The one place a model's display name enters this app. */
 export function laneClassLabel(lane: LaneModelsRead | null, cls: ModelClass): string | null {
   return lane?.kind === 'read' ? lane.classes[cls].label : null;
+}
+
+/** D-8686 (re-plan R1): the effort levels the catalogue lists for the model `cls` maps to on this lane, as
+ *  `GET /api/models/:lane` carries them (`LaneClassModel.efforts`), or `null` when the lane does not say: no read
+ *  yet, an absent or unreadable registry, a value that is not a class (`''`, `default`, a word from a newer build),
+ *  an empty class, no catalogue row for its model, or an older server. `[]` (the row lists none) is passed on as
+ *  it is: `effortOptions` decides what it means. Pure. */
+export function laneClassEfforts(lane: LaneModelsRead | null, cls: string | null): readonly string[] | null {
+  if (lane?.kind !== 'read' || cls === null || !(CLASSES as readonly string[]).includes(cls)) return null;
+  return lane.classes[cls as ModelClass].efforts;
 }
 
 /** A model string folded for a loose comparison: lowercase, and every run of anything but a letter or a digit one
@@ -157,13 +183,14 @@ export function liveModelNames(live: string | null, key: string): boolean {
  *  on the dedicated list nothing, since there the pane prints a model id no class word is part of. When two rows'
  *  keys both appear in the live string, the longer key alone is lit (an id that extends another names its own row). */
 export function modelOptions(
-  wrapper: string, lane: LaneModelsRead | null, current: string | null, routing?: RoutingOverride,
+  wrapper: string, entry: LaneKindFacts | undefined, lane: LaneModelsRead | null, current: string | null,
+  routing?: RoutingOverride,
 ): PickOption[] {
   const intended = routing?.intended ?? null;
   const inert = routing?.inert ?? false;
   const unreadable = routing?.unreadable ?? false;
   const degraded = routing?.degraded ?? null;
-  const list = modelListProvider(wrapper);
+  const list = modelListProvider(wrapper, entry);
   const classes = lane?.kind === 'read' ? lane.classes : null;
   const keyOf = (cls: ModelClass): string => (classes !== null ? classes[cls].model ?? '' : list === 'anthropic' ? cls : '');
   const shown = CLASS_ORDER[list].filter((cls) => classes === null || classes[cls].model !== null);
@@ -201,14 +228,18 @@ export function modelOptions(
  *  row whose model this lane cannot name yet (an empty key: nothing the pane prints could confirm it, D-8406).
  *  `SessionScreen`'s wire-derived queued check reuses this rather than
  *  re-deriving the alias→key table a second time. */
-export function modelReadbackFor(wrapper: string, lane: LaneModelsRead | null, alias: string): string | null {
-  const key = modelOptions(wrapper, lane, null).find((o) => o.route.value === alias)?.readback;
+export function modelReadbackFor(
+  wrapper: string, entry: LaneKindFacts | undefined, lane: LaneModelsRead | null, alias: string,
+): string | null {
+  const key = modelOptions(wrapper, entry, lane, null).find((o) => o.route.value === alias)?.readback;
   return key === undefined || key === '' ? null : key;
 }
 
 /** D-8406: `GET /api/models/:lane`'s answer, held to its shape: the lane's `LaneModelsRead`, or `null` for anything
  *  else (an older server's 404 body, a malformed answer). A `read` must carry every class with a model and a label that
- *  are each a string or null; one that does not is not trusted for any class. The ONE reader of that wire. Pure. */
+ *  are each a string or null, and (D-8686) an `efforts` that is an array of strings, or null; one that does not is not
+ *  trusted for any class. An `efforts` that is absent (an older server) or null reads as `null`, "not known": absence
+ *  permits. The ONE reader of that wire. Pure. */
 export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const models = (raw as { models?: unknown }).models;
@@ -219,13 +250,16 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   const classes = (models as { classes?: unknown }).classes;
   if (typeof classes !== 'object' || classes === null) return null;
   const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
-  const out = {} as Record<ModelClass, { model: string | null; label: string | null }>;
+  const out = {} as Record<ModelClass, LaneClassModel>;
   for (const cls of CLASSES) {
     const c = (classes as Record<string, unknown>)[cls];
     if (typeof c !== 'object' || c === null) return null;
-    const { model, label } = c as { model?: unknown; label?: unknown };
+    const { model, label, efforts } = c as { model?: unknown; label?: unknown; efforts?: unknown };
     if (!strOrNull(model) || !strOrNull(label)) return null;
-    out[cls] = { model, label };
+    if (efforts !== undefined && efforts !== null && !(Array.isArray(efforts) && efforts.every((e) => typeof e === 'string'))) {
+      return null;
+    }
+    out[cls] = { model, label, efforts: efforts === undefined || efforts === null ? null : [...(efforts as string[])] };
   }
   return { kind: 'read', classes: out };
 }
@@ -233,8 +267,10 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
 /** Whether a class's readback can be measured on this lane (D-6334): the lane's provider is known and the list
  *  `modelOptions` picks for it is that provider's own. Anywhere else the readback words are not the lane's model
  *  ids, so "asked" or "queued" would be a claim nothing here can check. `null` (not measurable) is never true. */
-export function classReadbackMeasurable(wrapper: string, provider: ProviderId | null): boolean {
-  return provider !== null && provider === modelListProvider(wrapper);
+export function classReadbackMeasurable(
+  wrapper: string, entry: LaneKindFacts | undefined, provider: ProviderId | null,
+): boolean {
+  return provider !== null && provider === modelListProvider(wrapper, entry);
 }
 
 /** The five level rows' labels are the ladder rung capitalised, nothing more
@@ -251,9 +287,18 @@ const capitalise = (rung: EffortRung): string => rung[0]!.toUpperCase() + rung.s
  *  gpt lane). Ultracode is still the `effort` field's own value
  *  (`{effort: 'ultracode'}`) — there is no separate routing field for it.
  *  `routing` (S6 Task 4) overrides every row's `active` with an exact match
- *  against the recorded intent — see `RoutingOverride`'s own docstring. */
+ *  against the recorded intent — see `RoutingOverride`'s own docstring.
+ *
+ *  D-8686 (re-plan R1): on the dedicated list, `efforts` (the levels the catalogue lists for the model of the class
+ *  the session runs, `laneClassEfforts`) narrows the five level rows to the ladder rungs it names, in ladder order; a
+ *  word off the ladder is never a row, and a list with no ladder rung leaves `Auto` alone. `null` (the lane does not
+ *  say) and `[]` (the row lists none, which `parseRegistry`'s own effort check reads as no constraint) leave all five
+ *  rungs. On the Anthropic list `efforts` is ignored. `Auto` is last on every list, and Ultracode is spliced at index
+ *  4 only off the dedicated list, which always has all five rungs there, so index 4 is still "before Max". */
 export function effortOptions(
   wrapper: string,
+  entry: LaneKindFacts | undefined,
+  efforts: readonly string[] | null,
   effort: string | null,
   ultracode: boolean,
   routing?: RoutingOverride,
@@ -269,11 +314,15 @@ export function effortOptions(
   const activeFor = (rung: EffortRung): boolean => unreadable
     ? false
     : intended !== null ? rung === intended : (rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung);
+  const list = modelListProvider(wrapper, entry);
+  const rungs = list === 'openai' && efforts !== null && efforts.length > 0
+    ? EFFORT_LADDER.filter((rung) => efforts.includes(rung))
+    : EFFORT_LADDER;
   const opts: PickOption[] = [
-    ...EFFORT_LADDER.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
+    ...rungs.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
     level('Auto', 'auto', unreadable ? false : intended !== null ? intended === 'auto' : e === 'auto'),
   ];
-  if (modelListProvider(wrapper) !== 'openai') {
+  if (list !== 'openai') {
     opts.splice(4, 0, level(
       'Ultracode', 'ultracode', unreadable ? false : intended !== null ? intended === 'ultracode' : ultracode,
       'xhigh + workflow orchestration',
@@ -292,6 +341,8 @@ export function effortOptions(
  *  tell "ccd will never confirm this — treat it as unmeasurable, not
  *  perpetually queued" apart from "confirmed and just disagrees right now",
  *  the same split `modelReadbackFor` makes for `class`. */
-export function effortIsKnown(wrapper: string, value: string): boolean {
-  return effortOptions(wrapper, null, false).some((o) => o.route.value === value);
+export function effortIsKnown(
+  wrapper: string, entry: LaneKindFacts | undefined, efforts: readonly string[] | null, value: string,
+): boolean {
+  return effortOptions(wrapper, entry, efforts, null, false).some((o) => o.route.value === value);
 }

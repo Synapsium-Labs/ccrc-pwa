@@ -717,3 +717,83 @@ describe('the model sheet names its rows from the lane registry (D-8406)', () =>
     expect(names.join(' ')).not.toMatch(/\b(GPT-\d|Opus \d|Sonnet \d|Haiku \d|Fable \d)/);
   });
 });
+
+// D-8686 (re-plan R1): which list a lane's pickers show is its roster row's to decide, and the effort sheet offers the
+// levels the catalogue lists for the class the session runs. A neutral second lane stands in for a managed Codex lane
+// the wrapper fallback does not name.
+describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8686)", () => {
+  const LANE_B_ROW: RosterWire = {
+    id: 'lane-b', label: 'Lane B', hue: 'violet', homeAble: false, hidden: false, pool: null, provider: 'openai',
+    kind: 'codex', managed: true, telemetry: 'codex',
+  };
+  const body = {
+    ok: true, lane: 'lane-b',
+    models: { kind: 'read', classes: {
+      fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+      opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: ['low', 'medium', 'high', 'xhigh'] },
+      sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: [] },
+      haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: ['low', 'medium'] },
+    } },
+  };
+  const renderLaneB = (row: RosterWire): string[] => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      if (!String(url).includes('/api/models/')) return new Response('{}', { status: 200 });
+      asked.push(String(url));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
+    const store = makeStore();
+    const fleet = createFleetStore();
+    act(() => {
+      fleet.setState({
+        roster: [...TEST_ROSTER, row], conn: 'open',
+        sessions: [fleetSession({ wrapper: 'lane-b', model: 'model-6.1-gamma', effort: 'low' })],
+      });
+    });
+    render(
+      <>
+        <CommandLayer openNewSession={() => {}} />
+        <SessionScreen id={ID} store={store} fleet={fleet} />
+        <ToastHost />
+      </>,
+    );
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    return asked;
+  };
+  const rowNames = (): string[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button.opt'))
+      .map((b) => (b.textContent ?? '').replace(/\s+/g, ' ').trim());
+
+  it('the model sheet has the four class rows and no Default row', async () => {
+    renderLaneB(LANE_B_ROW);
+    openModelSheet();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Gamma 6\.1/ })).toBeInTheDocument());
+    expect(rowNames(), 'the four class rows').toHaveLength(4);
+    expect(screen.queryByRole('button', { name: /^Default/ })).toBeNull();
+  });
+
+  it('the effort sheet offers the levels the lit class lists: Xhigh, and neither Max nor Ultracode', async () => {
+    const asked = renderLaneB(LANE_B_ROW);
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0)); // the screen reads the lane's files when it mounts
+    await act(async () => { await Promise.resolve(); });
+    openEffortSheet();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Xhigh/ })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /^Max/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Ultracode/ })).toBeNull();
+  });
+
+  it('control: the same row without managed gets the Anthropic list, Default, Max and Ultracode', async () => {
+    const asked = renderLaneB({ ...LANE_B_ROW, managed: false });
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /^Default/ })).toBeInTheDocument();
+    cleanup();
+    const again = renderLaneB({ ...LANE_B_ROW, managed: false });
+    await waitFor(() => expect(again.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    openEffortSheet();
+    expect(await screen.findByRole('button', { name: /^Max/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Ultracode/ })).toBeInTheDocument();
+  });
+});

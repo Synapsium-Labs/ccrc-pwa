@@ -17,7 +17,10 @@
 import type { FleetSession, RouteField } from '../../../shared/api';
 import type { LaneModelsRead } from '../../../shared/models';
 import type { ProviderId } from '../../../shared/providers';
-import { classReadbackMeasurable, effortIsKnown, liveModelNames, modelReadbackFor } from '../lib/models';
+import {
+  classReadbackMeasurable, effortIsKnown, laneClassEfforts, liveModelNames, modelOptions, modelReadbackFor,
+  type LaneKindFacts,
+} from '../lib/models';
 
 export interface RouteView {
   /** The value the registry says was ASKED FOR, or `null` for a field that was
@@ -42,11 +45,18 @@ export interface RouteView {
   /** The class intended has not been read back yet, AND its readback is measurable on this lane
    *  (`classReadbackMeasurable`, D-6334; departure `route-view-splits-pending`). `false` when `route` is absent. */
   readonly classPending: boolean;
+  /** D-8686 (re-plan R1): the effort levels the catalogue lists for the class the model picker lights for this
+   *  session (`modelOptions`' active row, under the routing override `SessionScreen` passes it), or `null` when no
+   *  class row is lit or the lane does not say (`laneClassEfforts`). The effort picker and this view's effort check
+   *  both read it, so the two cannot disagree. */
+  readonly effortLevels: readonly string[] | null;
 }
 
 /**
  * @param live     the fleet row, or `null` before the first frame.
  * @param wrapper  whose option lists decide what a value can read back as.
+ * @param entry    the wrapper's roster row (`entryFor`), or `undefined` for none: its lane kind decides which option
+ *                 list that is (`modelListProvider`, D-8686).
  * @param provider the lane's provider from the roster (`accountProvider`), or `null` when it is not known: a class
  *                 is then not measurable, so none is ever pending (D-6334).
  * @param lane     the lane's model files as `useLaneModels` read them (D-8406), or `null` before the first read: a
@@ -54,7 +64,8 @@ export interface RouteView {
  *                 not measurable, and never pending.
  */
 export function routeView(
-  live: FleetSession | null, wrapper: string, provider: ProviderId | null, lane: LaneModelsRead | null,
+  live: FleetSession | null, wrapper: string, entry: LaneKindFacts | undefined, provider: ProviderId | null,
+  lane: LaneModelsRead | null,
 ): RouteView {
   const routeInfo = live?.route ?? null;
   const classIntended = routeInfo?.fields.class ?? null;
@@ -84,6 +95,13 @@ export function routeView(
   const routeUnreadable = routeInfo?.unreadable ?? [];
   const classUnreadable = routeUnreadable.includes('class');
   const effortUnreadable = routeUnreadable.includes('effort');
+  // D-8686: the class the model picker lights, built the way `SessionScreen` builds that picker, and the levels the
+  // catalogue lists for it. Computed once, here, so the effort sheet and the check below read the same list.
+  const litClass = modelOptions(
+    wrapper, entry, lane, live?.model ?? null,
+    routeInfo === null ? undefined : { intended: classIntended, inert: classInert, unreadable: classUnreadable },
+  ).find((o) => o.active)?.route.value ?? null;
+  const effortLevels = laneClassEfforts(lane, litClass);
   // The intended value's readback vs. the live read-back: `live.effort`
   // directly for effort (`ultracode` is its own boolean, not an effort
   // string — the same split `pick`'s own read-back effect already makes),
@@ -110,7 +128,7 @@ export function routeView(
   //     (`activeFor`/`modelOptions`'s exact-match `active` finds no row),
   //     so a permanent badge next to no active row is doubly wrong.
   const effortPending = routeInfo !== null && (() => {
-    if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, effortIntended)) {
+    if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, entry, effortLevels, effortIntended)) {
       // Fix wave #2: `xhigh` and `ultracode` share the SAME wire value —
       // `live.effort: 'xhigh'` — with `ultracode` distinguished only by the
       // separate `live.ultracode` boolean (`effortOptions`'s own
@@ -132,9 +150,9 @@ export function routeView(
   // family names, or the dedicated lane's tier names, and on a lane whose model ids carry neither (a compatible
   // endpoint, a second OpenAI lane on the Anthropic list) no live model string could ever agree, so "pending"
   // would be a claim forever and nothing here could check it.
-  const classPending = routeInfo !== null && classReadbackMeasurable(wrapper, provider) && (() => {
+  const classPending = routeInfo !== null && classReadbackMeasurable(wrapper, entry, provider) && (() => {
     if (classIntended !== null && !classInert && classIntended !== 'default') {
-      const readback = modelReadbackFor(wrapper, lane, classIntended);
+      const readback = modelReadbackFor(wrapper, entry, lane, classIntended);
       const liveModel = live?.model ?? null;
       // Fix wave #3: a degraded session (`routeInfo.degraded` names the
       // class ccd is actually SERVING because no candidate lane could
@@ -146,7 +164,7 @@ export function routeView(
       // doing exactly what it can and the intended row already carries its
       // own `degradedTo` note (`PickSheet`, whole-branch review M1).
       const degradedClass = routeInfo?.degraded ?? null;
-      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, lane, degradedClass) : null;
+      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, entry, lane, degradedClass) : null;
       const agrees = readback !== null && (
         liveModelNames(liveModel, readback)
         || (degradedReadback !== null && liveModelNames(liveModel, degradedReadback))
@@ -160,6 +178,6 @@ export function routeView(
 
   return {
     classIntended, effortIntended, classInert, effortInert,
-    classUnreadable, effortUnreadable, wireQueuedField, effortPending, classPending,
+    classUnreadable, effortUnreadable, wireQueuedField, effortPending, classPending, effortLevels,
   };
 }
