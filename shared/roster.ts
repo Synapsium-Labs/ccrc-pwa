@@ -4,12 +4,13 @@
 //
 // Pure, and L0 rather than import-free: this file bundles into the PWA
 // (`pwa/src/lib/offline.ts:10` is `import { HUES } from '../../../shared/roster';`
-// — a VALUE import), so it imports exactly two other `shared/*.ts` modules and
-// nothing else — no `node:*`, no `fs`, no path. The two are `./providers.js`
-// (the provider table, §4.1's `exec.provider` gate) and `./base-url.js` (the
-// endpoint gate), both themselves import-free, so the bundle gains no runtime
-// dependency. `server/test/providers.test.ts` asserts the WHOLE import list, so
-// a third import is a red suite and not a review comment. `parseRoster`
+// — a VALUE import), so it imports exactly three other `shared/*.ts` modules and
+// nothing else — no `node:*`, no `fs`, no path. The three are `./providers.js`
+// (the provider table, §4.1's `exec.provider` gate), `./base-url.js` (the
+// endpoint gate) and `./rosterFacts.js` (the two Overlord account facts' words),
+// each itself import-free, so the bundle gains no runtime dependency.
+// `server/test/providers.test.ts` asserts the WHOLE import list, so a fourth
+// import is a red suite and not a review comment. `parseRoster`
 // therefore still takes already-parsed JSON (`unknown`), never a path: the
 // server's `loadConfig` reads and parses `~/.ccrc/accounts.json` and hands the
 // value here, and deploy-side bare-Node tooling uses the parity-pinned `.mjs`
@@ -25,6 +26,7 @@
 
 import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';
 import { BASE_URL_OK } from './base-url.js';
+import { FABLE_BILLINGS, type FableBilling, type ContinuityRecord } from './rosterFacts.js';
 
 /**
  * The six colors an account can render in. Replaces today's hand-picked
@@ -257,6 +259,13 @@ export interface AccountDef {
    *  finish, and answering "untagged" for it would be this parser narrowing a
    *  distinction it received. */
   pool: string | null;
+  /** H16: whether Fable on this account bills usage credits (`shared/rosterFacts.ts`). REQUIRED on the type with
+   *  `null` for absent, as `pool` is: absence in the file is "nobody set it", and a written `null` is REFUSED, never
+   *  folded into absence. Written only by `deploy/account-op.mjs`'s `set-facts` op. */
+  fableBilling: FableBilling | null;
+  /** H16, continued: the operator's record that this lane keeps the Overlord's guards, hooks and reader types.
+   *  Same shape discipline as `fableBilling`: `null` for absent, a written `null` refused. */
+  continuity: ContinuityRecord | null;
 }
 
 /**
@@ -513,7 +522,7 @@ const TELEMETRY_VALUES: Readonly<Record<AccountDef['telemetry'], true>> = { anth
 const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
-  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
+  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool', 'fableBilling', 'continuity'],
 );
 // THREE sets, not two, and written as a containment chain so the shared members
 // are never retyped. `upstream` and `external` used to share `EXEC_KEYS_BASE`
@@ -1077,6 +1086,37 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   }
   const pool = poolRaw === undefined ? null : poolRaw;
 
+  // The two Overlord facts, gated as `pool` is: optional, absence is null, and a present value that is wrong, a
+  // written `null` included, is refused (`typeof null === 'object'`, so the `!== undefined` guard admits it).
+  const billingRaw = raw['fableBilling'];
+  if (billingRaw !== undefined && (typeof billingRaw !== 'string' || !(FABLE_BILLINGS as readonly string[]).includes(billingRaw))) {
+    throw new RosterError(
+      `account "${id}" has an invalid fableBilling ${JSON.stringify(billingRaw)}: it must be ` +
+        `${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}.`,
+      `Set "fableBilling" for account "${id}" in ${ROSTER_PATH} to ${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}, ` +
+        'or remove the key entirely to leave the fact unset.',
+    );
+  }
+  const fableBilling = billingRaw === undefined ? null : (billingRaw as FableBilling);
+
+  const continuityRaw = raw['continuity'];
+  let continuity: ContinuityRecord | null = null;
+  if (continuityRaw !== undefined) {
+    const keys = typeof continuityRaw === 'object' && continuityRaw !== null && !Array.isArray(continuityRaw)
+      ? Object.keys(continuityRaw) : null;
+    const at = keys !== null && keys.length === 1 && keys[0] === 'recordedAt'
+      ? (continuityRaw as Record<string, unknown>)['recordedAt'] : undefined;
+    if (typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) {
+      throw new RosterError(
+        `account "${id}" has an invalid continuity ${JSON.stringify(continuityRaw)}: it must be an object with exactly ` +
+          'one key, "recordedAt", a non-negative integer of epoch seconds.',
+        `Set "continuity" for account "${id}" in ${ROSTER_PATH} to {"recordedAt": <epoch seconds>}, ` +
+          'or remove the key entirely to leave the fact unset.',
+      );
+    }
+    continuity = { recordedAt: at };
+  }
+
   const telemetry = raw['telemetry'];
   if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     throw new RosterError(
@@ -1102,7 +1142,7 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool, fableBilling, continuity };
 }
 
 /**

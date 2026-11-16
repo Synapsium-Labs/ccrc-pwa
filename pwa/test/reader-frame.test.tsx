@@ -59,7 +59,7 @@ function chooseTheme(value: string): void {
 vi.mock('../src/docs/share', () => ({ copyText: vi.fn(async () => {}) }));
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, view: 'effective', section: DOC_SECTION_SLUGS[0]!, path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: DOC_SECTION_SLUGS[0]!, path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 

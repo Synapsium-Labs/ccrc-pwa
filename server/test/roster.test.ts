@@ -255,6 +255,59 @@ describe('parseRoster', () => {
     }
   });
 
+  // The two Overlord facts (H16): `fableBilling` and `continuity`. OPTIONAL in the file, `null` on the type, and a
+  // written `null` is refused exactly as `pool`'s is: absence is "nobody set it", a written null is a half-edit.
+  const factsAcct = (over: Record<string, unknown>) => ({ version: 1, accounts: [
+    { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+      homeAble: true, hue: 'cyan', telemetry: 'anthropic', ...over },
+  ] });
+
+  it('answers null for both facts on an account carrying neither', () => {
+    const a = parseRoster(factsAcct({})).byId.get('lane-a')!;
+    expect(a.fableBilling).toBeNull();
+    expect(a.continuity).toBeNull();
+  });
+
+  it('parses a billing word and a continuity record', () => {
+    const a = parseRoster(factsAcct({ fableBilling: 'credits', continuity: { recordedAt: 1760000000 } })).byId.get('lane-a')!;
+    expect(a.fableBilling).toBe('credits');
+    expect(a.continuity).toEqual({ recordedAt: 1760000000 });
+    expect(parseRoster(factsAcct({ fableBilling: 'included', continuity: { recordedAt: 0 } }))
+      .byId.get('lane-a')!.fableBilling).toBe('included');
+  });
+
+  it.each([
+    ['a written null fableBilling', { fableBilling: null }, 'fableBilling'],
+    ['a billing word outside the set', { fableBilling: 'free' }, 'fableBilling'],
+    ['a non-string billing', { fableBilling: 1 }, 'fableBilling'],
+    ['an inherited-name billing word', { fableBilling: 'toString' }, 'fableBilling'],
+    ['a written null continuity', { continuity: null }, 'continuity'],
+    ['a continuity that is a number', { continuity: 5 }, 'continuity'],
+    ['a continuity that is an array', { continuity: [] }, 'continuity'],
+    ['a continuity with no recordedAt', { continuity: {} }, 'continuity'],
+    ['a continuity with an extra key', { continuity: { recordedAt: 1, by: 'x' } }, 'continuity'],
+    ['a float recordedAt', { continuity: { recordedAt: 1.5 } }, 'continuity'],
+    ['a negative recordedAt', { continuity: { recordedAt: -1 } }, 'continuity'],
+    ['a string recordedAt', { continuity: { recordedAt: '1' } }, 'continuity'],
+    ['an unsafe-integer recordedAt', { continuity: { recordedAt: 2 ** 60 } }, 'continuity'],
+  ])('refuses %s, naming the field in the remedy', (_name, over, field) => {
+    let caught: unknown;
+    try { parseRoster(factsAcct(over)); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).remedy).toContain(`"${field}"`);
+    expect((caught as RosterError).remedy).toContain('~/.ccrc/accounts.json');
+  });
+
+  it('does not warn about the two fact keys it understands', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      parseRoster(factsAcct({ fableBilling: 'included', continuity: { recordedAt: 7 } }));
+      expect(warn.mock.calls.some(([m]) => typeof m === 'string' && /fableBilling|continuity/.test(m))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // The grammar is ID_RE's, deliberately, and the boundary is worth pinning
   // rather than trusting to a shared regex source: `ccd` carries a
   // hand-typed bash copy of this literal (wave 2a landed it), and a drift in

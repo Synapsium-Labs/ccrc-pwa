@@ -1560,7 +1560,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const mdParsed = parseMarkdown('# T\n', 'docs');
     if (mdParsed.kind !== 'tree') throw new Error('fixture');
     const mdD = detachUrls(mdParsed.tree);
-    const mdLink = { project: 'demo', pageRef: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree: mdTree, pageSource: 'committed' as const, onFragment: () => {} };
+    const mdLink = { project: 'demo', pageRef: null, pageAt: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree: mdTree, pageSource: 'committed' as const, onFragment: () => {} };
     const mdBody = { kind: 'tree' as const, text: '# T\n', tree: mdD.tree, urls: mdD.urls, link: mdLink };
     const mdInputs = { body: mdBody, store: syncTestStore('docs'), settled: true, assets: null };
     expect(exportStateFor(inline, mdTree, mdFile, mdInputs).s).toBe('ready');
@@ -1672,7 +1672,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const old = parseMarkdown('# Old\n', 'docs');
     if (old.kind !== 'tree') throw new Error('fixture');
     const d = detachUrls(old.tree);
-    const link = { project: 'demo', pageRef: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree, pageSource: 'committed' as const, onFragment: () => {} };
+    const link = { project: 'demo', pageRef: null, pageAt: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree, pageSource: 'committed' as const, onFragment: () => {} };
     const body = { kind: 'tree' as const, text: '# Old\n', tree: d.tree, urls: d.urls, link };
     expect(exportStateFor(page, tree, file, { body, store: syncTestStore('docs'), settled: true, assets: null }))
       .toEqual({ s: 'waiting', why: 'formatting' });

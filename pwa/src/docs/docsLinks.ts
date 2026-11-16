@@ -105,25 +105,35 @@ export function detachUrls(tree: HastRoot): Detached {
  *  project at the same ref. `default-view`: another (or the same) project's default view, `ref: null`, from any page,
  *  the index included. `same-page`: this very page (its section, path, view and frame) in `project` at `ref`
  *  (`ref: null` is that project's default view): the linked-worktree redirect (spec 4.7) and every "open this page at
- *  another ref" link. A `path` target's `view` absent means `effective`. */
+ *  another ref" link. It keeps the page's `at`, so switching the ref keeps the version. A `path` target's `view` absent means `effective`. */
 export type DocsPageTarget =
   | { kind: 'index' }
   | { kind: 'project' }
   | { kind: 'default-view'; project: string }
   | { kind: 'same-page'; project: string; ref: DocsRefSpec | null }
   | { kind: 'section'; section: DocSectionSlug }
-  | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed' };
+  | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed';
+      /** Absent: the page's own version (a leaf page's `at`, else the latest); `null`: the latest; a sha: that version. */
+      at?: string | null }
+  /** This leaf at the version `at`, or at the latest for `null` (rich-docs spec G6): Back to the latest, and W8b's
+   *  `version` op. Keeps the page's project, ref and frame; `view` is `effective` (a version is committed bytes). */
+  | { kind: 'version'; at: string | null };
 
 /** THE one builder of a page location a Docs view links to (refinement (q)): it keeps `page`'s project and ref and
  *  applies `to`; a `path` target's `frame` is `inline` (W6 owns `full`), while a `same-page` target keeps the page's
  *  own frame, view and everything else. Every page URL a view writes is
  *  `docsPageUrl(docsLocation(page, to))`; no view builds a `DocsPageLocation` literal. The index names no project, so
- *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. */
+ *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. A `path` target
+ *  inherits a leaf page's `at` unless it names one; `version` sets or clears it. */
 export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPageLocation {
   if (to.kind === 'index') return { kind: 'index' };
   if (to.kind === 'default-view') return { kind: 'project', project: to.project, ref: null };
   if (page.kind === 'index') throw new Error(`docsLocation: the index names no project for a ${to.kind} target`);
   if (to.kind === 'same-page') return { ...page, project: to.project, ref: to.ref };
+  if (to.kind === 'version') {
+    if (page.kind !== 'path') throw new Error(`docsLocation: a version target needs a leaf page, not a ${page.kind}`);
+    return { ...page, at: page.dirSlash ? null : to.at, view: 'effective' };
+  }
   const { project, ref } = page;
   switch (to.kind) {
     case 'project':
@@ -133,6 +143,8 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
     case 'path':
       return {
         kind: 'path', project, section: to.section, path: to.path, dirSlash: to.dirSlash, ref,
+        // Refinement (o): a leaf's version follows its links, as a GitHub blob URL's commit does; a directory has none.
+        at: to.dirSlash ? null : to.at !== undefined ? to.at : page.kind === 'path' ? page.at : null,
         view: to.view ?? 'effective', frame: 'inline',
       };
   }
@@ -141,8 +153,9 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
 /** What `DocLink` renders for one link (spec 4.11). `in-app`: a Docs page of the same project at the page's ref
  *  (`href` is that page's URL, never with a fragment; `fragment: null` means the link names none). `fragment`: an
  *  anchor in this page. `external`: an http, https or mailto URL, opened on tap only. `github`: an in-repo file outside
- *  the four sections, on GitHub through `githubBlobUrl`, with that builder's `note` (`may-differ` is the caution View on
- *  GitHub carries too). `inert`: everything else, with the span's whole title. */
+ *  the docs sections, on GitHub through `githubBlobUrl`, with that builder's `note`, except on a version page, where the
+ *  note is always `may-differ`: the link names the branch, which may have moved past the version shown (`may-differ` is
+ *  the caution View on GitHub carries too). `inert`: everything else, with the span's whole title. */
 export type DocLinkTarget =
   | { kind: 'in-app'; href: string; fragment: string | null }
   | { kind: 'fragment'; fragment: string }
@@ -164,7 +177,7 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
         return { kind: 'fragment', fragment: r.fragment };
       }
       const here: DocsPageLocation = { kind: 'project', project: ctx.project, ref: ctx.pageRef };
-      const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false }));
+      const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false, at: ctx.pageAt }));
       return { kind: 'in-app', href, fragment: r.fragment };
     }
     case 'fragment':
@@ -173,7 +186,9 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
       return { kind: 'external', href: r.url };
     case 'repo': {
       const link = githubBlobUrl(ctx.tree.github, ctx.tree.ref, { kind: 'repo', repoPath: r.repoPath });
-      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);
+      // Refinement (o), ruled: the link names the branch, and the file there may differ from this version's, so on a
+      // version page its caution always shows.
+      return link.ok ? { kind: 'github', href: link.url, note: ctx.pageAt !== null ? 'may-differ' : link.note } : inert(link.why);
     }
     case 'self-contained':
       return inert(r.scheme);
@@ -197,8 +212,9 @@ export type ImagePin =
  *  planner). `e` is the tree entry at the image's resolved path; `undefined` means there is none. The page is a DRAFT
  *  page exactly when its own leaf opens a draft (`pinFor` answers a `DraftPin`); every other page is committed (the
  *  default view, `view=committed`, a ref-view leaf that opens committed, and a page whose leaf is not in the tree).
- *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)`, else `absent`; in a ref
- *    view an image whose draft `admitDraft` admits is marked `uncommittedNotShown`. A draft is never resolved.
+ *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)` (at `page.at` on a version
+ *    page), else `absent`; in a ref view an image whose draft `admitDraft` admits is marked `uncommittedNotShown` (never
+ *    on a version page). A draft is never resolved.
  *  - draft page (an admitted holder at the served commit): no draft on the image gives the committed side under the
  *    same condition; a deleted draft is `deleted-in-worktree`; a draft `entryView` opens gives
  *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`. */
@@ -210,12 +226,13 @@ export function imagePinFor(
   const committed = (uncommittedNotShown: boolean): ImagePin => {
     const kind = e.committed?.kind;
     if (kind !== 'file' && kind !== 'exec') return { ok: false, why: 'absent' };
+    // Refinement (n): a version page's images are read at its version (rich-docs spec G6), never at the tip.
     const pin: DocPin = {
-      kind: 'committed', commit: tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
+      kind: 'committed', commit: page.at ?? tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
     };
     return { ok: true, pin, draft: false, uncommittedNotShown };
   };
-  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.ref !== null && admitDraft(e, drafts));
+  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.at === null && page.ref !== null && admitDraft(e, drafts));
   const draft = e.draft;
   if (draft === null) return committed(false);
   if (entryView(e, drafts, 'ref').badge === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
@@ -261,7 +278,7 @@ export function sessionBranchRef(branch: string | null): (DocsRefSpec & { kind: 
 
 /** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, at `ref` (null, the
  *  default: the project's default view, as the ledgers link), or null: no home project, a home the Docs grammar refuses, or a
- *  path outside the four sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
+ *  path outside the docs sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
 export function docHref(repoPath: string, homeProject: string | null, ref: DocsRefSpec | null = null): string | null {
   if (homeProject === null || !isDocsProject(homeProject)) return null;
   for (const section of DOC_SECTION_SLUGS) {

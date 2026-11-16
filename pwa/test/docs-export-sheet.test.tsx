@@ -123,7 +123,7 @@ describe('exportInputOf (spec 4.17; refinement (l))', () => {
     if (outcome.kind !== 'tree') throw new Error('fixture');
     const d = detachUrls(outcome.tree);
     expect(firstHeading(d.tree)).toBe('The title');
-    const link = { project: 'demo', pageRef: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree: treeOk(), pageSource: 'committed' as const, onFragment: () => {} };
+    const link = { project: 'demo', pageRef: null, pageAt: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree: treeOk(), pageSource: 'committed' as const, onFragment: () => {} };
     const input = exportInputOf({
       ...REQUEST, source: { kind: 'tree', pin: PIN, show: fileResponse('x').show, body: { kind: 'tree', text: 'x', tree: d.tree, urls: d.urls, link }, store: syncTestStore('docs') },
     }, { exportedAt: 0, theme: null });

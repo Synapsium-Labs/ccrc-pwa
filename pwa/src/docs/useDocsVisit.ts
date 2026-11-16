@@ -81,9 +81,12 @@ function findEntry(tree: DocsTreeOk, section: DocPin['section'], path: string): 
 
 /** A file body's key (spec 4.3 item 2). A committed body is keyed by its blob (and its place, since the class comes
  *  from the path), so a file unchanged across a moving branch is not downloaded again; a committed pin whose entry
- *  is not committed in `tree` falls back to the exact commit. A draft is keyed by every field of its pin. */
-export function fileKey(pin: DocPin, tree: DocsTreeOk): string {
+ *  is not committed in `tree` falls back to the exact commit. A draft is keyed by every field of its pin, and the
+ *  body of a version page (`version`) by its pin's commit, which the listing's moving cannot change. */
+export function fileKey(pin: DocPin, tree: DocsTreeOk, version: boolean): string {
   if (pin.kind === 'draft') return ['draft', pin.branch, pin.head, pin.section, pin.path, pin.fp].join(NUL);
+  // A version page's body is keyed by its pin's commit: the listing's blob is the tip's, and the listing can move under it.
+  if (version) return ['commit', pin.commit, pin.section, pin.path].join(NUL);
   const blob = findEntry(tree, pin.section, pin.path)?.committed?.blob;
   return blob === undefined
     ? ['commit', pin.commit, pin.section, pin.path].join(NUL)
@@ -93,11 +96,19 @@ export function fileKey(pin: DocPin, tree: DocsTreeOk): string {
 /** The pin the tree implies for the page's leaf (spec 4.3 item 5; pure). Null has one meaning: the page opens no
  *  file in this tree (not a leaf page, no such entry, or `entryView` opens nothing for it). The default view
  *  (`page.ref === null`) never opens a draft; `view=committed` opens the committed side of a draft row, or nothing
- *  when there is none. */
+ *  when there is none. A version page (`at`) opens the committed bytes at `at`, or nothing. */
 export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocPin | null {
   if (page.kind !== 'path' || page.dirSlash) return null;
   const entry = findEntry(tree, page.section, page.path);
   if (entry === undefined) return null;
+  // The version view (rich-docs spec G6; refinement (p)): the committed bytes at `at`, for a doc the served listing holds
+  // as a committed file. Never a draft: a version is a commit.
+  if (page.at !== null) {
+    const kind = entry.committed?.kind;
+    return kind === 'file' || kind === 'exec'
+      ? { kind: 'committed', commit: page.at, servedRef: tree.ref.served, section: page.section, path: page.path }
+      : null;
+  }
   const view = entryView(entry, tree.drafts, page.ref === null ? 'default' : 'ref');
   if (view.opens === 'none') return null;
   const committed: DocPin = {
@@ -152,7 +163,7 @@ type FileEntry = {
 type Wanted =
   | { kind: 'none' }
   | { kind: 'too-large'; slot: FileSlot }
-  | { kind: 'read'; target: Target; tKey: string; fKey: string; leaf: string; pin: DocPin };
+  | { kind: 'read'; target: Target; tKey: string; fKey: string; leaf: string; pin: DocPin; version: boolean };
 
 interface Store {
   alive: boolean;
@@ -162,7 +173,7 @@ interface Store {
   readonly refreshInflight: Set<string>;
   readonly freshness: Map<string, Freshness>;
   readonly files: Map<string, FileEntry>;
-  /** Per leaf (tree key, section, path, view): the file key last shown `ok`. */
+  /** Per leaf (tree key, section, path, view, at): the file key last shown `ok`. */
   readonly shown: Map<string, string>;
   readonly updatedTo: Map<string, string>;
   readonly timers: Set<ReturnType<typeof setTimeout>>;
@@ -216,21 +227,22 @@ function wantedFile(slot: TreeSlot | null, page: DocsPageLocation | null, target
   const pin = pinFor(tree, page);
   if (pin === null || contentClass(page.path) === 'raster') return { kind: 'none' };
   const entry = findEntry(tree, page.section, page.path);
-  const size = pin.kind === 'draft' ? entry?.draft?.size : entry?.committed?.size;
+  // A version's size is not the listing's (the listing is the served commit's): the class cap is ccd's answer there.
+  const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry?.draft?.size : entry?.committed?.size;
   const cap = DOCS_CLASS_CAP[contentClass(page.path)];
   if (typeof size === 'number' && size > cap) return { kind: 'too-large', slot: { s: 'too-large', pin, size, cap } };
   if (contentClass(page.path) === 'other') return { kind: 'none' };
   const tKey = treeKey(target.project, target.ref);
-  const leaf = [tKey, page.section, page.path, page.view].join(NUL);
-  return { kind: 'read', target, tKey, fKey: fileKey(pin, tree), leaf, pin };
+  const leaf = [tKey, page.section, page.path, page.view, page.at ?? ''].join(NUL);
+  return { kind: 'read', target, tKey, fKey: fileKey(pin, tree, page.at !== null), leaf, pin, version: page.at !== null };
 }
 
 /** The page a pending fragment is meant for: a leaf's project, ref, section and path, never its view, slash or frame
- *  (a link drops the view, and a canonical fix moves the slash, without changing the page). Null: a page that holds no
- *  body to scroll in (the index, a project, a section, a directory, or a URL that did not parse). */
+ *  (a link drops the view, and a canonical fix moves the slash, without changing the page); its version, yes. Null: a
+ *  page that holds no body to scroll in (the index, a project, a section, a directory, or a URL that did not parse). */
 function fragmentKey(page: DocsPageLocation | null): string | null {
   if (page === null || page.kind !== 'path') return null;
-  return [treeKey(page.project, page.ref), page.section, page.path].join(NUL);
+  return [treeKey(page.project, page.ref), page.section, page.path, page.at ?? ''].join(NUL);
 }
 
 /** `fragmentKey` of the page an in-app URL (`/docs/...` plus an optional `?search`) names; null if it names none. */
@@ -517,7 +529,9 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       return;
     }
     const word = a.body.failure;
-    if (DOCS_RELIST_WORDS.has(word)) {
+    // A version's commit is the URL's, so a word that would mean "the listing moved" is that commit's own answer: no
+    // re-list can change it (refinement (p)).
+    if (DOCS_RELIST_WORDS.has(word) && !w.version) {
       // Spec 4.3 item 1: the listing moved under the read. Re-list once automatically, then "changing, Retry".
       if (takeAutoRetry('relist', page, '')) {
         put({ s: 'loading', pin }, st.seq);
@@ -528,6 +542,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       return;
     }
     const failed = put({ s: 'failed', pin, body: a.body });
+    // A version's re-list word is that commit's own answer (refinement (p)): reading it again cannot change it either.
+    if (w.version && DOCS_RELIST_WORDS.has(word)) return;
     const plan = docsRetryPlan(a.body);
     if (plan.kind === 'auto' && takeAutoRetry('file', fKey, word)) {
       later(plan.afterMs, () => {

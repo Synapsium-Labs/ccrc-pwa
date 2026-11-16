@@ -102,7 +102,7 @@ describe('generateAccountsSh', () => {
       // Required on `AccountDef` — this object is deliberately built by hand
       // rather than parsed, so the compiler is the only thing that can ask it
       // for every field. Untagged: this case is about `dqEscape`, not pools.
-      pool: null,
+      pool: null, fableBilling: null, continuity: null,
     };
     const hostileRoster = {
       version: 1 as const,
@@ -297,7 +297,7 @@ describe('generateAccountsSh — the pool projection', () => {
       // `shared/generate.d.mts` types the parameter as `Roster`, so the cast is
       // what lets an unvalidated value past the compiler here the way an
       // untypechecked `.mjs` caller would let one past in production.
-      pool: 7 as unknown as string,
+      pool: 7 as unknown as string, fableBilling: null, continuity: null,
     };
     const junkRoster = {
       version: 1 as const,
@@ -319,6 +319,80 @@ describe('generateAccountsSh — the pool projection', () => {
     mkdirSync(path.join(junkHome, '.ccrc'), { recursive: true });
     writeFileSync(path.join(junkHome, '.ccrc', 'accounts.sh'), body);
     expect(sh(junkHome, "_ccrc_pool 'junk' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+});
+
+// The two Overlord facts (H16). Both functions are emitted ALWAYS, like `_ccrc_pool`, so `declare -F` is ccd's
+// probe for "this box's projection knows the facts".
+describe('generateAccountsSh — the billing and continuity projections', () => {
+  const factsRoster = parseRoster({ version: 1, accounts: [
+    { id: 'lane-a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      fableBilling: 'included', continuity: { recordedAt: 1760000000 } },
+    { id: 'lane-a-b', label: 'AB', configDirSuffix: '.ab', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+      fableBilling: 'credits' },
+    { id: 'lane-c', label: 'C', configDirSuffix: '.c', exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none' },
+  ] });
+  const home = (body: string, prefix: string): string => {
+    const h = mkTmp(prefix);
+    mkdirSync(path.join(h, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(h, '.ccrc', 'accounts.sh'), body);
+    return h;
+  };
+  const emptyHome = home(generateAccountsSh(roster), 'roster-gen-facts-none-');
+  const factsHome = home(generateAccountsSh(factsRoster), 'roster-gen-facts-');
+  const arms = (body: string, fn: string): string[][] => {
+    const block = body.slice(body.indexOf(`${fn}() {`));
+    return [...block.slice(0, block.indexOf('esac')).matchAll(/^ {4}([a-z0-9-]+)\) echo ([a-z0-9-]+) ;;$/gm)]
+      .map((m) => [m[1]!, m[2]!]);
+  };
+
+  it.each(['_ccrc_fable_billing', '_ccrc_continuity'])('%s is defined with NO arms for a roster with no facts, answering silence at rc 0', (fn) => {
+    expect(sh(emptyHome, `declare -F ${fn} >/dev/null && echo yes`)).toBe('yes');
+    expect(sh(emptyHome, `${fn} 'a' ; echo "rc=$?"`)).toBe('rc=0');
+    expect(arms(generateAccountsSh(roster), fn)).toEqual([]);
+  });
+
+  it('is valid bash with and without facts', () => {
+    for (const body of [generateAccountsSh(roster), generateAccountsSh(factsRoster)]) {
+      expect(() => execFileSync('bash', ['-n'], { input: body })).not.toThrow();
+    }
+  });
+
+  it('answers the value for an account that has one, and silence for one that has not or is unknown', () => {
+    expect(sh(factsHome, "_ccrc_fable_billing 'lane-a'")).toBe('included');
+    expect(sh(factsHome, "_ccrc_fable_billing 'lane-a-b'")).toBe('credits');
+    expect(sh(factsHome, "_ccrc_fable_billing 'lane-c' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(sh(factsHome, "_ccrc_continuity 'lane-a'")).toBe('1760000000');
+    expect(sh(factsHome, "_ccrc_continuity 'lane-a-b' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(sh(factsHome, "_ccrc_continuity 'nosuch' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('emits one arm per account that has the fact, in byIdLengthDesc order', () => {
+    const body = generateAccountsSh(factsRoster);
+    expect(arms(body, '_ccrc_fable_billing')).toEqual([['lane-a-b', 'credits'], ['lane-a', 'included']]);
+    expect(arms(body, '_ccrc_continuity')).toEqual([['lane-a', '1760000000']]);
+  });
+
+  it('sits after _ccrc_pool', () => {
+    const body = generateAccountsSh(factsRoster);
+    expect(body.indexOf('_ccrc_fable_billing() {')).toBeGreaterThan(body.indexOf('_ccrc_pool() {'));
+    expect(body.indexOf('_ccrc_continuity() {')).toBeGreaterThan(body.indexOf('_ccrc_pool() {'));
+  });
+
+  it('emits NO arm for a value that reached the generator unvalidated', () => {
+    const junk = {
+      id: 'junk', label: 'Junk', configDirSuffix: '.junk', exec: { kind: 'upstream' as const }, homeAble: true,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null,
+      fableBilling: 'free; rm -rf x' as unknown as 'included',
+      continuity: { recordedAt: '1; echo hi' } as unknown as { recordedAt: number },
+    };
+    const body = generateAccountsSh({
+      version: 1 as const, accounts: [junk], byId: new Map([['junk', junk]]), byIdLengthDesc: [junk],
+      homeAble: [junk], upstreamId: 'junk',
+    });
+    expect(arms(body, '_ccrc_fable_billing')).toEqual([]);
+    expect(body).not.toContain('rm -rf');
+    expect(body).not.toContain('echo hi');
   });
 });
 
@@ -386,7 +460,7 @@ describe('generateAccountsSh — the credential-file projection (D-3524)', () =>
     const acct = {
       id: 'h', label: 'H', configDirSuffix: '.h',
       exec: { kind: 'upstream' as const, secretsFile: hostile }, homeAble: true,
-      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null, fableBilling: null, continuity: null,
     };
     const hostileRoster = {
       version: 1 as const, accounts: [acct], byId: new Map([['h', acct]]),

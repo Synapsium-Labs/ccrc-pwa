@@ -3290,6 +3290,32 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals(identity, term);
   `,
+
+  // ── 80: user_version 79 -> 80 ─────────────────────────────────────────────
+  // The answer marks (Overlord spec §9.2.1 C70; W1, plan `w1-delegation-marks.md` Task 2): `answer_marks`, every change of
+  // the operator's two marks (`could-answer`, `unsure`) on a row of Waiting on you, append-only; the newest record of a row's
+  // mark is its value. ONE writer, `answerMarkStore.ts#recordAnswerMark`, reached only from the operator's door. A record
+  // names its row by kind and id and copies no fact of it (plan question 10). `kind` and `mark` carry no CHECK on purpose: a
+  // later build may name another kind or mark, and every reader takes them through `isAnswerMarkKind`/`isAnswerMarkName`.
+  // Sandbox A took 78 and the renewal act (#2852) 79, so this entry is 80, the next free slot (the coordinator's word).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 79 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE answer_marks (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL,                       -- AnswerMarkKind; read through isAnswerMarkKind, never a cast
+    rowId  INTEGER NOT NULL,                    -- operator_items.id or asks.id, by kind; no copy of either row
+    mark   TEXT NOT NULL,                       -- AnswerMarkName; read through isAnswerMarkName, never a cast
+    value  INTEGER NOT NULL CHECK (value IN (0, 1)),
+    at     INTEGER NOT NULL,                    -- wall ms of the change
+    actor  TEXT NOT NULL                        -- the session's device actor, or flag-off
+  );
+  CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

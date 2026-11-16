@@ -777,6 +777,8 @@ const OPS = {
   // Accounts plan Task A16 (D-7735).
   'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
   'set-done': { keys: ['file', 'id'], repeat: [] },
+  // The two serviceability facts (plan 2026-11-14 Task 3, F11): `opSetFacts` below states it.
+  'set-facts': { keys: ['file', 'id', 'fable-billing', 'continuity', 'recorded-at'], repeat: [] },
   // Accounts plan Task A20 (D-7750): the method switch's roster write, the sign-in-in-flight measure `auth-start`
   // shares with `pre-remove`, and the answers of the sign-in verbs.
   'set-method': { keys: ['file', 'id', 'method'], repeat: [] },
@@ -2204,6 +2206,33 @@ function opSetPlacement(a) {
   return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
 }
 
+/** `set-facts` (F11): `--fable-billing included|credits` writes the billing fact; `--continuity on` writes
+ *  `{recordedAt}` (`--recorded-at now|<epoch seconds>`) only when no record stands, so a second `on` changes no byte,
+ *  and `off` removes the key, never a null. A call that changes nothing writes no byte. Silent on success. */
+function opSetFacts(a) {
+  const acct = rosterEntryOf(a, 'set-facts');
+  if (acct === null) return 1;
+  const billing = a['fable-billing'];
+  const on = a['continuity'];
+  const at = a['recorded-at'] ?? 'now';
+  if ((billing !== undefined && billing !== 'included' && billing !== 'credits') || (on !== undefined && on !== 'on' && on !== 'off')
+      || (at !== 'now' && !/^[0-9]{1,15}$/.test(at))) {
+    refuse('bad-argv', '--fable-billing is included or credits, --continuity on or off, --recorded-at now or whole seconds');
+    return 2;
+  }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const next = { ...acct };
+  if (billing !== undefined) next['fableBilling'] = billing;
+  if (on === 'off') delete next['continuity'];
+  if (on === 'on' && !isPlainObject(acct['continuity'])) next['continuity'] = { recordedAt: at === 'now' ? Math.floor(Date.now() / 1000) : Number(at) };
+  if (JSON.stringify(next) === JSON.stringify(acct)) return 0;
+  const whole = { ...json, accounts: json['accounts'].map((x) => (isPlainObject(x) && x['id'] === a['id'] ? next : x)) };
+  const admits = rosterAdmits(whole, `setting lane "${a['id']}"'s facts would make ${a['file']} unparseable: `);
+  if (admits !== 0) return admits;
+  return writeRoster(a['file'], whole, 'the roster was unchanged') ? 0 : 1;
+}
+
 /** A lane's secrets file, relative to HOME: the one template `check-add` and the method switch share, and the name
  *  `_acct_write_secret` and `ccd-account-auth`'s capture write (the three writers `ccd-account-auth.test.ts` pins). */
 function secretsFileOf(id, provider) {
@@ -2327,6 +2356,7 @@ function main(argv) {
   if (op === 'lane-state') return opLaneState(a);
   if (op === 'pre-remove') return opPreRemove(a);
   if (op === 'set-placement') return opSetPlacement(a);
+  if (op === 'set-facts') return opSetFacts(a);
   if (op === 'or-key') return opOrKey(a);
   if (op === 'set-method') return opSetMethod(a);
   if (op === 'auth-live') {

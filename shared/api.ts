@@ -9,6 +9,7 @@
 // the parallel reason: this file carries their shapes but does not redefine
 // them.
 import type { Hue, RosterKindWire } from './roster.js';
+import type { RosterFactsWire } from './rosterFacts.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
@@ -4242,7 +4243,7 @@ export type ProjectPlacement =
  * owns the actual colours and resolves each hue per theme, so shipping a hex
  * here would freeze one theme's palette into the wire.
  */
-export interface RosterWire extends RosterKindWire {
+export interface RosterWire extends RosterKindWire, RosterFactsWire {
   id: Wrapper;
   /** Jargon-free, for a human — the one place a wrapper name is translated
    *  (plan: "Move to another account", never "swap wrapper"). */
@@ -13234,7 +13235,7 @@ const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
 /** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
- *  (`roll` and the operator's `claude …` switches among them), then `ccrc update` and `ccrc rollback`, then Claude
+ *  (`roll` and the operator's `claude …` switches among them), then `ccrc update`, `rollback` and `rollout`, then Claude
  *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
  *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
  *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
@@ -13242,7 +13243,7 @@ export function childDenyRules(upstreamId: string | null): readonly string[] {
   const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
   return [
     ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
-    ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+    ...['update', 'rollback', 'rollout'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
     ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
   ];
 }
@@ -13908,6 +13909,12 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+/** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
+ *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
+export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];
+/** The direct runs of the verb's script (`deploy/account-op.mjs`) a bare prefix rule can name; the hook's account arm
+ *  matches the script's name in any path-qualified, installed-tree or `$VAR` form, which a prefix rule cannot. */
+export const ACCOUNT_OP_RUNS: readonly string[] = ['node deploy/account-op.mjs', 'node ./deploy/account-op.mjs', './deploy/account-op.mjs'];
 
 /** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
  *  and the server's proxy, never a sign-in of a session's own. `mcp__claude_ai_Linear` is the claude.ai Linear connector's
@@ -13931,6 +13938,8 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   'Bash(ccd account-pane:*)',
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
+  ...ACCOUNT_ROSTER_FILES.map((p) => `Edit(${p})`),
+  ...ACCOUNT_OP_RUNS.map((r) => `Bash(${r}:*)`),
   ...LINEAR_MCP_DENY,
 ];
 

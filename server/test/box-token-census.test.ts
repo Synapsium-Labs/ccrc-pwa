@@ -292,7 +292,9 @@ const TOKEN_DOORS = ['/api/token/rotate'];
 // …and D-8126's Seen on a big call (`/api/calls/:id/seen`), the operator's, session only, no box token.
 const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/act', '/api/items/:id/decline', '/api/calls/:id/seen', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot',
   // The portfolio (Overlord W1): the operator's read and the rank door.
-  '/api/portfolio', '/api/portfolio/rank'];
+  '/api/portfolio', '/api/portfolio/rank',
+  // The answer marks (Overlord W1): the operator's two marks on a Waiting on you row; they work dark and record `flag-off`.
+  '/api/answer-marks'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The

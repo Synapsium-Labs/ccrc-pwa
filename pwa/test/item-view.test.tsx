@@ -568,3 +568,23 @@ describe('item references and a closed item (D-8194)', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 });
+
+describe('the answer marks on an item\'s page (Overlord W1)', () => {
+  const MARKS = { couldAnswer: { state: 'marked' as const, id: 4, at: NOW - MIN, signedIn: true }, unsure: { state: 'never' as const } };
+  it('draws both boxes in its panel when the item carries answerMarks, before and after the answer', () => {
+    show(itemView({ kind: 'value', answerMarks: MARKS }));
+    const panel = screen.getByRole('region', { name: 'Your move' });
+    const boxes = within(panel).getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes.map((b) => [b.checked, b.disabled])).toEqual([[true, false], [false, false]]);
+    cleanup();
+    show(itemView({ kind: 'value', state: 'done', closedAt: NOW - MIN, answerMarks: MARKS }));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+  });
+  it('draws none when the field is absent, and disables both on a saved copy', () => {
+    show(itemView({ kind: 'decide' }));
+    expect(screen.queryAllByRole('checkbox')).toEqual([]);
+    cleanup();
+    show(itemView({ kind: 'value', answerMarks: MARKS }), { current: false });
+    for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+});

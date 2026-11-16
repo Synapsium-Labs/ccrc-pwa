@@ -6,11 +6,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { SERVICEABILITY_CASES } from './fixtures/serviceability.js';
 import { CLASSES } from '../../shared/models.js';
 import {
-  FABLE_SHARE_CEILING_PCT, SEVEN_DAY_CEILING_PCT, SHARE_FRESH_S, classBelow, serviceability,
+  FABLE_SHARE_CEILING_PCT, SEVEN_DAY_CEILING_PCT, SHARE_FRESH_S, askingOf, classBelow, serviceability, type LaneFacts,
 } from '../../shared/serviceability.js';
 import { readLimits, sevenOf } from '../src/limits.js';
 import { readSharesMeasured, shareFor } from '../src/shares.js';
@@ -38,7 +38,34 @@ const now = (): number => Math.floor(Date.now() / 1000);
 // `time.time()` after a real subprocess spawn), so a shared t0 alone does not
 // bound that arm; `alignToSecondBoundary` below does, by giving the whole
 // spawn path a wide margin before the next whole-second tick.
-const seedCase = (c: (typeof SERVICEABILITY_CASES)[number], t0: number): void => {
+const SESSION = 'claude-asker';
+type Case = (typeof SERVICEABILITY_CASES)[number];
+/** The case's facts on its lane, in BOTH files a box carries (`accounts.json` for the L0 side, `accounts.sh` for bash),
+ *  an old projection stripped of the function(s) it predates, and the asking session's `poolset` entry. */
+const seedFacts = (c: Case): void => {
+  const f = c.facts ?? {};
+  const roster = rosterWithFacts({ [c.lane]: { fableBilling: f.fableBilling, continuity: f.continuity } });
+  seedRoster(h.home, roster); seedAccountsSh(h.home, roster);
+  const sh = path.join(h.home, '.ccrc', 'accounts.sh');
+  const drop = (txt: string, fn: string): string => txt.replace(new RegExp(`^${fn}\\(\\) \\{\n[\\s\\S]*?^\\}\n`, 'm'), '');
+  let txt = fs.readFileSync(sh, 'utf8');
+  if (f.projection !== undefined) txt = drop(txt, '_ccrc_fable_billing');
+  if (f.projection === 'old') txt = drop(txt, '_ccrc_continuity');
+  fs.writeFileSync(sh, txt);
+  const entry = path.join(h.home, '.cc-sessions', `${SESSION}.poolset`);
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.rmSync(entry, { recursive: true, force: true });
+  if (c.asking !== 'set-side') return;
+  if (c.side === 'set-unreadable') fs.mkdirSync(entry);
+  else if (c.side === 'set-unreadable-link') fs.symlinkSync(path.join(h.home, 'no-such-target'), entry);
+  else fs.writeFileSync(entry, c.side === 'set-malformed' ? 'Z!' : 'pool-a');
+};
+const sideOf = (c: Case) => c.side === 'set-unreadable' || c.side === 'set-unreadable-link' ? { state: 'set-unreadable' } as const
+  : c.side === 'set-malformed' ? { state: 'set-malformed' } as const
+    : c.asking === 'set-side' ? { state: 'set', set: { pools: ['pool-a'], untagged: false } } as const
+      : { state: 'untagged' } as const;
+const seedCase = (c: Case, t0: number): void => {
+  seedFacts(c);
   const lim = path.join(h.home, '.cc-limits'); fs.mkdirSync(lim, { recursive: true });
   for (const f of fs.readdirSync(lim)) fs.rmSync(path.join(lim, f));
   if (c.limits) fs.writeFileSync(path.join(lim, `${c.lane}.json`), c.limits(t0));
@@ -87,7 +114,15 @@ describe('_serviceable over SERVICEABILITY_CASES — four exit codes, and the L0
   it('guards the guard: the table covers every answer and both why-words of each', () => {
     expect(SERVICEABILITY_CASES.length).toBeGreaterThanOrEqual(14);
     for (const e of ['skipped', 'servable', 'unservable', 'unmeasured']) expect(SERVICEABILITY_CASES.some((c) => c.expect === e), e).toBe(true);
-    for (const w of ['ceiling', 'backend', 'no-figure', 'stale']) expect(SERVICEABILITY_CASES.some((c) => c.why === w), w).toBe(true);
+    for (const w of ['ceiling', 'backend', 'no-figure', 'stale', 'credits', 'billing-unset', 'billing-unread', 'no-continuity', 'continuity-unread']) {
+      expect(SERVICEABILITY_CASES.some((c) => c.why === w), w).toBe(true);
+    }
+    // every why-word of `Serviceability` is spelled once, here, and the rows cover each (a new word is a compile error)
+    const WORDS: Record<Extract<ReturnType<typeof serviceability>, { why: string }>['why'], true> = {
+      ceiling: true, backend: true, credits: true, 'billing-unset': true, 'billing-unread': true, 'no-continuity': true,
+      'continuity-unread': true, 'no-figure': true, stale: true,
+    };
+    for (const w of Object.keys(WORDS)) expect(SERVICEABILITY_CASES.some((c) => c.why === w), w).toBe(true);
   });
 
   it.each(SERVICEABILITY_CASES.map((c) => [c.name, c] as const))('%s', async (_n, c) => {
@@ -99,11 +134,13 @@ describe('_serviceable over SERVICEABILITY_CASES — four exit codes, and the L0
     // `_serviceable` prints NOTHING before it — a space-only prefix would sit
     // at the string's own boundary and vanish under that trim, losing the
     // token the split depends on.
-    const out = h.sh(`_serviceable ${c.lane} ${c.cls}; echo "|rc=$?"`);
+    // `asking` absent = a row written before the Overlord's arms: no id, byte-for-byte today's call.
+    const idArg = c.asking === undefined ? '' : ` ${SESSION}`;
+    const out = h.sh(`_serviceable ${c.lane} '${c.cls}'${idArg}; echo "|rc=$?"`);
     const [word, rcTok] = out.split('|rc=');
     expect(Number(rcTok)).toBe(RC[c.expect]);
     if (c.expect === 'servable' || (c.expect === 'unservable' && c.why === 'ceiling')) expect(Number(word)).toBe(c.figurePct);
-    if (c.why === 'backend' || c.expect === 'unmeasured') expect(word).toBe(c.why);
+    if (c.expect === 'unmeasured' || (c.expect === 'unservable' && c.why !== 'ceiling')) expect(word).toBe(c.why);
     // the L0 side over the SAME bytes, and the SAME instant t0 the seed used —
     // never a freshly resampled `now()`, which would let this arm disagree
     // with the seed (and with the bash arm above) about what "now" was.
@@ -121,7 +158,13 @@ describe('_serviceable over SERVICEABILITY_CASES — four exit codes, and the L0
     // them disagree.
     const def = cfg.roster.byId.get(c.lane);
     expect(def, `${c.lane} is not in the seeded roster`).toBeDefined();
-    const v = serviceability(c.cls, { anthropic: def!.telemetry === 'anthropic', seven: sevenOf(limits[c.lane]), share: shareFor(shares, c.lane) }, t0);
+    const f = c.facts ?? {};
+    const facts: LaneFacts = {
+      anthropic: def!.telemetry === 'anthropic', seven: sevenOf(limits[c.lane]), share: shareFor(shares, c.lane),
+      fableBilling: f.projection !== undefined ? 'unread' : (def!.fableBilling ?? 'unset'),
+      continuity: f.projection === 'old' ? 'unread' : def!.continuity !== null ? 'recorded' : 'none',
+    };
+    const v = serviceability(c.cls || 'default', facts, askingOf(sideOf(c)), t0);
     expect(v.kind).toBe(c.expect);
     if ('why' in v) expect(v.why).toBe(c.why);
     if ('figurePct' in v && c.figurePct !== undefined) expect(v.figurePct).toBe(c.figurePct);
