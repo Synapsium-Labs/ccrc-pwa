@@ -60,7 +60,7 @@ const canon = (v: unknown): unknown => Array.isArray(v) ? v.map(canon)
     ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])])) : v;
 
 /** The first 16 hex of sha256 over the canonical JSON (keys sorted at every depth). */
-export function fingerprintOf(fields: Readonly<Record<string, unknown>>): string {
+export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): string {
   return createHash('sha256').update(JSON.stringify(canon(fields))).digest('hex').slice(0, 16);
 }
 
@@ -162,7 +162,7 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
   }
   const decide = (d: Decide): void => {
     const local: Local = { kind: d.kind, id: d.id };
-    const inputs = fingerprintOf({ ...d.planned, teamKey: d.teamKey, workspaceId: d.workspaceId });
+    const inputs = plannedFingerprint({ ...d.planned, teamKey: d.teamKey, workspaceId: d.workspaceId });
     if (d.b?.state === 'failed') { failedInputs.push({ bindingId: d.b.id, inputs }); return; }
     if (!d.ready) return;
     const base = { local, workspaceId: d.workspaceId, teamKey: d.teamKey, inputs };
@@ -210,8 +210,8 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     const planned = { name: egress(s.program.title), description: initiativeDescription(s), status: initiativeStatus };
     decide({
       phase: 0, kind: 'programme', id: s.program.rowid, workspaceId: wsId, teamKey: null, op: { create: 'initiativeCreate', update: 'initiativeUpdate' },
-      b, ready: true, statusMissing: false, texts: [planned.name, planned.description], facts, planned, fp: fingerprintOf(planned),
-      isCurrent: (st) => st === fingerprintOf(planned),
+      b, ready: true, statusMissing: false, texts: [planned.name, planned.description], facts, planned, fp: plannedFingerprint(planned),
+      isCurrent: (st) => st === plannedFingerprint(planned),
       create: () => ({ input: planned, fields: ['name', 'description', 'status'] }),
       update: (id) => ({ input: { id, ...planned }, fields: ['name', 'description', 'status'] }),
       recover: 'name-and-creator',
@@ -235,8 +235,8 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     const planned = {
       name: fitProjectName(e.title), description: projectDescription(e, s.program.title, off), statusId: pStatus, teamIds: [pl.teamId], initiativeId,
     };
-    const fpFull = fingerprintOf(planned);
-    const fpNull = fingerprintOf({ ...planned, initiativeId: null });
+    const fpFull = plannedFingerprint(planned);
+    const fpNull = plannedFingerprint({ ...planned, initiativeId: null });
     decide({
       phase: 1, kind: 'epic', id: e.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectCreate', update: 'projectUpdate' },
       b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned,
@@ -249,7 +249,7 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
         return {
           kind: 'link', op: 'initiativeToProjectCreate', local: { kind: 'epic', id: e.id }, workspaceId: wsId, teamKey: pl.teamKey, bindingId: eb.id,
           input: { requestId, initiativeId, projectId: eb.linearId! }, fields: ['project'], requestId, fingerprint: fpFull,
-          inputs: fingerprintOf({ ...planned, teamKey: pl.teamKey, workspaceId: wsId }),
+          inputs: plannedFingerprint({ ...planned, teamKey: pl.teamKey, workspaceId: wsId }),
         };
       },
       recover: 'name-and-creator',
@@ -268,8 +268,8 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
       };
       decide({
         phase: 2, kind: 'checkpoint', id: c.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectMilestoneCreate', update: 'projectMilestoneUpdate' },
-        b: cb, ready: true, statusMissing: false, texts: [mp.name, mp.description], facts: [pl.fact], planned: mp, fp: fingerprintOf(mp),
-        isCurrent: (st) => st === fingerprintOf(mp),
+        b: cb, ready: true, statusMissing: false, texts: [mp.name, mp.description], facts: [pl.fact], planned: mp, fp: plannedFingerprint(mp),
+        isCurrent: (st) => st === plannedFingerprint(mp),
         create: () => ({
           input: { projectId, name: mp.name, description: mp.description, sortOrder: mp.sortOrder, ...(mp.targetDate === null ? {} : { targetDate: mp.targetDate }) },
           fields: ['name', 'description', ...(mp.targetDate === null ? [] : ['targetDate']), 'project'],
@@ -294,7 +294,7 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
       decide({
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
         b: tb, ready: t.checkpointId === null || milestoneId !== null, statusMissing: iStatus === null, texts: [ip.title, ip.description], facts: [tpl.fact],
-        planned: ip, fp: fingerprintOf(ip), isCurrent: (st) => st === fingerprintOf(ip),
+        planned: ip, fp: plannedFingerprint(ip), isCurrent: (st) => st === plannedFingerprint(ip),
         create: () => ({
           input: { teamId: ip.teamId, title: ip.title, description: ip.description, stateId: iStatus, projectId, ...(milestoneId === null ? {} : { projectMilestoneId: milestoneId }) },
           fields: ['team', 'title', 'description', 'state', 'project', ...(milestoneId === null ? [] : ['milestone'])],

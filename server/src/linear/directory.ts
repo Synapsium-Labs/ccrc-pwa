@@ -19,6 +19,8 @@ export interface LinearDirectoryRead {
   /** The slot's entries, filled with the key whose digest is `keyDigest`; null when none are (never filled, or filled
    *  with another key). */
   get(slot: LinearSlotRef, keyDigest: string): LinearDirectoryEntries | null;
+  /** When the slot's entries for this key were filled, or null (the plan sync's requeue rule, C10). */
+  filledAt(slot: LinearSlotRef, keyDigest: string): number | null;
 }
 
 /** The legacy slot's own fixed key; a file slot's id is a UUID, so the two never meet. */

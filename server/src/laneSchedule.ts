@@ -27,6 +27,8 @@ export const OUTBOX_LANE_PERIOD_MS = 30_000;
  *  `POST /api/updates/refresh`. */
 export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
 
+/** The Linear plan sync's beat (D-8182, Linear hierarchy §5.2): a tick takes the programmes due past their debounce. */
+export const PLAN_SYNC_BEAT_MS = 5_000;
 /** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
  *  key (the ISO week), so a day only bounds how late in a week the item appears. */
 export const QUIZ_LANE_PERIOD_MS = 86_400_000;
@@ -197,7 +199,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz';
+  | 'launchProfile' | 'timers' | 'quiz' | 'linearPlanSync';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -375,6 +377,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
   { name: 'quiz', cadenceMs: QUIZ_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the quiz lane failed', derivedFrom: null },
+  // The Linear plan sync (D-8182): one tick at a time. A tick's deadline plus one call's timeout stays under `staleAfterMs`, and
+  // a tick restarted as stuck only joins the passes in flight (`planSync.ts`), so a restart never sends a second write.
+  { name: 'linearPlanSync', cadenceMs: PLAN_SYNC_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: linear plan sync failed' },
 ];
 
 export function laneRow(name: string): LaneRow {

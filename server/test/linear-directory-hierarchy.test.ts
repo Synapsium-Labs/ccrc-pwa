@@ -1,6 +1,5 @@
-// The directory's status types, unsent until wave 3 (D-8180, plan task 1.4): the project-status page reader over FX2's
-// recorded answer (D-8407), `statusOfType` (by type, never by name), and the refresher's wave-1 refresh, which still sends
-// exactly the four documents it sent before and leaves the new parts empty and `unknown`.
+// The directory's status types (D-8180, plan task 1.4): the project-status page reader over FX2's recorded answer
+// (D-8407), `statusOfType` (by type, never by name), and the refresher's wave-3 refresh, which sends the four documents, then the project statuses and the initiatives probe.
 import { describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -13,7 +12,7 @@ import {
 } from '../src/linear/ops.js';
 import { putLinearSlot, type LinearSlotRef } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
-import { linearAnswer } from './linearFetchFake.js';
+import { linearAnswer, RATELIMITED_ERRORS } from './linearFetchFake.js';
 import { linearRecord } from './linearRecorded.js';
 import { linearServicesFake } from './linearServicesFake.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -84,11 +83,11 @@ describe('statusOfType', () => {
   });
 });
 
-describe('the refresher in wave 1', () => {
-  it('a wave-1 refresh sends exactly the documents it sent before', async () => {
+describe('the refresher since wave 3', () => {
+  async function refreshWith(probe: (q: string) => unknown): Promise<LinearDirectoryEntries | null> {
     const dir = path.join(mkTmp('ccrc-linear-dirh-'), '.ccrc');
     mkdirSync(dir, { recursive: true });
-    const sent: string[] = [];
+    sent.length = 0;
     const conn = (nodes: unknown[]): Record<string, unknown> => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
     const f: FetchLike = async (_u, init) => {
       const q = (JSON.parse(init.body) as { query: string }).query;
@@ -96,7 +95,9 @@ describe('the refresher in wave 1', () => {
       const body = q === LINEAR_DIRECTORY_DOCUMENTS.states ? { data: { workflowStates: conn([]) } }
         : q === LINEAR_DIRECTORY_DOCUMENTS.labels ? { data: { issueLabels: conn([]) } }
         : q === LINEAR_DIRECTORY_DOCUMENTS.projects ? { data: { projects: conn([]) } }
-        : { data: { viewer: { id: VIEWER }, users: conn([]) } };
+        : q === LINEAR_DIRECTORY_DOCUMENTS.users ? { data: { viewer: { id: VIEWER }, users: conn([]) } }
+        : q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses ? linearRecord('read-project-statuses').body
+        : probe(q);
       return linearAnswer({ ok: true, status: 200, json: async () => body });
     };
     const fx = linearServicesFake({ clock: () => T, ccrcDir: dir, fetch: f });
@@ -108,10 +109,26 @@ describe('the refresher in wave 1', () => {
     const slot: LinearSlotRef = { source: 'file', id: WS_A };
     fx.refresher.nameMiss(slot, valueDigestHex(KEY));
     await fx.refresher.idle();
-    expect(sent).toEqual(LINEAR_DIRECTORY_COLLECTIONS.map((c) => LINEAR_DIRECTORY_DOCUMENTS[c]));
-    expect(sent).toHaveLength(4);
-    const held = fx.refresher.directory.get(slot, valueDigestHex(KEY));
-    expect(held?.projectStatuses).toEqual([]);
-    expect(held?.initiatives).toBe('unknown');
+    return fx.refresher.directory.get(slot, valueDigestHex(KEY));
+  }
+  const sent: string[] = [];
+
+  it('a refresh reads project statuses', async () => {
+    const held = await refreshWith(() => linearRecord('read-initiatives-probe').body);
+    expect(sent).toEqual([
+      ...LINEAR_DIRECTORY_COLLECTIONS.map((c) => LINEAR_DIRECTORY_DOCUMENTS[c]),
+      LINEAR_HIERARCHY_DOCUMENTS.projectStatuses, LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe,
+    ]);
+    expect(held?.projectStatuses.map((s) => s.type)).toEqual(['planned', 'backlog', 'canceled', 'completed', 'started']);
+  });
+
+  it("the probe's answer lands in entries.initiatives", async () => {
+    expect((await refreshWith(() => linearRecord('read-initiatives-probe').body))?.initiatives).toBe('on');
+    expect((await refreshWith(() => ({ data: { initiatives: null } })))?.initiatives).toBe('unknown');
+  });
+
+  it('a refused probe page leaves the directory as it was', async () => {
+    const held = await refreshWith(() => (RATELIMITED_ERRORS));
+    expect(held).toBeNull();
   });
 });

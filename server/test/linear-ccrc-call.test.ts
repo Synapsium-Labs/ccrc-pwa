@@ -8,6 +8,7 @@ import type { LinearWriteAsk, LinearWritePolicy } from '../src/linear/policy.js'
 import { linearServicesFake } from './linearServicesFake.js';
 import { linearAnswer, RATELIMITED_ERRORS } from './linearFetchFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
+import { recordedAnswer } from './linearRecorded.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const CREATED = '00000000-0004-4000-8000-000000000011';
@@ -156,3 +157,16 @@ describe('runCcrcOp (D-8180)', () => {
   });
 });
 
+describe('runCcrcOp retry-guard answers (C1)', () => {
+  it.each([
+    ['initiativeCreate', 'mutation-initiative-create-same-id', 'conflict'],
+    ['projectCreate', 'mutation-project-create-same-id', 'conflict'],
+    ['projectMilestoneCreate', 'mutation-project-milestone-create-same-id', 'name-taken'],
+    ['issueCreate', 'extra-issue-create-caller-id-retry', 'conflict'],
+  ] as const)('%s answers linear-invalid with detail %s, journaled failed linear-invalid', async (op, fixture, detail) => {
+    const r = await rig(() => Promise.resolve(recordedAnswer(fixture)));
+    const out = await runCcrcOp(r.deps, { ...WRITE, op, teamKey: op === 'issueCreate' ? 'AAA' : null, fields: op === 'issueCreate' ? ['title'] : ['name'] });
+    expect(out).toEqual({ ok: false, word: 'linear-invalid', maybeSent: false, detail });
+    expect(rows(r.fx)[0]).toMatchObject({ outcome: 'failed', code: 'linear-invalid' });
+  });
+});

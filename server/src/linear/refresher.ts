@@ -26,9 +26,10 @@
 import { valueDigestHex } from '../token/files.js';
 import { callLinear, checkLinearKey, type FetchLike, type LinearKeyCheck } from './client.js';
 import { LinearDirectory, type LinearDirectoryRead } from './directory.js';
+import { readInitiativesProbe } from './hierarchyOps.js';
 import {
-  LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES, readLinearDirectoryPage,
-  type LinearDirectoryEntries,
+  LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES, LINEAR_HIERARCHY_DOCUMENTS, linearErrorOf,
+  readLinearDirectoryPage, readLinearProjectStatusesPage, type LinearDirectoryEntries,
 } from './ops.js';
 import { oneCallOutcome, type LinearRateGrant, type LinearRateLane, type LinearRateRefusal, type LinearRateService } from './rate.js';
 import type { LinearKeyRead } from './connection.js';
@@ -300,6 +301,11 @@ export class LinearRefresher {
    * from the slot's floor and settled with what it spent. The key is read from its file before each page, and a key
    * gone or changed stops the refresh, recording nothing. Kept only whole: a page refused, failed or out of its grammar
    * leaves the directory as it was. Past the fourth page a collection is cut (a known limit; the remedy is the id).
+   *
+   * Then the hierarchy's two reads (D-8182), one page each on the same floor lane and settled the same way: the project
+   * statuses into `entries.projectStatuses`, and the initiatives probe into `entries.initiatives` (`on` or `unknown`,
+   * never `off`: R8). "When a key is verified" needs no path of its own: a key act already calls `queueDirectory`, so the
+   * directory refresh, and the probe with it, follows every add, replace and Check again.
    */
   private async refreshDirectory(ref: LinearSlotRef): Promise<void> {
     const { ccrcDir, rate } = this.opts;
@@ -341,6 +347,25 @@ export class LinearRefresher {
         after = p.next;
       }
     }
-    if (digest !== null) this.names.put(ref, digest, entries, this.now());
+    /** One page of a hierarchy document: its body, or null when the key moved, the floor refused or the call failed. */
+    const onePage = async (document: string): Promise<unknown> => {
+      const k = await readLinearSlotKey(ccrcDir, ref);
+      if (k.kind !== 'key' || valueDigestHex(k.key) !== digest) return null;
+      const t = rate.take({ lane: 'floor', slot: ref, calls: 1 });
+      if (!t.ok) return null;
+      const call = await callLinear(k.key, document, {}, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs, now: this.now });
+      rate.settle(t.grant, oneCallOutcome(call));
+      return call.ok ? call.body : null;
+    };
+    if (digest === null) return;
+    const statuses = await onePage(LINEAR_HIERARCHY_DOCUMENTS.projectStatuses);
+    if (statuses === null) return;
+    const sp = readLinearProjectStatusesPage(statuses);
+    if (!sp.ok) return;
+    entries.projectStatuses.push(...sp.statuses);
+    const probe = await onePage(LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe);
+    if (probe === null || linearErrorOf(probe)?.word === 'rate-limited') return;
+    entries.initiatives = readInitiativesProbe(probe);
+    this.names.put(ref, digest, entries, this.now());
   }
 }

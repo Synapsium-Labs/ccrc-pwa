@@ -325,3 +325,13 @@ describe('the hierarchy settings', () => {
     expect(linkingOf(db, 'project-c').ownsTeam).toBe(true);   // another key is left alone
   });
 });
+
+describe('programmeRowId (C6)', () => {
+  it('answers the programs row rowid through the port, and null for an unknown slug', () => {
+    declare('prog-a');
+    const port = planStorePort(db);
+    const rid = (db.prepare("SELECT rowid AS r FROM programs WHERE slug = 'prog-a'").get() as { r: number }).r;
+    expect(port.programmeRowId('prog-a')).toBe(rid);
+    expect(port.programmeRowId('nope')).toBeNull();
+  });
+});

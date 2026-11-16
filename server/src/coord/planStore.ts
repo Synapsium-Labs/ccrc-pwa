@@ -450,6 +450,11 @@ export function requeueFailed(db: DatabaseSync, where: { workspaceId?: string; b
   ).run(...args);
   return Number(res.changes);
 }
+/** The `programs` row's rowid: the key of the programme's own bindings (C6); null for a slug with no row. */
+export function programmeRowId(db: DatabaseSync, slug: string): number | null {
+  const r = db.prepare('SELECT rowid AS rid FROM programs WHERE slug = ?').get(slug) as Raw | undefined;
+  return r === undefined ? null : Number(r.rid);
+}
 /** Every binding of a programme's objects (its own row, its epics, checkpoints and tickets), or, for `upkeep:<project>`,
  *  of that project's Upkeep epic and its tickets. A programme's own binding is keyed by the `programs` row's `rowid`. */
 export function bindingsOf(db: DatabaseSync, program: string): BindingRow[] {
@@ -543,7 +548,7 @@ const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
-  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf,
+  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  fingerprintOf, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps, requestIdOf, type SyncSnapshot, type SyncStep,
+  plannedFingerprint, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps, requestIdOf, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
@@ -117,10 +117,10 @@ describe('planSyncSteps (D-8182)', () => {
     expect(requestIdOf('epic', 4, WS, 'link')).not.toBe(a);
   });
 
-  it('fingerprintOf ignores key order', () => {
-    expect(fingerprintOf({ a: 1, b: { c: 2, d: [1, 2] } })).toBe(fingerprintOf({ b: { d: [1, 2], c: 2 }, a: 1 }));
-    expect(fingerprintOf({ a: 1 })).toMatch(/^[0-9a-f]{16}$/);
-    expect(fingerprintOf({ a: 1 })).not.toBe(fingerprintOf({ a: 2 }));
+  it('plannedFingerprint ignores key order', () => {
+    expect(plannedFingerprint({ a: 1, b: { c: 2, d: [1, 2] } })).toBe(plannedFingerprint({ b: { d: [1, 2], c: 2 }, a: 1 }));
+    expect(plannedFingerprint({ a: 1 })).toMatch(/^[0-9a-f]{16}$/);
+    expect(plannedFingerprint({ a: 1 })).not.toBe(plannedFingerprint({ a: 2 }));
   });
 
   it("a public project's issue text carries no Linear URL and no identifier", () => {
