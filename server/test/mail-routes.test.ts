@@ -39,6 +39,7 @@ import { isLandingKebab } from '../src/coord/landing.js';
 import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
+import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-durability.js';
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
@@ -1010,7 +1011,7 @@ describe('the rejection table is total, in both directions', () => {
         // checkpoint, the cursor detail, a verdict, an effect and a compaction outcome. Admitted through eight exported guards, each derived from its own file's
         // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
         // reason every union above gives.
-        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
+        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok) || isOverlordAuthorityKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
         || isDelegationPolicyKebab(tok) || isDelegationCompactionKebab(tok)
         // DELEGATION BROKER, WAVE 4 (PR1): the projection's words, checked beside the seventeenth union and never merged into it, on

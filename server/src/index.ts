@@ -24,6 +24,8 @@ import { NotifyLog } from './notifylog.js';
 import { Viewers } from './viewer.js';
 import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
+import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
+import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -135,6 +137,17 @@ bootPushOutbox(coord, time.clock);
 // response row this process writes carries this boot's epoch (or `unmeasured` when the row could not be written).
 const responseBoot = coord.recordResponseBoot(build?.sha ?? null, time.clock.wall());
 if (!responseBoot.ok) console.warn(`ccrc-server: response record: ${responseBoot.detail}; this process's response rows are stamped unmeasured`);
+// The Overlord authority journal (Overlord W1, `coord/overlordAuthorityJournal.ts`, spec §7.6): built once, its guard
+// passed to the writer as its port, and its boot coherence (Table 7.6a, after the torn-tail heal) run before the fleet link,
+// the HTTP server, the watchers and every timer. A detected rollback fences the doors, never the boot: the server starts
+// whatever the verdict, and the boot step logs it.
+const overlordAuthorityPort: AuthorityBootPort = {
+  healTornTail: () => overlordAuthority.healTornTail(coordDb), measure: () => overlordAuthority.measure(coordDb),
+};
+const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(overlordAuthorityPort);
+const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
+  overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
+runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -410,6 +423,8 @@ testboxAudit.sweep(Date.now());
 linearJournal.sweep(Date.now());
 setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
 
+deps.overlordAuthority = overlordAuthority;
+deps.overlordAuthorityGuard = overlordAuthorityGuard;
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

@@ -814,7 +814,9 @@ describe('Build 7 nouns', () => {
     // The push outbox (Overlord W1): `pushOutboxStore.ts` is the `push_outbox` SQL and the reach stamp, in the same idiom.
     // The portfolio (Overlord W1): `portfolioStore.ts` is `portfolio_rank`'s SQL and the facts read, in `ledgersStore.ts`' idiom.
     // The answer marks (Overlord W1): `answerMarkStore.ts` is `answer_marks`' one writer and its read, in the same idiom.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts',
+    // The Overlord authority journal (Overlord W1, H27): `overlordAuthorityJournal.ts` is `overlord_authority_head`'s one writer,
+    // inside its caller's transaction, and its read; it names the handle by `import type`, and every method takes it as an argument.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts',
       'responsesStore.ts']);
     const coordFiles = sources(coordDir);
 
