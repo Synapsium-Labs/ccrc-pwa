@@ -103,6 +103,19 @@ describe('POST /api/answer-marks, armed', () => {
     expect(r.waiting()).toBe(1);
   });
 
+  it('a could-answer tick on an open do item answers marked, and its view carries could-answer alone (answer marks C)', async () => {
+    const r = await rig({ armed: true });
+    const id = item(r, 'do');
+    const res = await mark(r, { kind: 'item', id, mark: 'could-answer', value: true });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', signedIn: true } });
+    expect(actors(r)).toEqual([{ actor: 'device:lightMyRequest' }]);
+    expect(r.waiting()).toBe(1);
+    const v = await viewOf(r, id);
+    expect(v?.answerMarks).toStrictEqual({ couldAnswer: expect.objectContaining({ state: 'marked' }) });
+    expect(v?.answerMarks).not.toHaveProperty('unsure');
+  });
+
   it('an unsure tick on the same item leaves its could-answer mark as it was', async () => {
     const r = await rig({ armed: true });
     const id = item(r);
@@ -140,26 +153,32 @@ describe('POST /api/answer-marks: refusals write nothing and emit nothing', () =
     const r = await rig({ armed: false });
     const now = Date.now();
     for (const id of [999, item(r, 'decide', { heldUntil: now + HOUR }), item(r, 'do', { heldUntil: now + HOUR })]) {
-      const res = await mark(r, { kind: 'item', id, mark: 'unsure', value: true });
-      expect([res.statusCode, res.json()], `item ${id}`).toEqual([404, { ok: false, error: 'unknown-item', detail: `no item ${id}` }]);
+      // Either mark, so a held do item answers the same for the mark it carries and the one it does not: no oracle.
+      for (const m of ['unsure', 'could-answer']) {
+        const res = await mark(r, { kind: 'item', id, mark: m, value: true });
+        expect([res.statusCode, res.json()], `item ${id} ${m}`).toEqual([404, { ok: false, error: 'unknown-item', detail: `no item ${id}` }]);
+      }
     }
     expect(actors(r)).toEqual([]);
     expect(r.waiting()).toBe(0);
   });
 
-  it('a do item, a withdrawn item and a cleared item past the window are each 409 not-markable, with the reason', async () => {
+  it('unsure on a do item, a secret item, a withdrawn item and a cleared item past the window are each 409 not-markable, with the reason', async () => {
     const r = await rig({ armed: false });
     const now = Date.now();
-    const cases: [number, string][] = [
-      [item(r, 'do'), 'no-box'],
-      [item(r, 'secret'), 'no-box'],
-      [item(r, 'decide', { state: 'withdrawn', closedAt: now - HOUR }), 'not-listed'],
-      [item(r, 'decide', { state: 'dismissed', closedAt: now - HOUR }), 'not-listed'],
-      [item(r, 'value', { state: 'done', closedAt: now - WINDOW - HOUR }), 'past-window'],
+    const cases: [number, string, string][] = [
+      [item(r, 'do'), 'unsure', 'no-box'],
+      [item(r, 'do', { state: 'done', closedAt: now - HOUR }), 'unsure', 'no-box'],
+      [item(r, 'secret'), 'could-answer', 'no-box'],
+      [item(r, 'secret'), 'unsure', 'no-box'],
+      [item(r, 'decide', { state: 'withdrawn', closedAt: now - HOUR }), 'could-answer', 'not-listed'],
+      [item(r, 'decide', { state: 'dismissed', closedAt: now - HOUR }), 'could-answer', 'not-listed'],
+      [item(r, 'value', { state: 'done', closedAt: now - WINDOW - HOUR }), 'could-answer', 'past-window'],
+      [item(r, 'do', { state: 'done', closedAt: now - WINDOW - HOUR }), 'could-answer', 'past-window'],
     ];
-    for (const [id, reason] of cases) {
-      const res = await mark(r, { kind: 'item', id, mark: 'could-answer', value: true });
-      expect([res.statusCode, res.json()], `item ${id}`).toEqual([409, { ok: false, error: 'not-markable', detail: reason }]);
+    for (const [id, m, reason] of cases) {
+      const res = await mark(r, { kind: 'item', id, mark: m, value: true });
+      expect([res.statusCode, res.json()], `item ${id} ${m}`).toEqual([409, { ok: false, error: 'not-markable', detail: reason }]);
     }
     expect(actors(r)).toEqual([]);
     expect(r.waiting()).toBe(0);
@@ -218,15 +237,27 @@ describe('the marks on the items each answer carries (F13)', () => {
     expect((await viewOf(r, cleared))?.answerMarks).toMatchObject({ couldAnswer: { state: 'marked' }, unsure: NEVER });
   });
 
-  it('a do or secret item carries no answerMarks', async () => {
+  it('a secret item carries no answerMarks', async () => {
     const r = await rig({ armed: false });
-    const ids = [item(r, 'do'), item(r, 'secret')];
+    const id = item(r, 'secret');
+    const found = (await waitingView(r)).items.find((i) => i.id === id);
+    expect(found).toBeDefined();
+    expect(found).not.toHaveProperty('answerMarks');
+  });
+
+  it('an open and a cleared do item carry could-answer alone, on the waiting view and the item page (answer marks C)', async () => {
+    const r = await rig({ armed: false });
+    const open = item(r, 'do');
+    const cleared = item(r, 'do', { state: 'done', closedAt: Date.now() - HOUR });
+    const past = item(r, 'do', { state: 'done', closedAt: Date.now() - WINDOW - HOUR });
     const v = await waitingView(r);
-    for (const id of ids) {
-      const found = v.items.find((i) => i.id === id);
-      expect(found).toBeDefined();
-      expect(found).not.toHaveProperty('answerMarks');
-    }
+    expect(v.items.find((i) => i.id === open)?.answerMarks).toStrictEqual({ couldAnswer: NEVER });
+    expect(v.cleared.find((i) => i.id === cleared)?.answerMarks).toStrictEqual({ couldAnswer: NEVER });
+    await mark(r, { kind: 'item', id: cleared, mark: 'could-answer', value: true });
+    const one = async (id: number) => (await r.app.inject({ method: 'GET', url: `/api/items/${id}` })).json() as { item: ItemView };
+    expect((await one(cleared)).item.answerMarks).toStrictEqual({ couldAnswer: expect.objectContaining({ state: 'marked' }) });
+    expect((await one(open)).item.answerMarks).toStrictEqual({ couldAnswer: NEVER });
+    expect((await one(past)).item).not.toHaveProperty('answerMarks');
   });
 
   it('GET /api/items/:id carries the marks inside the window and none on an item past it', async () => {
@@ -241,12 +272,16 @@ describe('the marks on the items each answer carries (F13)', () => {
   it('with the mark read made to throw, GET /api/waiting still answers its items, each with both marks unmeasured', async () => {
     const r = await rig({ armed: false });
     const id = item(r);
-    const plain = item(r, 'do');
+    const task = item(r, 'do');
+    const plain = item(r, 'secret');
     r.coord.db.exec('DROP TABLE answer_marks');
     const v = await waitingView(r);
     const marks = v.items.find((i) => i.id === id)?.answerMarks;
     expect(marks?.couldAnswer.state).toBe('unmeasured');
-    expect(marks?.unsure.state).toBe('unmeasured');
+    expect(marks?.unsure?.state).toBe('unmeasured');
+    const taskMarks = v.items.find((i) => i.id === task)?.answerMarks;
+    expect(taskMarks?.couldAnswer.state).toBe('unmeasured');
+    expect(taskMarks).not.toHaveProperty('unsure');
     expect(v.items.find((i) => i.id === plain)).not.toHaveProperty('answerMarks');
   });
 
@@ -267,13 +302,15 @@ describe('the marks on the items each answer carries (F13)', () => {
   it('the coordinator\'s box-token items read carries no answerMarks, even on a marked item', async () => {
     const r = await rig({ armed: false });
     const id = item(r);
+    const task = item(r, 'do');
     await mark(r, { kind: 'item', id, mark: 'unsure', value: true });
+    expect((await mark(r, { kind: 'item', id: task, mark: 'could-answer', value: true })).statusCode).toBe(200);
     const res = await r.app.inject({
       method: 'GET', url: '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a', headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
     });
     expect(res.statusCode, res.body).toBe(200);
     const items = (res.json() as { items: ItemView[] }).items;
-    expect(items.map((i) => i.id)).toContain(id);
+    expect(items.map((i) => i.id)).toEqual(expect.arrayContaining([id, task]));
     for (const i of items) expect(i).not.toHaveProperty('answerMarks');
   });
 });

@@ -38,7 +38,7 @@ describe('the vocabulary', () => {
   });
 });
 
-describe('the agreement: the decide and value items itemsFor lists are exactly the items itemMarkable calls markable', () => {
+describe('the agreement: the items itemsFor lists are exactly the items itemMarkable calls markable, mark by mark', () => {
   let coord: CoordStore;
   beforeEach(() => { coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-answer-marks-'), '.ccrc', 'coord.db'))); });
 
@@ -62,10 +62,17 @@ describe('the agreement: the decide and value items itemsFor lists are exactly t
       }
     }
     const { open, cleared } = coord.itemsFor(null, NOW);
-    const listed = [...open, ...cleared].filter((r) => r.kind === 'decide' || r.kind === 'value').map((r) => r.id).sort((a, b) => a - b);
-    const markable = ids.filter((id) => deciders.itemMarkable(coord.itemById(id)!, NOW).markable).sort((a, b) => a - b);
-    expect(listed.length).toBeGreaterThan(10);
-    expect(markable).toEqual(listed);
+    // `could-answer` is on every listed question and task (answer marks C, #2900); `unsure` on every listed question alone.
+    const boxed = { 'could-answer': ['decide', 'value', 'do'], unsure: ['decide', 'value'] } as const;
+    for (const mark of vocab.ANSWER_MARK_NAMES) {
+      const kinds: readonly string[] = boxed[mark];
+      const listed = [...open, ...cleared].filter((r) => kinds.includes(r.kind)).map((r) => r.id).sort((a, b) => a - b);
+      const markable = ids.filter((id) => deciders.itemMarkable(coord.itemById(id)!, NOW, mark).markable).sort((a, b) => a - b);
+      expect(listed.length, mark).toBeGreaterThan(10);
+      expect(markable, mark).toEqual(listed);
+    }
+    // The do items are among the listed ones, so the task arm is measured, not vacuous.
+    expect([...open, ...cleared].some((r) => r.kind === 'do')).toBe(true);
   });
 });
 
