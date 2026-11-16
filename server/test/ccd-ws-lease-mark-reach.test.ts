@@ -2,9 +2,12 @@
 // `is_protected`, a case-folding superset) starts it with `-p`, and the body's own entry guard refuses an unprivileged explicit
 // bash. One table run against both, in the style of `ccd-ws-collect-reach.test.ts`. PR8b (D-8112; review 1665 N1): the adoption switch's
 // writer `delegation-adopt` sits behind the same boundary, in the same table, so a case-folded spelling a child might reach through an
-// inherited `nocasematch` starts protected and matches no verb. FIXTURE HOME ONLY: every launcher is a
+// inherited `nocasematch` starts protected and matches no verb. D-8666 (the delegation broker's Rider): the forbidden verbs the
+// launcher did not yet protect (`ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`, `roll` and `claude`) join the same
+// table as a class of their own, `entry`: the launcher starts them under `-p` and the body does NOT refuse an unprivileged
+// start of them, because the operator and their own suites start the body directly. FIXTURE HOME ONLY: every launcher is a
 // fixture install under the harness HOME, and no argv here reaches a removal — a protected shape is refused at entry or started
-// over an echo body.
+// over an echo body, and the real body runs an `entry`-class shape only where it removes nothing (a usage refusal or a listing).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -54,28 +57,53 @@ const echoed = (): { flags: string; argv: string[] } => {
 };
 
 
-const SHAPES: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['ws-lease-mark alone', ['ws-lease-mark']],
-  ['ws-lease-mark with its lease', ['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1']],
+/** Which halves protect a shape. `both`: the launcher starts it under `-p` AND the body refuses an unprivileged start
+ *  (the server-composed verbs). `entry`: the launcher starts it under `-p`, and the body runs it however it was started
+ *  (D-8666: the operator's forbidden verbs, whose callers start the body directly). */
+type ShapeClass = 'both' | 'entry';
+const SHAPES: ReadonlyArray<readonly [string, readonly string[], ShapeClass]> = [
+  ['ws-lease-mark alone', ['ws-lease-mark'], 'both'],
+  ['ws-lease-mark with its lease', ['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1'], 'both'],
   // W5-G12 (PR2): the read-only audit starts protected as its writer does.
-  ['ws-lease-audit alone', ['ws-lease-audit']],
-  ['ws-lease-audit with its lease', ['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1', '--holders']],
+  ['ws-lease-audit alone', ['ws-lease-audit'], 'both'],
+  ['ws-lease-audit with its lease', ['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1', '--holders'], 'both'],
   // PR8b (D-8112, review 1665 N1): the adoption switch's one writer, protected as ws-lease-mark is.
-  ['delegation-adopt alone', ['delegation-adopt']],
-  ['delegation-adopt on', ['delegation-adopt', '--state', 'on']],
+  ['delegation-adopt alone', ['delegation-adopt'], 'both'],
+  ['delegation-adopt on', ['delegation-adopt', '--state', 'on'], 'both'],
   // The Overlord W1 ccd arms (plan Task 3): the sleep markers' one writer, protected as delegation-adopt is.
-  ['keep-awake alone', ['keep-awake']],
-  ['keep-awake on', ['keep-awake', '--session', 'demo-quiet-basin', '--state', 'on']],
+  ['keep-awake alone', ['keep-awake'], 'both'],
+  ['keep-awake on', ['keep-awake', '--session', 'demo-quiet-basin', '--state', 'on'], 'both'],
+  // D-8666: every verb of FORBIDDEN_CCD_VERBS the launcher did not yet protect, with any tail. Each shape here is one the
+  // REAL body may run unprivileged in the fixture HOME (the body half below runs it): a usage refusal or the read-only
+  // listing. `roll` and `claude` are no body verb yet (D-8667).
+  ['ws-rm alone', ['ws-rm'], 'entry'],
+  ['ws-reap alone', ['ws-reap'], 'entry'],
+  ['ws-gc alone, the read-only listing', ['ws-gc'], 'entry'],
+  ['ws-gc --fast', ['ws-gc', '--fast'], 'entry'],
+  ['ws-archive alone', ['ws-archive'], 'entry'],
+  ['ws-restore alone', ['ws-restore'], 'entry'],
+  ['roll with a tail', ['roll', '--to', '1.2.3'], 'entry'],
+  ['claude with a tail', ['claude', 'mem'], 'entry'],
 ];
 
-describe('ws-lease-mark, ws-lease-audit and delegation-adopt are protected shapes at both classifiers', () => {
-  it('the body refuses an unprivileged explicit bash at entry — nothing runs', () => {
-    for (const argv of SHAPES.map(([, a]) => a)) {
+describe('the launcher protects every shape; the body refuses the `both` class only', () => {
+  it('the body refuses an unprivileged explicit bash at entry for the `both` class — nothing runs', () => {
+    for (const argv of SHAPES.filter(([, , c]) => c === 'both').map(([, a]) => a)) {
       const b = bash([], argv);
       expect(b.code, `${argv.join(' ')}: ${b.stderr.slice(0, 300)}`).toBe(125);
       expect(b.stderr).toContain('refused (entry-unprivileged)');
     }
   }, 60_000);
+
+  it('the body does NOT refuse an unprivileged explicit bash for the `entry` class (D-8666): its callers start the body directly', () => {
+    const entryOnly = SHAPES.filter(([, , c]) => c === 'entry').map(([, a]) => a);
+    expect(entryOnly.length, 'the class is populated').toBe(8);
+    for (const argv of entryOnly) {
+      const b = bash([], argv);
+      expect(b.code, `${argv.join(' ')}: ${b.stderr.slice(0, 300)}`).not.toBe(125);
+      expect(b.stderr, argv.join(' ')).not.toContain('refused (entry-');
+    }
+  }, 120_000);
 
   for (const [name, argv] of SHAPES) {
     it(`${name}: the launcher starts the body protected (-p), argv exact`, () => {
@@ -97,8 +125,20 @@ describe('ws-lease-mark, ws-lease-audit and delegation-adopt are protected shape
     expect(echoed().flags.includes('p')).toBe(true);
     expect(direct(['Keep-Awake', '--session', 'x', '--state', 'on'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
     expect(echoed().flags.includes('p')).toBe(true);
+    // D-8666: a case variant of each verb the launcher newly protects, an ASCII one and one with a non-ASCII character
+    // (which the matcher reads as any one character, so no locale's fold escapes it).
+    for (const argv of [['WS-RM', 'demo-x'], ['Ws-Reap', '--expect', 'x'], ['WS-GC'], ['ws-gc', '--prune'], ['WS-GC', '--PRUNE'],
+      ['Ws-Archive', '--session', 'x'], ['ws-arch\u0130ve', '--session', 'x'], ['WS-RESTORE', '--session', 'x'],
+      ['ROLL', '--to', '1.2.3'], ['Ro\u0141l'], ['CLAUDE', 'mem'], ['Cl\u00e5ude'], ['w\u017f-rm', 'demo-x']]) {
+      expect(direct(argv, { BASHOPTS: 'nocasematch' }).code, argv.join(' ')).toBe(0);
+      expect(echoed().argv, argv.join(' ')).toEqual(argv);
+      expect(echoed().flags.includes('p'), `${argv.join(' ')}: flags ${echoed().flags}`).toBe(true);
+    }
     for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark'], ['ws-lease-auditx'], ['caps', 'ws-lease-audit'],
-      ['delegation-adoptx'], ['caps', 'delegation-adopt'], ['keep-awakex'], ['caps', 'keep-awake']]) {
+      ['delegation-adoptx'], ['caps', 'delegation-adopt'], ['keep-awakex'], ['caps', 'keep-awake'],
+      // D-8666's controls: a longer or shorter word, or the verb in a later position, stays ordinary.
+      ['ws-rmx'], ['ws-r'], ['caps', 'ws-rm'], ['ws-gcx'], ['ws-archived'], ['ws-restores'], ['rolls'], ['rol'], ['claudex'],
+      ['claude-x'], ['caps', 'roll'], ['caps', 'claude']]) {
       expect(direct(argv).code).toBe(0);
       expect(echoed().flags.includes('p'), argv.join(' ')).toBe(false);
     }
