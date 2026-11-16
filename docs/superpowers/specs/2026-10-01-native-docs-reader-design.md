@@ -677,7 +677,7 @@ overlay          = mode === 'ref' && admitDraft(e, d)        // mode: 'default' 
 
 **CommittedPin `{project, commit, servedRef, section, path}`.**
 - It is immutable. `docs-show` never resolves a ref to choose bytes.
-- A pinned commit that has since been gc'd answers `unknown-commit`, and the PWA re-lists once.
+- A pinned commit that has since been gc'd answers `unknown-commit`, and the PWA re-lists once. On a version page (rich-docs G6), whose commit is the URL's `at`, it does not: the read fails, and the page says "This box's copy of the repository has no commit <short>." (amended 2026-11-16; W5b-2).
 - **Provenance.** After the read, `docs-show` runs `merge-base --is-ancestor --end-of-options C R` with `R = --ref`, under a 2 s soft bound.
 
   | Result | `onRef` |
@@ -688,7 +688,7 @@ overlay          = mode === 'ref' && admitDraft(e, d)        // mode: 'default' 
 
   - The PWA banners `not-contained`: "this commit is no longer on <ref>".
   - Any commit stays readable, so pins survive force-pushes, but a fork-PR, stash or dangling commit can never pass as being on the branch.
-- **Where a commit comes from.** A commit reaches a request only from a tree answer of the same visit. The page grammar never carries one (§3.1).
+- **Where a commit comes from.** A commit reaches a request only from a tree answer of the same visit, or from a version page's `at=`, the one commit the page grammar carries, on a leaf (§3.1; rich-docs A14; amended 2026-11-16; W5b-2).
 
 **DraftPin `{project, branch, head, section, path, fp}`.** It is never cached. `docs-show` checks, in this order:
 1. **Holder.** Re-enumerate the holder with the (d) rule.
@@ -726,7 +726,7 @@ overlay          = mode === 'ref' && admitDraft(e, d)        // mode: 'default' 
 - **Re-fetch.** It re-fetches the tree:
   - on screen open;
   - after a refresh;
-  - after `draft-changed`, `worktree-moved`, `worktree-gone` or `unknown-commit`, with one automatic retry and then an inline "changing — retry".
+  - after `draft-changed`, `worktree-moved`, `worktree-gone` or `unknown-commit`, with one automatic retry and then an inline "changing — retry". A version page's file read does not re-list on these words: its commit is the URL's (amended 2026-11-16; W5b-2).
 
 ---
 
@@ -1045,7 +1045,7 @@ The Action column says what the page offers.
 
 | Word | HTTP | Retry | Action |
 |---|---|---|---|
-| `unknown-commit` | 404 | auto | re-list |
+| `unknown-commit` | 404 | auto, none on a version page | re-list; on a version page, none, and the page says its box has no such commit (amended 2026-11-16; W5b-2) |
 | `not-a-commit` | 422 | none | |
 | `object-missing` | 502 | manual | |
 | `absent-path` | 404 | none | re-list |
@@ -1331,7 +1331,7 @@ Measured at `c62e22b9a`. Browser facts come from Chromium 153 driven headless th
 
 **Query keys**, `DOCS_PAGE_KEYS = ['ref','view','frame']`, written in that order:
 - `ref=<ref>`: any page except the index. The bare or qualified grammar of §2 (a). Written verbatim, because its charset (`A-Z a-z 0-9 . _ / -`) is query-safe; the parser also accepts `%2F`.
-- `view=committed`: leaf only, and only together with `ref`. It shows the committed bytes at the commit that **this visit's** tree answer resolved `ref` to. Without `ref` it is redundant, because the default view never overlays drafts, and it is canonicalised away.
+- `view=committed`: leaf only, and only together with `ref`. It shows the committed bytes at the commit that **this visit's** tree answer resolved `ref` to. Without `ref` it is redundant, because the default view never overlays drafts, and it is canonicalised away. Beside `at` it is redundant too, since a version is committed bytes, and it is canonicalised away (amended 2026-11-16; W5b-2).
 - `frame=full`: leaf only, and only when `contentClass(path) === 'html'` (§5.6.7, the full-screen mockup). On any other class it is canonicalised away.
 - `#fragment`: passed through untouched to §4.
 
@@ -1748,7 +1748,7 @@ type TreeSlot =
 
 `docs/useDocsVisit.ts` owns:
 1. **Tree slots**, one GET per key at a time. A tree answer is **reused while the user navigates within the visit** (project, section, leaf, sibling cost no GET; §2 (e)). It is re-fetched: on mount; after a refresh answer; after `draft-changed`, `worktree-moved`, `worktree-gone` or `unknown-commit` from a file read (once automatically, then an inline "changing, Retry"); on `visibilitychange` to visible when the slot is older than `DOCS_STALE_MS` (a GET only, never a refresh); and on `onAuthRegained` for slots in `auth`.
-2. **File slots.** Committed bodies are keyed by `blob`, so a file unchanged across a moving default branch is not re-downloaded. Drafts are keyed by `(branch, head, section, path, fp)`. Every request carries the current pin.
+2. **File slots.** Committed bodies are keyed by `blob`, so a file unchanged across a moving default branch is not re-downloaded. A body at a version (rich-docs G6) is keyed by its pin's commit instead, so a version whose blob equals the latest's still remounts (amended 2026-11-16; W5b-2). Drafts are keyed by `(branch, head, section, path, fp)`. Every request carries the current pin.
 3. **Auto-refresh.** `autoRefreshed: Set<key>` in a `useRef`, checked and added synchronously before the POST, so StrictMode's double effect cannot fire twice. It dies with the mount; a mount is one screen open.
 4. **Retry bookkeeping.** `autoRetried: Set<key + word>`.
 5. **The leaf's expected pin** (amended 2026-10-13). `pinFor(tree, page): DocPin | null` is pure. It answers the pin the current tree implies for the page's leaf: a `CommittedPin` at `ref.commit`, or a `DraftPin` when `entryView` opens the draft, or `null` when the leaf opens nothing. The file slot's own pin is the **opened pin**. A raster leaf has no file answer: `DocImage` loads it through `docs.raster`, which answers bytes and a MIME only (§5.4). Its opened pin is the pin `DocImage` loaded, and wherever Export needs "the file slot is `ok`", a raster leaf reads "the image is loaded". Share, which needs only the pin, reads "the image has settled, loaded or failed", as a failed file read settles any other leaf; a raster over its class cap, which `DocImage` refuses without a load, is settled at once, as a file slot's `too-large` is (amended 2026-11-02; Share). The two pins differ only while a re-list is in flight (the auto-refresh paragraph below), and Share and Export are disabled while they differ (§4.16, §4.17).
@@ -1793,7 +1793,7 @@ A leaf whose listed size exceeds `DOCS_CLASS_CAP[contentClass(path)]` (§6.1) sh
 | Served ref | `ref.served` | `origin/<b>` or `<b> (local)`; the full refname in `title` |
 | Commit | `ref.commit` | first 8 hex, mono; full id in `title` and in "copy commit" |
 | How chosen | `ref.via`, `relation`, `counterpart`, `tried` | `VIA_SENTENCE[via]`, plus `RELATION_SENTENCE[relation]` for `local`/`origin`/`qualified`; a dangling `origin/HEAD` in `tried[0]` adds "origin/HEAD points at a missing branch" |
-| Source (leaf) | the opened pin | `committed`, `committed (view=committed)`, or `draft · <state> in <worktree label>` |
+| Source (leaf) | the opened pin | `committed`, `committed (view=committed)`, `draft · <state> in <worktree label>`, or `version <short>` with **Back to the latest**, beside which no entry badge is drawn (amended 2026-11-16; W5b-2) |
 | Worktree (draft leaf) | `drafts.worktree` | "main checkout", "workspace <last segment>", or the last two segments; full path in `title` |
 | Freshness chip | `freshness` + refresh state | below |
 | Size (leaf) | answer `size` | KiB |
@@ -1831,8 +1831,11 @@ A leaf whose listed size exceeds `DOCS_CLASS_CAP[contentClass(path)]` (§6.1) sh
 | leaf `deleted` / `typechange` | info | "Deleted in {label} (uncommitted)." / "Its type changed in {label}; the draft is not read." + "Showing the committed version." |
 | leaf `conflicted` | warn | "Contains unresolved merge-conflict markers." |
 | file answer `onRef === 'not-contained'` | warn | "Commit {short} is no longer on {served} (the branch was rewritten)." · Re-list |
+| The same, on a version page | warn | "Commit {short} is not on {served}; it comes from another branch." No Re-list (amended 2026-11-16; W5b-2) |
 | draft page embeds `DraftPin` assets | info | "This draft page embeds {k} uncommitted asset{s}." Each embed wears a `draft` chip |
 | `view=committed` | info | "Showing the committed version at {short}." · **Back to the draft** |
+| A version page (`at=`) | info | "Showing the version at {short}, not the latest on {served}." · **Back to the latest** (amended 2026-11-16; W5b-2) |
+| On a version page, the rows about the latest's drafts (the default and base hints, leaf withheld, `deleted` / `typechange`, `conflicted`, draft assets) | — | not shown: a version is one commit (amended 2026-11-16; W5b-2) |
 
 **Actions.** View on GitHub (3.11; opened with `openExternal` on tap). **Open committed version**, shown iff `entryView(...).offersCommitted`, navigates to the same leaf with `view=committed` (URL state, so Back returns to the draft and a reload keeps the choice; the commit itself is never in the URL, it is resolved from this visit's tree).
 
@@ -2224,7 +2227,7 @@ Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser 
 
 **Markdown `img` (`DocImage`):**
 - `doc` of class `raster` or `svg`, then the **pin rule** (s2-decisions asset rule), with `e` the tree entry at `(section, path)` (none gives refused `absent`):
-  - **committed page** (every default-view page, every `view=committed` leaf, and every ref-view leaf that opens committed): needs `e.committed.kind` in file/exec, giving `CommittedPin{commit: ref.commit, servedRef: ref.served, section, path}`; otherwise refused `absent`. If `mode === 'ref'` and `admitDraft(e, drafts)`, the image wears "uncommitted change not shown";
+  - **committed page** (every default-view page, every `view=committed` leaf, and every ref-view leaf that opens committed): needs `e.committed.kind` in file/exec, giving `CommittedPin{commit: ref.commit, servedRef: ref.served, section, path}`; otherwise refused `absent`. If `mode === 'ref'` and `admitDraft(e, drafts)`, the image wears "uncommitted change not shown"; on a version page (rich-docs G6) the commit is `at`, and no image wears that note; the image must still be a committed file in the served listing, else `absent`, and its listed size, which is the tip's, is not checked, so ccd's class cap answers; an image's `unknown-commit` there is its own failure, with no re-list (amended 2026-11-16; W5b-2);
   - **draft page**: `entryView(e, drafts, 'ref').opens === 'draft'` gives `DraftPin{branch: drafts.branch, head: drafts.worktree.head, section, path, fp: e.draft.fp}` with a `draft` chip, counted in the page banner; an entry whose draft is `deleted` is missing (`deleted-in-worktree`); a `typechange`, withheld or `fp: null` draft is missing (`draft-withheld`), never a silent fallback to the committed bytes (a missing image renders as a refused one, with that reason); an entry with no draft is committed at C (`baseEqual` makes H equal C) under the same file/exec condition as a committed page; no entry is refused `absent`. This is the one asset rule, shared with mockup assets (§5.6.3). It is derived once, by `imagePinFor(e, tree, page)` in `docs/docsLinks.ts` (amended 2026-10-13). `DocImage`, Export (§4.17) and, from W6, the mockup planner all call it (M4.EX11).
 - `doc` of any other class: refused `not-image`; an `html` target also gets **Open in viewer** (its leaf route).
 - `external` http(s): refused `external` with **Open image externally** (`openExternal` on tap).
@@ -2287,7 +2290,7 @@ Deferred by the Share and Export amendment (2026-10-13):
 - **The options not taken.** The native share sheet on the first tap (decision 1, option (b)). Export fetching images that are not loaded (decision 3, option (b)). `navigator.share({files})` as Export's first route (decision 7, option (b)); it stays as the contingency `export-share-file`.
 - **Export after W8.** On the 2026-10-12 spec's reader path, a page renders inside a sandboxed frame and produces no hast tree. Export builds from the plain pipeline's tree, so it would no longer export exactly what a reader-path page shows. W8 must decide between two options: keep Export on the plain render, with the provenance saying so; or the no-JS static variant that spec lists under Later. Until W8, every page uses the plain pipeline, and the two are the same. That spec's W8 row carries this decision, edited in the same change (§7.7).
 - **W8's copy op.** That spec's reader copy op (its M8.19) calls `writeText` from the parent, under `pwa/src/docs`. M4.SH7 allows `clipboard.writeText(` there only in `docs/share.ts`, so the copy op must go through `copyText`. M8.19's hidden-character check then wraps the one writer, and covers Share's Copy link and "copy commit" too. That spec's W8 row says so, edited in the same change (§7.7).
-- **Share on a version view (W5b).** The 2026-10-12 spec's `at=<sha>` page (W5b, after W5) opens a commit that need not be the served ref's tip. Share's rows judge `ref.relation`, which describes the tip, so W5b re-derives Share's rows for version views. W5's Share never sees one.
+- **Share on a version view (W5b).** The 2026-10-12 spec's `at=<sha>` page (W5b, after W5) opens a commit that need not be the served ref's tip. Share's rows judge `ref.relation`, which describes the tip, so W5b re-derives Share's rows for version views. W5's Share never sees one. W5b's rule: the link names the version's commit and is offered only when `githubPermalink` would link the served ref's tip and the read measured `onRef === 'contains'`; otherwise the refusal is `version-unmeasured`, with Export's clause, and a version carries no draft notes (amended 2026-11-16; W5b-2).
 
 ### 4.14 CSS, contrast, tap targets
 
@@ -2466,6 +2469,7 @@ Every sheet that has a slug also carries the `access` note, above.
 | `unmeasured` | "Docs could not measure whether origin has <short>; Refresh, then share." |
 | `new-draft` | "Not committed yet, so GitHub has nothing to show. Export makes a file you can send." |
 | `new-withheld` | "Not committed yet, and Docs did not read it (<WITHHELD_SENTENCE>); nothing to share or export." |
+| `version-unmeasured` | "Docs cannot tell whether origin has <short>, so it gives no link to this version." (amended 2026-11-16; W5b-2) |
 
 Where Export is not offered (section, directory and project pages, and leaves of §4.17's excluded kinds), the clause "Export makes a file you can send" is left out.
 
@@ -2585,7 +2589,7 @@ Export is offered only after the page has drawn the same tree with the same comp
 
 The export limits live in `docs/export/policy.ts`, not in `lib/markdownLimits.ts`. That file's rule covers render limits, and these are limits on a saved file.
 
-**Links** (`EXPORT_COMPONENTS.a`; C is the commit the leaf opened, §4.16):
+**Links** (`EXPORT_COMPONENTS.a`; C is the commit the leaf opened, §4.16). On a version page (rich-docs G6) C is not the listing's commit, and `githubPermalink` judges only the served ref's tip, so there the `doc` and `repo` rows give an inert span with `version-unmeasured`'s sentence (amended 2026-11-16; W5b-2):
 
 | Resolution (`resolveDocRef`) | In the file |
 |---|---|

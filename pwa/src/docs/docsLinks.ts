@@ -153,7 +153,7 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
 /** What `DocLink` renders for one link (spec 4.11). `in-app`: a Docs page of the same project at the page's ref
  *  (`href` is that page's URL, never with a fragment; `fragment: null` means the link names none). `fragment`: an
  *  anchor in this page. `external`: an http, https or mailto URL, opened on tap only. `github`: an in-repo file outside
- *  the four sections, on GitHub through `githubBlobUrl`, with that builder's `note` (`may-differ` is the caution View on
+ *  the docs sections, on GitHub through `githubBlobUrl`, with that builder's `note` (`may-differ` is the caution View on
  *  GitHub carries too). `inert`: everything else, with the span's whole title. */
 export type DocLinkTarget =
   | { kind: 'in-app'; href: string; fragment: string | null }
@@ -275,7 +275,7 @@ export function sessionBranchRef(branch: string | null): (DocsRefSpec & { kind: 
 
 /** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, at `ref` (null, the
  *  default: the project's default view, as the ledgers link), or null: no home project, a home the Docs grammar refuses, or a
- *  path outside the four sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
+ *  path outside the docs sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
 export function docHref(repoPath: string, homeProject: string | null, ref: DocsRefSpec | null = null): string | null {
   if (homeProject === null || !isDocsProject(homeProject)) return null;
   for (const section of DOC_SECTION_SLUGS) {
