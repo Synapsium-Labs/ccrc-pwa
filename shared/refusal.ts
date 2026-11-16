@@ -178,6 +178,8 @@ export const LEDGER_ROUTE_REFUSALS = {
   notBig: 'not-big',
   // The portfolio's rank door (Overlord W1, question 8): a write based on a revision that is no longer current.
   rankChanged: 'rank-changed',
+  // The goals ratify door (Overlord W1, portfolio B, question 4): the pin changed since the operator read it.
+  goalsChanged: 'goals-changed',
   // The answer-mark door (Overlord W1, §9.2.1 C70): the row exists and carries no box, or is not on the operator's list.
   notMarkable: 'not-markable',
 } as const;
@@ -233,10 +235,11 @@ export const TIMER_REFUSALS = {
   'timer-not-found': 404,
 } as const;
 export type TimerRefusal = keyof typeof TIMER_REFUSALS;
-/** The Overlord's W1 refusal words (Overlord W1, the vocabulary piece; spec §11.6 and Table 11.6), grouped by door, each
- *  with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). No W1 door sends
- *  one yet: each later W1 piece ships its door and reads its word from here. Each status is CHOSEN, not measured, by this
- *  file's family rule: 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
+/** The Overlord's W1 and W2 refusal words (Overlord W1 and W2, the vocabulary pieces; spec §11.6 and Table 11.6), grouped
+ *  by door, each with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). A
+ *  word is declared before its door: each W1 and W2 piece ships its door and reads its word from here, and no W2 door sends
+ *  one until its piece lands. Each status is CHOSEN, not measured, by this file's family rule: 400 for a body the caller
+ *  can fix (as `timer-too-soon`), 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
  *  `note-not-asked`), 429 for a rate (as `timer-rate`), 501 for a build that lacks what the door needs (as `unsupported`
  *  and `auth-off`), 503 for a box fault (as `journal-unreadable`). Later waves' words join this group with their doors. */
 export const OVERLORD_REFUSALS = {
@@ -277,8 +280,38 @@ export const OVERLORD_REFUSALS = {
   // The history door: no connected agent, or more than one, serves the history store (board and history B). 503.
   'history-unreachable': 503,
   // Every Overlord read door: the read rate's ceiling is reached (the inbox piece; the W1 index's question 32). 429, a
-  // rate. Not yet in Table 11.6: `refusal-table.data.json`'s codeOnly names it until the spec-fixes run adds the row.
+  // rate, as `act-ceiling`.
   'read-ceiling': 429,
+  // The W2 words (the W2 vocabulary plan, Table V1). Every Overlord write door: the act kind's ceiling for its window is
+  // reached (the act catalogue piece). 429, a rate.
+  'act-ceiling': 429,
+  // `overlordMayAct` and grants: the caller's identity strength is under the act's or the grant's least (the act
+  // catalogue piece). 403.
+  'identity-too-weak': 403,
+  // `overlordMayAct`: a member of the act's effective class is not covered (C25, C26; the act catalogue piece). 403.
+  'operator-only': 403,
+  // Grants, commands, learning and `overlordMayAct`: the server shares a user with fleet sessions (the act catalogue
+  // piece). 409, a state of the world: how the box is installed.
+  'server-not-isolated': 409,
+  // The answer doors, `return-over-asked` and the Overlord's request moves: the row has already reached the operator, or
+  // the operator took the request (`takenFrom` is set), or the Overlord would drop a `needs-you` request the operator has
+  // not answered (the request record and doors pieces). 409.
+  'operator-has-it': 409,
+  // Open request, relay, kickoff and start, `acknowledge` and `messages`: a cited message is not on record, spent or
+  // changed (the request record piece; the W1 inbox plan chose 409 too). 409.
+  'said-not-operator': 409,
+  // `POST /api/runs`: the run's programme is not the request's owner (the request ids piece). 403, as `not-owner`.
+  'request-not-yours': 403,
+  // The owner's `blocked` door: the dependency would close a cycle (the coordinator request doors piece). 409.
+  'dependency-cycle': 409,
+  // Relay, answer, kickoff and brief: the body quotes an `overlord-only` entry or hits the private-name list (the relay
+  // piece). 403, one word with no detail, counted and throttled, so the status says nothing a fix could use.
+  'egress-refused': 403,
+  // The relay: the decision model flags the Overlord's part as prescribing a method (the relay piece). 400, a body the
+  // caller can fix.
+  'relay-carries-method': 400,
+  // The relay: it would deepen a goal conflict the operator has not ruled on (the relay piece). 409.
+  'goal-conflict-open': 409,
 } as const;
 export type OverlordRefusal = keyof typeof OVERLORD_REFUSALS;
 /** The group's words, in its order. */
@@ -316,7 +349,7 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ProbeRefusal
   // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
   | TimerRefusal
-  // The Overlord's W1 words (the vocabulary piece), each with its status in `OVERLORD_REFUSALS`.
+  // The Overlord's W1 and W2 words (the vocabulary pieces), each with its status in `OVERLORD_REFUSALS`.
   | OverlordRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
@@ -434,7 +467,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
   // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry
   // may help, and nothing was saved).
-  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400,
+  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400, 'org-looks-like-an-id': 400,
   'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
   'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
   'token-unverified': 503,
@@ -536,7 +569,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [PROBE_REFUSALS.noneOpen]: 409, [PROBE_REFUSALS.closed]: 409,
   // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
   ...TIMER_REFUSALS,
-  // The Overlord's W1 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`.
+  // The Overlord's W1 and W2 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`. No W2 door
+  // sends one until its piece lands.
   ...OVERLORD_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
@@ -544,6 +578,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The Seen door (D-8126): CHOSEN, not measured. 409 as `not-open`: the row is there, in a state this door does not act on.
   [LEDGER_ROUTE_REFUSALS.notBig]: 409,
   [LEDGER_ROUTE_REFUSALS.rankChanged]: 409,
+  [LEDGER_ROUTE_REFUSALS.goalsChanged]: 409,
   [LEDGER_ROUTE_REFUSALS.notMarkable]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409

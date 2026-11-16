@@ -1,0 +1,115 @@
+# The response record, PR B: departures found while building
+
+Plan: `docs/superpowers/plans/2026-11-14-overlord-w1/w1-responses.md`, Tasks 5 to 9 (PR B: the seal, the other messages and
+the controls). Each departure is named by a plain-words slug; none carries a D-number. The coordinator folds them into the
+plan's deviation ledger.
+
+## Departures
+
+- **migration-written-at-its-position**. The brief asked for migration 84 positionally, behind portfolio B's 83. On this
+  branch `main` had 82 entries until portfolio B landed, so `response_settings` was entry 83, at its position. After
+  #2904 merged, the one merge of `main` the coordinator allowed moved it to entry 84 (`user_version 84`), keeping both.
+- **owner-facts-in-the-lane**. The plan puts `ownerFactsOf` in `responsesStore.ts`. The owners' reads it must go through
+  (`askById`, `askForCorrection`, `approvalById`, `callById`, `itemHistory`, `itemById`) are `CoordStore` methods, not
+  module functions a store module can call with the handle, so `ownerFactsOf` is in `server/src/responses/lane.ts` (L4),
+  which gathers through the watcher's port. It reads, decides nothing, and answers `{ ok: false }` on any throw, refusal
+  or unknown word.
+- **lane-on-the-watcher-port**. The lane takes `WatcherCoordPort`, never a port of its own (the ruling of 2026-10-30: one
+  port, one member list); the port gains the lane's eleven members in their sorted places.
+- **a-gone-owner-seals-reader**. Rule 2 lets a `gone` owner read `settled-elsewhere` "only when the row's own record says
+  it closed". No W1 row records that, so a `gone` owner always seals `unmeasured`, `reader`.
+- **settle-time-from-the-owners-moves**. "When it settles", in `responseWindowEnd`: an item at its earliest settling move
+  (every item act but `return`, which reopens it) at or after the window's start; an ask at its `answeredAt` when
+  answered, by anyone. An ask that went `stale` or `unknown` records no time, so its window ends at its cap.
+- **push-window-starts-at-delivery**. A delivered push's acts and receipts are counted from its delivery. An operator act
+  between the insert and the delivery settled the row before the push reached anyone, so a delivered push reads
+  `settled-elsewhere`, not `acted`. A push still `pending` at its seal reads rule 0 below.
+- **pending-push-reads-no-verdict-first** (review 2260 F2, the coordinator's ruling). Table 4.3b reads `acted` first. A
+  push no device received (its row still `pending` at the seal) is checked ahead of that rule and seals `unmeasured`,
+  `no-verdict`, whatever the operator or anyone else did with its carried row: it reached no one, so no act answers it.
+- **settled-is-the-state-at-the-end** (review 2260 F1, the coordinator's ruling). "Settled by the window's end" is the
+  item's state at the end: its settling and `return` moves up to the end are replayed and the last one decides, never
+  any settling at all. An item ticked and then returned before a new push stood open all window, so that push is not
+  `settled-elsewhere`.
+- **elsewhere-figure-counts-handled-rows**. `responsesFor`'s `elsewhere` counts the rows the operator marked "I handled
+  this elsewhere" (C69); a `settled-elsewhere` seal counts in no figure and stays out of `measured`, with
+  `not-actionable` and `unmeasured` rows whose why is `reader`, `ask-ended` or `no-verdict` ("delivered rows with a
+  verdict").
+- **median-from-sealed-acts**. `medianActMs` reads the seal's `actedAt`; a handled row the seal did not call `acted` has
+  no act time and is not in the median.
+- **responses-for-has-no-store-reader**. `responsesFor` ships total and tested with no reader in W1 (question 13); no
+  store read of its rows ships either, so nothing is dead code. W3 adds the read with its route.
+- **digest-window-is-one-window-on**. A digest line's window ends at the next digest: this digest's end plus one window
+  length (`2 * toMs - fromMs`), whenever the beat ran.
+- **claim-digest-day-in-one-tx**. `claimDigestDay` now runs in one transaction with or without its callback; a throw from
+  the callback is logged once per cause and the claim stands.
+- **response-writes-under-a-savepoint** (review 2260 F5, the coordinator's ruling). Each response write that rides a move
+  (the Waiting on you row, the digest's lines, and PR A's push row and verdict) runs under its own SAVEPOINT
+  (`responsesStore.ts#responseWriteInTx`). A failure undone at the statement rolls back to the savepoint, is logged, and
+  the move stands; the digest's lines go all or none. A failure SQLite answered by rolling back the whole transaction
+  (SQLITE_FULL, IOERR, NOMEM, INTERRUPT) leaves no transaction open and is re-thrown, so the move fails whole and is never
+  half-committed. For the digest, the claim then fails too, and the next beat claims again.
+- **retention-write-is-an-upsert** (review 2260 F4). `setResponseRetention` writes the row back when it is missing (`INSERT
+  … ON CONFLICT(id) DO UPDATE`), so a change that passed the step-up is never a 200 that kept nothing.
+- **retention-feed-row-through-notice**. The retention door records a change as a record-only feed row through the
+  server's `notice` sink, naming the actor (`deviceActor` when armed, `flag-off` dark), passed on the one registration
+  line beside the account gate; `server.ts` keeps its one line.
+- **retention-out-of-bounds-reads-unreadable**. A stored retention outside `[14, 3650]`, a missing row or a failed read is
+  unreadable: the lane deletes nothing that pass and the door asks the step-up for any change.
+- **waiting-row-write-logged-once-per-cause**. A Waiting on you row or a digest line whose insert throws is caught inside
+  the move it rides and logged once per cause (`responsesStore.ts#warnResponseWrite`), so the move commits.
+- **wire-types-in-shared**. The read's row (`ResponseRowBrief`) and the retention answer (`ResponseRetentionView`) are
+  declared in `shared/responses.ts` and named by the server and the console alike.
+- **i18-predicate-left-for-sequence-b**. Sequence and monitor B has not merged (`server/src/coord/invariants.ts` is not on
+  `main`), so I18's predicate and its gatherer row are left for sequence B, as that plan says (question 15).
+- **doors-outside-the-box-token-census**. The brief asked for the doors' census rows. The plan's Task 8 puts the handled,
+  read and retention doors where PR A put the receipts door: session-gated, not EXEMPT, no box token, so outside
+  `box-token-census.test.ts` and `CLAUDE.md`'s box-token paragraph. Their rows are in `auth-gate.test.ts`
+  (`responses/routes.ts` reads 5, the totals) and `auth/gate.ts`'s count, and `secret-mask.test.ts`'s `EXEMPT` reasons for
+  the two `GET`s. No refusal word is new, so Table 11.6 is untouched.
+
+The console (Task 9):
+
+- **responsesfor-takes-a-string**. `api.responsesFor` takes the query's `ref` string; `responseWords.ts#refParam` builds
+  `item:<id>` or `digest:<key>` from a typed ref.
+- **opened-per-ref-set**. `useOpenedReceipt` keeps the refs it has posted for the mount, so a re-render posts nothing and
+  moving to another day's digest posts only that day's lines, once.
+- **digest-body-split-at-50**. The digest page posts its decision lines in bodies of at most `RECEIPTS_MAX_PER_BODY`.
+- **control-off-on-saved-copy**. The item page shows "I handled this elsewhere" only on a current item, never on a saved
+  copy.
+- **handled-refusal-sentence**. A refused mark rolls back to the button and shows one line, "Could not mark this. Try
+  again.", beside it.
+
+## Carried
+
+- **for authority journal C** (review 2260 F3). `bootsInWindowOf` counts boots after the row's insert, through its window's
+  end. A server down across the window's end (a `shown` received, the `opened` lost, the next boot after the end) would
+  seal `not-opened` for a push that was opened. It cannot happen in W1, because the restore generation stays
+  `unmeasured` and every push without a counted open seals `unmeasured`, `receipts`. When authority journal C measures
+  the restore stamp, count boots through the seal time, or compare the row's boot epoch with the stamp's at the seal.
+
+## Measured
+
+- Growth (`server/test/growthCheck.ts#netGrowth`, against the merge base with `origin/main`): `server/src/coord/schema.ts`
+  +5 (the plan's measured +5), `server/src/coord/store.ts` +16 (the plan's estimate about +14: eleven delegates, the
+  stamp on `reachHeldItem`, and `claimDigestDay`'s transaction and callback), `server/src/watch.ts` +10,
+  `server/src/server.ts` 0 (the registration line gains the gate, the notice sink and the actor), `pwa/src/lib/api.ts` +6.
+  `growth-check.test.ts` armed: green.
+- Mutation floors (the in-tree runner, `server/test/sim/mutate.ts`): `responseOutcome` 1 (32 of 32), `responseWindowEnd`
+  1 (9 of 9), `responseSealDue` 1 (7 of 7), `responsesFor` 1 (13 of 13), `retentionChangeGate` 1 (4 of 4). One
+  equivalent mutant (a digest line's window ends at its cap whatever its owner) was removed with the redundant line.
+- Hand mutations, each red then restored from a saved copy: Task 6's three (a row on every reach call, which needed the
+  case of an item reached with no stamp source and armed later, since the unique index also holds a repeat; `armInTx`'s
+  insert dropped; the digest rows written on a lost claim); Task 7's three (`sealedAt IS NULL` dropped, which needed a
+  direct store case, since the lane never re-reads a sealed row; an unreadable setting falling back to the default; the
+  deleter in two transactions); Task 8's three (the handled door writing `outcome`, the bounds dropped, the gate compared
+  the wrong way).
+- The auth gate's counts move past portfolio B's: 250 routes, 247 HTTP, 152 gated, and `gate.ts`'s docstring names 247
+  (taken in the merge of `main` after #2904 landed at 246 / 243 / 148).
+- Fix round 1 (review 2260). Mutation floors, the same runner: `responseOutcome` 1 (36 of 36: O29 rewritten for the
+  replay, O33 to O37 added for F1 and F2, O28 moved to the window's set as W11, where it is not equivalent),
+  `responseWindowEnd` 1 (10 of 10), `responseSealDue` 1 (7 of 7, S5 and S6 now on `responseWindowEnded`), `responsesFor`
+  1 (13 of 13), `retentionChangeGate` 1 (4 of 4), `receiptVerdict` 1 (15 of 15). Hand mutations, each red then restored
+  from a saved copy: the re-throw dropped when no transaction is left (3 red), the savepoint dropped for the old catch (4
+  red), the retention write back to a bare `UPDATE` (the missing-row case red), the read door's safe-integer check
+  dropped (1 red), a lane latch never cleared (1 red), and the lane's causes unbounded (1 red).

@@ -7,7 +7,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
-import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
@@ -5474,12 +5474,25 @@ export class CoordStore {
   purgeOutbox(before: number): { removed: number } { return outbox.purgeOutbox(this.db, before); }
   markFirstBoot(at: number): number { return outbox.markFirstBoot(this.db, at); }
   firstBootAt(): number | null { return outbox.firstBootAt(this.db); }
-  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at); }
+  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number, stamp?: Parameters<typeof outbox.reachHeldItem>[5]): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at, stamp); }
   /** Overlord W1 (the response record, `responsesStore.ts`): the boot's record and the receipts door's one transaction. The
    *  push row's writers run inside the outbox's transactions, so they take the handle and have no delegate. */
   recordResponseBoot(buildSha: string | null, at: number): ReturnType<typeof responses.recordResponseBoot> { return responses.recordResponseBoot(this.db, buildSha, at); }
   receiveReceipts(receipts: Parameters<typeof responses.receiveReceipts>[1], at: number, verdictOf: Parameters<typeof responses.receiveReceipts>[3]):
     ReturnType<typeof responses.receiveReceipts> { return responses.receiveReceipts(this.db, receipts, at, verdictOf); }
+  /** Responses B: the digest lines (inside `claimDigestDay`'s callback, so in its transaction), the lane's reads and seal, the
+   *  deleter by time in a transaction of its own, and the handled and retention doors' reads and writes. */
+  insertDigestResponses(d: Parameters<typeof responses.insertDigestResponsesInTx>[1]): { readonly inserted: number } { return responses.insertDigestResponsesInTx(this.db, d); }
+  openResponseRows(): responses.OpenRowsRead { return responses.openResponseRows(this.db); }
+  responseReceipts(id: number): ReturnType<typeof responses.receiptsOf> { return responses.receiptsOf(this.db, id); }
+  responseReplacedOn(row: Parameters<typeof responses.replacedOnOf>[1], windowEnd: number): string[] { return responses.replacedOnOf(this.db, row, windowEnd); }
+  responseBootsInWindow(after: number, through: number): number { return responses.bootsInWindowOf(this.db, after, through); }
+  sealResponse(id: number, d: Parameters<typeof responses.sealResponse>[2], at: number): { readonly changed: boolean } { return responses.sealResponse(this.db, id, d, at); }
+  deleteResponsesThrough(at: number): ReturnType<typeof responses.deleteResponsesThrough> { return responses.deleteResponsesThrough(this.db, at); }
+  responseRetention(): responses.RetentionRead { return responses.responseRetention(this.db); }
+  setResponseRetention(days: number, at: number): { readonly changed: boolean } { return responses.setResponseRetention(this.db, days, at); }
+  markResponseHandled(id: number, at: number): ReturnType<typeof responses.markResponseHandled> { return responses.markResponseHandled(this.db, id, at); }
+  responsesForRef(ref: Parameters<typeof responses.responsesForRef>[1]): responses.ResponseRowsRead { return responses.responsesForRef(this.db, ref); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
@@ -9914,10 +9927,19 @@ export class CoordStore {
   }
 
   /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
-   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). */
-  claimDigestDay(day: string, sentAt: number, count: number): boolean {
-    const res = this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count);
-    return Number(res.changes) > 0;
+   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). With
+   *  `onClaim` (the digest lines' response rows, W1 responses B), the claim and the callback share one transaction and the
+   *  callback runs only when the claim won, under its own savepoint: its rows go all or none, a throw from it is logged and
+   *  never costs the claim, and a failure that took the whole transaction fails the claim too (`responseWriteInTx`). */
+  claimDigestDay(day: string, sentAt: number, count: number, onClaim?: () => unknown): boolean {
+    return tx(this.db, () => {
+      const won = Number(this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count).changes) > 0;
+      if (won && onClaim !== undefined) {
+        const w = responses.responseWriteInTx(this.db, onClaim);
+        if (!w.ok) responses.warnResponseWrite(`digest:${w.detail}`, `the digest's response rows were not written (${w.detail}); the claim stands`);
+      }
+      return won;
+    });
   }
 
   // ── pool edges ────────────────────────────────────────────────────────
@@ -11227,9 +11249,10 @@ export class CoordStore {
     return bound === undefined ? res : { ...res, row: row as outbox.BoundRowRef | null };
   }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
-  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen); }
-  setDoneWhen(program: string, doneWhen: readonly string[], now: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null, source: WrittenSource): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen, source); }
+  setDoneWhen(program: string, doneWhen: readonly string[], now: number, modId: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now, modId); }
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  ratifyGoalsVersion(program: string, version: GoalsVersion, now: number, actor: string): ledgers.RatifyResult { return ledgers.ratifyGoalsVersion(this.db, program, version, now, actor); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */

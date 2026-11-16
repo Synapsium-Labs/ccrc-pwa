@@ -12,9 +12,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
-  RELEASE_REVIEW_VERB, nextItemState, operatorShownAt, parseItemAction, recommendationOf,
+  RELEASE_REVIEW_VERB, goalRatification, modificationSource, nextItemState, operatorShownAt, parseItemAction, parseRatifiedBy, pinSource, ratifiedByText, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemEventAct, type ItemKind, type ItemMoveRefusal, type ItemState,
-  type NeededBy,
+  type GoalsVersion, type NeededBy, type Ratification, type RatifiedBy, type WrittenSource,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
 
@@ -384,39 +384,51 @@ export function itemHistory(db: DatabaseSync, id: number): ItemEventRow[] {
 /** Pins a spec to a programme with the copy of its "In short" (spec §4). The route has checked the path (`isSpecPath`),
  *  the length, and that the caller claims the programme; a slug with no programme row changes nothing. `doneWhen` is the
  *  programme's definition of done (D-8126): a list replaces the stored one, `null` leaves a stored list as it is (a
- *  re-pin without one keeps it). Required, so every caller is visited. */
+ *  re-pin without one keeps it). `source` is what the pin rests on (Overlord W1, portfolio B), written with the text, so a
+ *  re-pin replaces the pin's source with its own: new text is never ratified by an older act; it is never the operator's,
+ *  whose only writer is `ratifyGoalsVersion` (review 2240 F6), and it clears the act's device (`ratifiedActor`, F7). A list
+ *  whose text differs from the stored one names the pin as its version (`doneWhenBy`); the same list, or none, keeps the
+ *  list's provenance (review 2240 F9). One statement: SQLite reads every right-hand side from the row before the update.
+ *  Required, so every caller is visited. */
 export function setSpecPin(
   db: DatabaseSync, program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null,
+  source: WrittenSource,
 ): void {
   if (doneWhen === null) {
-    db.prepare('UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ? WHERE slug = ?').run(specPath, inShort, now, program);
+    db.prepare('UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ?, ratifiedBy = ?, ratifiedAt = ?, ratifiedActor = NULL WHERE slug = ?')
+      .run(specPath, inShort, now, ratifiedByText(source), now, program);
     return;
   }
-  db.prepare('UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ?, doneWhen = ? WHERE slug = ?')
-    .run(specPath, inShort, now, JSON.stringify(doneWhen), program);
+  const list = JSON.stringify(doneWhen);
+  // One literal, so the writers census (`writers-map.test.ts`) sees every column this statement writes.
+  db.prepare("UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ?, ratifiedBy = ?, ratifiedAt = ?, ratifiedActor = NULL, doneWhenBy = CASE WHEN doneWhen IS ? THEN doneWhenBy ELSE 'pin' END, doneWhen = ? WHERE slug = ?")
+    .run(specPath, inShort, now, ratifiedByText(source), now, list, list, program);
 }
 
-/** Replaces the programme's definition of done (D-8126), the modification route's writer. The caller has shaped the list
- *  (`doneWhenOf`) and checked ownership; a slug with no programme row changes nothing. `now` is the caller's clock, kept
- *  for the signature's symmetry with the other writers; the column carries no time of its own. */
-export function setDoneWhen(db: DatabaseSync, program: string, doneWhen: readonly string[], _now: number): void {
-  db.prepare('UPDATE programs SET doneWhen = ? WHERE slug = ?').run(JSON.stringify(doneWhen), program);
+/** Replaces the programme's definition of done (D-8126), the modification route's writer, naming modification `modId` as
+ *  the version that wrote it (`doneWhenBy`, in the same statement). The caller has shaped the list (`doneWhenOf`) and
+ *  checked ownership; a slug with no programme row changes nothing. `now` is the caller's clock, kept for the signature's
+ *  symmetry with the other writers; the column carries no time of its own. */
+export function setDoneWhen(db: DatabaseSync, program: string, doneWhen: readonly string[], _now: number, modId: number): void {
+  db.prepare('UPDATE programs SET doneWhen = ?, doneWhenBy = ? WHERE slug = ?').run(JSON.stringify(doneWhen), `mod:${modId}`, program);
 }
 
-/** Records one change since approval; `mergedAt` stays NULL until `markModificationsMerged`. Returns the id. */
+/** Records one change since approval, with what it rests on, derived here from the row's own `itemId`
+ *  (`modificationSource`: the cited item, else the coordinator that wrote it; review 2240 F6); `mergedAt` stays NULL until
+ *  `markModificationsMerged`. Returns the id. */
 export function addModification(
   db: DatabaseSync, program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null },
   now: number,
 ): number {
   const insert = (): number => {
-    const res = db.prepare('INSERT INTO programme_modifications (program, at, text, ruling, itemId, pr) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(program, now, m.text, m.ruling, m.itemId, m.pr);
+    const res = db.prepare('INSERT INTO programme_modifications (program, at, text, ruling, itemId, pr, ratifiedBy, ratifiedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(program, now, m.text, m.ruling, m.itemId, m.pr, ratifiedByText(modificationSource(m.itemId)), now);
     return Number(res.lastInsertRowid);
   };
   if (m.doneWhen === undefined || m.doneWhen === null) return insert();
   const doneWhen = m.doneWhen;
   // D-8126: the row and the new list are one act; `setDoneWhen` is the list's writer.
-  return tx(db, () => { const id = insert(); setDoneWhen(db, program, doneWhen, now); return id; });
+  return tx(db, () => { const id = insert(); setDoneWhen(db, program, doneWhen, now, id); return id; });
 }
 
 /** The spec PR merged: marks this programme's still-pending modifications of that PR, once (a marked one keeps its first
@@ -438,19 +450,78 @@ function storedDoneWhen(raw: string | null): string[] | null {
   }
 }
 
-/** What Goals shows for one programme: the pin, its In short copy and the modifications, newest first. A programme with
- *  no pin (or no row) reads null fields and, if it has none, an empty list. */
+type PinRow = { specPath: string | null; inShort: string | null; inShortAt: number | null; doneWhen: string | null; ratifiedBy: string | null; ratifiedAt: number | null; doneWhenBy: string | null };
+type ModRow = {
+  id: number; at: number; text: string; ruling: string | null; itemId: number | null; pr: number | null; mergedAt: number | null;
+  ratifiedBy: string | null; iProgram: string | null; iState: string | null; iTickedAt: number | null;
+};
+const PIN_SQL = 'SELECT specPath, inShort, inShortAt, doneWhen, ratifiedBy, ratifiedAt, doneWhenBy FROM programs WHERE slug = ?';
+/** Each modification with the item it cites, joined by the row's own `itemId` (never a copy of the item). */
+const MODS_SQL = 'SELECT m.id, m.at, m.text, m.ruling, m.itemId, m.pr, m.mergedAt, m.ratifiedBy, i.program AS iProgram, ' +
+  'i.state AS iState, i.tickedAt AS iTickedAt FROM programme_modifications m LEFT JOIN operator_items i ON i.id = m.itemId';
+
+const modVerdict = (m: ModRow, program: string): Ratification => goalRatification(parseRatifiedBy(m.ratifiedBy),
+  m.iProgram === null || m.iState === null ? null : { program: m.iProgram, state: m.iState, tickedAt: m.iTickedAt }, program, 'modification');
+/** The pin's source counts only when stamped at or after its text (`pinSource`, review 2240 F2). */
+const pinVerdict = (pin: PinRow | undefined, program: string): Ratification =>
+  goalRatification(pinSource(pin?.ratifiedBy ?? null, pin?.ratifiedAt ?? null, pin?.inShortAt ?? null), null, program, 'pin');
+
+/** What Goals shows for one programme: the pin, its In short copy and the modifications, newest first, each with its
+ *  verdict (`goalRatification`, computed here at every read and never stored), and the verdict of the version that wrote
+ *  the definition of done (`doneWhenBy`: `pin` takes the pin's, `mod:<id>` that row's, NULL `unrecorded`, any other text
+ *  `unreadable`). A programme with no pin (or no row) reads null fields and, if it has none, an empty list. */
 export function goalsFor(db: DatabaseSync, program: string): GoalsView {
-  const pin = db.prepare('SELECT specPath, inShort, inShortAt, doneWhen FROM programs WHERE slug = ?').get(program) as
-    { specPath: string | null; inShort: string | null; inShortAt: number | null; doneWhen: string | null } | undefined;
-  const mods = db.prepare(
-    'SELECT id, at, text, ruling, itemId, pr, mergedAt FROM programme_modifications WHERE program = ? ORDER BY at DESC, id DESC',
-  ).all(program) as unknown as { id: number; at: number; text: string; ruling: string | null; itemId: number | null; pr: number | null; mergedAt: number | null }[];
+  const pin = db.prepare(PIN_SQL).get(program) as PinRow | undefined;
+  const mods = db.prepare(`${MODS_SQL} WHERE m.program = ? ORDER BY m.at DESC, m.id DESC`).all(program) as unknown as ModRow[];
+  const verdicts = new Map(mods.map((m) => [m.id, modVerdict(m, program)] as const));
+  const pinRatification = pinVerdict(pin, program);
+  const by = pin?.doneWhenBy ?? null;
+  const modOf = by === null ? null : /^mod:([1-9][0-9]*)$/.exec(by);
+  const modId = modOf !== null && verdicts.has(Number(modOf[1])) ? Number(modOf[1]) : null;
+  const pinAt = pin?.inShortAt ?? null;
+  // Which version wrote the list (review 2240 F4), so the console shows it beside that version's control; the verdict of an
+  // unrecorded or unreadable writer reads the same whichever version kind is named.
+  const doneWhenVersion: GoalsVersion | null = by === 'pin' && pinAt !== null ? { pin: { inShortAt: pinAt } }
+    : modId !== null ? { modification: modId } : null;
+  const doneWhenRatification = by === null ? goalRatification('unrecorded', null, program, 'pin')
+    : by === 'pin' ? pinRatification
+      : modId !== null ? verdicts.get(modId)! : goalRatification('unreadable', null, program, 'pin');
   return {
     program, specPath: pin?.specPath ?? null, inShort: pin?.inShort ?? null, inShortAt: pin?.inShortAt ?? null,
     doneWhen: storedDoneWhen(pin?.doneWhen ?? null),
-    modifications: mods.map((m) => ({ id: m.id, at: m.at, text: m.text, ruling: m.ruling, itemId: m.itemId, pr: m.pr, merged: m.mergedAt !== null })),
+    modifications: mods.map((m) => ({
+      id: m.id, at: m.at, text: m.text, ruling: m.ruling, itemId: m.itemId, pr: m.pr, merged: m.mergedAt !== null, ratification: verdicts.get(m.id)!,
+    })),
+    pinRatification, doneWhenRatification, doneWhenVersion,
   };
+}
+
+/** `unknown`: no pin, or no such modification of this programme (the door's `not-found`); `stale`: the pin's stamp moved
+ *  (the door's `goals-changed`), with the stored stamp. */
+export type RatifyResult = { ok: true; changed: boolean } | { ok: false; why: 'unknown' } | { ok: false; why: 'stale'; inShortAt: number | null };
+
+const OPERATOR: RatifiedBy = { kind: 'operator' };
+/** The operator's ratify act (Overlord W1, portfolio B, question 4): the operator's arm of the columns' writers, in one
+ *  transaction. A programme with no pin, or a modification that is not this programme's, is `not-found`; a pin whose stamp
+ *  differs from the one shown is `goals-changed`, so text the operator was not shown is never ratified. A version whose
+ *  VERDICT already reads ratified (asked of `goalRatification`, never of the source) changes nothing. `actor` is the account
+ *  gate's actor (its device label and session hash), kept with the act because it confers authority (review 2240 F7). */
+export function ratifyGoalsVersion(db: DatabaseSync, program: string, version: GoalsVersion, now: number, actor: string): RatifyResult {
+  return tx(db, (): RatifyResult => {
+    if ('pin' in version) {
+      const pin = db.prepare(PIN_SQL).get(program) as PinRow | undefined;
+      if (pin === undefined || pin.inShort === null) return { ok: false, why: 'unknown' };
+      if (pin.inShortAt !== version.pin.inShortAt) return { ok: false, why: 'stale', inShortAt: pin.inShortAt };
+      if (pinVerdict(pin, program).ratified) return { ok: true, changed: false };
+      db.prepare('UPDATE programs SET ratifiedBy = ?, ratifiedAt = ?, ratifiedActor = ? WHERE slug = ?').run(ratifiedByText(OPERATOR), now, actor, program);
+      return { ok: true, changed: true };
+    }
+    const m = db.prepare(`${MODS_SQL} WHERE m.id = ? AND m.program = ?`).get(version.modification, program) as ModRow | undefined;
+    if (m === undefined) return { ok: false, why: 'unknown' };
+    if (modVerdict(m, program).ratified) return { ok: true, changed: false };
+    db.prepare('UPDATE programme_modifications SET ratifiedBy = ?, ratifiedAt = ?, ratifiedActor = ? WHERE id = ?').run(ratifiedByText(OPERATOR), now, actor, m.id);
+    return { ok: true, changed: true };
+  });
 }
 
 /** The newest tick mail of an item: system mail from `operator` with this subject (`itemMailSubject` names the item's id, so

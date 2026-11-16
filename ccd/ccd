@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `ws-lease-mark`, `ws-lease-audit` or `delegation-adopt` (D-8112), or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `keep-awake`, `ws-lease-mark`, `ws-lease-audit` or `delegation-adopt` (D-8112), or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit || "${1-}" == delegation-adopt ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == keep-awake || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit || "${1-}" == delegation-adopt ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -1853,7 +1853,7 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
 # what the generator writes, so a field added there reds here until it is named.
 _CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM CCRC_PAY_PER_USE)
-_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_fable_billing _ccrc_continuity _ccrc_secrets_file _ccrc_auth_dir)
+_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_fable_billing _ccrc_continuity _ccrc_org _ccrc_secrets_file _ccrc_auth_dir)
 # The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
 # so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
 # ccd-tick-budget.test.ts, is exact). The file is a few KB. `-f` first, as the
@@ -2564,6 +2564,11 @@ _codex_lanes() {
 # untagged — today's behaviour, with no `command not found` on stderr and no
 # rc 127 leaking into a `$(…)` capture.
 _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# The organization label (accounts.sh's _ccrc_org), guarded like `_acct_pool`, and the relation of two accounts by it: the bash twin
+# of `shared/accountOrg.ts#orgRelation` (org-relation.test.ts). One account is `same`; a missing label is `unknown`.
+_acct_org() { declare -F _ccrc_org >/dev/null 2>&1 && _ccrc_org "$1"; return 0; }
+_org_rel() { local a b; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
+  if [[ -z "$a" || -z "$b" ]]; then echo unknown; elif [[ "$a" == "$b" ]]; then echo same; else echo other; fi; return 0; }
 # Item 5 (I3, wave-1 fix round A) — whether THIS box has a control plane BY
 # CONFIGURATION, measured the ONLY honest way: is `ccd-pool-sync.timer`'s
 # unit file actually installed. NEVER `$REG/pool-epoch`'s own absence — that
@@ -4119,7 +4124,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), the Overlord's compaction events `compactevents` and `compacteventsprev` 57, the start report's spool `startpending` 58 (overlord W1a), the anchor's owed mark `anchor-owed` 59 (overlord W1a), and the loads report's `loadpending` and `loadlast` 61 (Overlord W1 sandbox) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), the Overlord's compaction events `compactevents` and `compacteventsprev` 57, the start report's spool `startpending` 58 (overlord W1a), the anchor's owed mark `anchor-owed` 59 (overlord W1a), the loads report's `loadpending` and `loadlast` 61 (Overlord W1 sandbox), and the sleep markers `no-hibernate` and `no-roll` 63 (Overlord W1 ccd arms: `ccd keep-awake` is their one writer in the tree, and the glob takes them with the row) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
@@ -9481,6 +9486,7 @@ EOF
   echo pane-scope-stop   # D-7902: the pane-scope stop's switch writer, behind POST /api/coord/pane-scope-stop
   echo scope-sweep-busy   # D-7994: the sweep's busy arm switch's writer, behind POST /api/coord/scope-sweep
   echo delegation-adopt   # D-8112: the delegation lane's adoption switch's writer, behind POST /api/coord/delegation-adopt
+  echo keep-awake; echo keep-awake-v1   # the Overlord's sleep markers' writer (W1 ccd arms) and its token, one inode; the server reads the token with `capSupported`, never `verbSupported`
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit; echo lease-mark-lock-v1   # delegation broker wave 5: the lease carrier's one writer (PR1), its read-only audit (PR2), and the mark's orphan lock (PR6, D-8037), ccd/lib/delegation-lease.sh
@@ -9813,6 +9819,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   fi
 }
 
+# @ccd-lib:keepawake — the two sleep markers' one writer, `ccd keep-awake --session <id> --state on|off` (the Overlord's W1, spec §3.2 C4), lives in ccd/lib/long-lived.sh
 cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
   # coordinator's pause marker. `$REG/coordinator-paused` is read by the
   # server's dispatch path (`coord/dispatch.ts`) and by nothing else, and it
@@ -19895,9 +19902,13 @@ _class_gate() {   # wrapper class [id] -> rc 0 the lane may keep or take the cla
 # journals a caller's word: both read the standing value with `_route_get` and
 # journal THAT (ruling S3-R5), because a caller naming the wrong end would
 # otherwise write a false audit row nothing can red.
+# @ccd-lib:holddown — a long-lived role's hold-down before its class returns (the Overlord's W1, H16): `_role_long_lived`, `_route_holddown_holds` and `_route_holddown_settle` live in ccd/lib/long-lived.sh
 _route_degrade() {   # id from to why — stamp `degraded=<to>` and say so: one route journal row (actor ccd), one swap.log line
   # THE ONLY WRITERS OF `degraded` ARE THIS AND `_route_restore` (spec §5.1:
-  # ccd's own stamp; `cmd_route` refuses the field outright). `_swap_target`
+  # ccd's own stamp; `cmd_route` refuses the field outright), and the settle's
+  # hold-down re-stamp, `_route_holddown_settle`, which writes the SAME value
+  # again only when its time reads later than ccd's clock: its time, never its
+  # class (slug holddown-restamp-writes-the-same-value). `_swap_target`
   # writes NOTHING — its answer travels on rc and stdout, because its call site
   # is a command substitution and a variable set inside one is lost — so the
   # stamp, the journal row and the log line all happen HERE, at the caller,
@@ -21896,6 +21907,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
       || echo "$(date '+%F %T') pin-hold $id: pinned to $wrapper by hand; the return-home/ceiling arm stands down (a limit still evacuates)" >> "$REG/swap.log"
     return 0
   fi
+  # THE ORDERED LIST STANDS THE ARM DOWN (the Overlord's W1, spec §3.4 C57; ccd arms question 2): a row whose route carries
+  # `acctorder` is placed by the renewal's pick from that list, never relocated between renewals. `-e || -L`: an entry that
+  # cannot be read stands it down too. The rescue above is untouched, so a limit still evacuates the row.
+  [[ -e "$REG/$id.acctorder" || -L "$REG/$id.acctorder" ]] && { _standdown_note "$id" ordered-list; return 0; }
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
   [[ -e "$REG/$id.hold" ]] && { _standdown_note "$id" hold; return 0; }   # D-6180: a move ccd wanted, held
@@ -24085,7 +24100,7 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
 }
 
 _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid AND the config dir the caller already resolved for it (the promotion makes no call into the registry context for it; no config dir, no incoming read), that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
-  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv cx=""
+  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv cx="" ll=""
   local -A ackv=() acka=() ackn=() drifta=()
   local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
@@ -24144,7 +24159,7 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
-      model|drift-model)   [[ -n "$cx" ]] && continue; field=class ;;
+      model|drift-model)   [[ -n "$cx" ]] && continue; [[ -n "$ll" ]] || { _role_long_lived "$id"; ll=$(( $? != 1 )); }; field=class ;;   # ll: read once, lazily (Overlord W1: a long-lived role's /model is not adopted, below)
       effort|drift-effort) field=effort ;;
       *)                   continue ;;
     esac
@@ -24153,8 +24168,8 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
       (( 10#$fm >= 10#$at )) && continue
     fi
     case "$kind" in
-      drift-*) (( drift++ )) || _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;   # once per keep, both kinds or one
-      model)   want=$(_model_class_of "$val") || want="" ;;
+      drift-*) [[ "$kind$ll" == drift-model1 ]] && continue; (( drift++ )) || _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;   # once per keep, both kinds or one
+      model)   [[ "$ll" == 1 ]] && { _operator_choice_say "$id" "/model $val is not adopted for a long-lived role; its class is the designation's"; continue; }; want=$(_model_class_of "$val") || want="" ;;
       effort)  want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
     esac
     if [[ -z "$want" ]]; then
@@ -26752,7 +26767,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # ladder bottoms out (`below` empty), nothing is stamped, and the
       # intended class is composed unchanged.
       case "$srv:$why" in
-        0:*) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
+        0:*) [[ -n "$rdeg" ]] && ! _route_holddown_settle "$id" "$rdeg" && { _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg=""; } ;;   # a long-lived role's hold-down keeps rdeg composed (ccd/lib/long-lived.sh)
         1:no-continuity|1:continuity-unread)   # F1/F4: no rung serves a lane with no record, so no stamp and no restore; the base answer (no id) rules what is composed
            _serviceable "$wrapper" "$rclass" >/dev/null && rdeg=""
            echo "$(date '+%F %T') continuity-unmet $id: $wrapper ($why); composing ${rdeg:-$rclass}, a standing degraded stamp left as it is" >> "$REG/swap.log" ;;
@@ -32956,6 +32971,7 @@ _hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run
   cmp -s -- "$f" <(printf '%s' "$2")
 }
 
+# @ccd-lib:freshpick — the renewal's fresh start ends a set-side crossing once its start is proven (the Overlord's W1, C46): `_fresh_crossing_end` lives in ccd/lib/long-lived.sh
 cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
@@ -32986,6 +33002,10 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # (`_spawn_mode`). A failed wake that is put back to sleep (exit 4) removes the marker and puts the old uuid back. A wake
   # that answered 0 without the consuming spawn's receipt exits 7, `ccd: roll-fresh-unproven — …`, the old uuid back.
   # `ccd caps` says `hibernate-fresh`.
+  # ONE `.no-roll` passes `--fresh` (the Overlord W1 ccd arms, plan question 1): a regular, readable file, not a link, holding
+  # exactly `ccd keep-awake`'s stamp (`_keep_awake_ours`), which designate and rebind set on the Overlord's body, whose renewal
+  # is this verb. Every other `.no-roll` still refuses it, and a plain `--roll` refuses every one, keep-awake's included. The
+  # line also tests `-L`, so a dangling `.no-roll` link refuses as `-e` alone did not (a stated tightening).
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
   local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2='' lc_rcpt=''
@@ -33040,7 +33060,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       || _hib_refuse held "$id is held: a program has declared it is mid-flight here"
   fi
   if (( lc_roll )); then
-    [[ -e "$REG/$id.no-roll" ]] && _hib_refuse opted-out "$id carries a no-roll marker"
+    [[ -e "$REG/$id.no-roll" || -L "$REG/$id.no-roll" ]] && ! { (( lc_fresh )) && _keep_awake_ours "$id" no-roll; } && _hib_refuse opted-out "$id carries a no-roll marker"
   else
     [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
   fi
@@ -33170,6 +33190,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $lc_unrestored: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
     exit 5
   fi
+  (( lc_fresh )) && _fresh_crossing_end "$id"   # proven: the receipt was read above (Overlord W1, C46)
   echo "rolled $id"
 }
 
@@ -48758,9 +48779,10 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
   fi
 }
 
-# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279), THE TRAIN PROOF (D-7463), THE DELEGATION LEASE (wave 5) AND THE POOL SET ──
+# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279), THE TRAIN PROOF (D-7463), THE DELEGATION LEASE (wave 5), THE POOL SET AND THE LONG-LIVED ARMS ──
 # The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, the train proof in ccd/lib/train-proof.sh, the delegation lease in
-# ccd/lib/delegation-lease.sh and the session's pool set (the Overlord's W1) in ccd/lib/pool-set.sh, all
+# ccd/lib/delegation-lease.sh, the session's pool set (the Overlord's W1) in ccd/lib/pool-set.sh and the Overlord's ccd arms (its W1,
+# `ccd keep-awake` first) in ccd/lib/long-lived.sh, all
 # installed beside this body and loaded HERE, once every function and variable they call exists; each pin below works as
 # this paragraph tells for the first. The first pin below names disk-retention.sh's SHA-256, and like the stamp on line 2 it is written AT
 # INSTALL TIME (D-6913, the ruling that gave the pin #1525's treatment): the committed line is the fixed placeholder
@@ -48789,6 +48811,8 @@ __CCD_LIB_TRAIN_SHA256=stamp-at-install
 __CCD_LIB_LEASE_SHA256=stamp-at-install
 # shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_POOLSET_SHA256=stamp-at-install
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
+__CCD_LIB_LONGLIVED_SHA256=stamp-at-install
 # THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
 # this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
 # `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
@@ -48802,12 +48826,12 @@ __CCD_REDACT_CLI_SHA256=stamp-at-install
 # installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
 __CCD_LAYOUT=
 __CCD_HASH_CMD=()
-_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's, ccd/lib/delegation-lease.sh's and ccd/lib/pool-set.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
+_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's, ccd/lib/delegation-lease.sh's, ccd/lib/pool-set.sh's and ccd/lib/long-lived.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
   local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i
   [[ "$self" == */* ]] && dir="${self%/*}"
   # THE LIBRARIES, in load order, each beside its pin (D-7463): every file is read, and every digest checked, before ANY
   # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run.
-  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh" "$dir/lib/pool-set.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256" "$__CCD_LIB_POOLSET_SHA256") __ccd_lib_srcs=()
+  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh" "$dir/lib/pool-set.sh" "$dir/lib/long-lived.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256" "$__CCD_LIB_POOLSET_SHA256" "$__CCD_LIB_LONGLIVED_SHA256") __ccd_lib_srcs=()
   for f in "${__ccd_lib_files[@]}"; do
     if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
       printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2
@@ -48821,7 +48845,7 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof
   # or a broken install (line 2 really stamped): the second refuses. Line 2 is read from this file, as bash already read it.
   # Only a body with EVERY pin a placeholder is a source checkout; any one pin left a placeholder beside a rendered one is a
   # broken install too.
-  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install && "$__CCD_LIB_LEASE_SHA256" == stamp-at-install && "$__CCD_LIB_POOLSET_SHA256" == stamp-at-install ]]; then
+  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install && "$__CCD_LIB_LEASE_SHA256" == stamp-at-install && "$__CCD_LIB_POOLSET_SHA256" == stamp-at-install && "$__CCD_LIB_LONGLIVED_SHA256" == stamp-at-install ]]; then
     local l1='' l2=''
     { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
     if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
@@ -48921,6 +48945,7 @@ case "${1:-}" in
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  keep-awake) shift; cmd_keep_awake "$@" ;;
   reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
   testbox-remote) shift; cmd_testbox_remote "$@" ;;
   pane-scope-stop) shift; cmd_pane_scope_stop "$@" ;;
@@ -48947,6 +48972,6 @@ case "${1:-}" in
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   docs-log)   shift; cmd_docs_log "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|version} <args>" >&2; exit 1 ;;
 esac
 fi

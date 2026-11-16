@@ -3868,6 +3868,43 @@ recorded carries (spec §3 and §8, D14 to D18). Items 349 to 351 were replaced 
 `deviation-refs`, `dtbd` and `topology-clean` pass, and the private-name scan of every new file is clean.
 **Rollback.** A plain revert; nothing ships.
 
+### Task C38: seven console items from the delegation broker programme (D-8670) — now
+
+**Why.** The delegation broker programme closed with seven minor console items carried to its Rider (its entries of
+2026-11-07 and 2026-11-09), and the operator agreed they come here. Each was measured on `main` first; `c38.md` has a
+row per item with the measurement, the cause, the fix or the reason not, and the test.
+
+**What was done.**
+- **The Sheet owns the close** (`ui/src/primitives/sheet.tsx`, every sheet in the app at once). The page's hiding follows
+  `open`, as Radix's trap does: as a sheet turns closed its panel's exit no longer leaves the page `aria-hidden`, so a
+  refusal's live region and a focus placed as it leaves are announced (item 1). Shift+Tab pressed first, from the panel,
+  goes to the sheet's last control instead of the page (item 2). A switch card's confirm closed by Cancel, Escape or the
+  scrim gives the focus back to its radio group, on the checked radio, even when a disabled fieldset dropped the
+  opener's focus to the page before the sheet could read it, and a radio is no longer treated as a text field on a phone
+  (item 5: measured for a radio opener on Worktrees left behind and Shadow lanes, the other cards and openers inferred;
+  `c38.md` row 5).
+- **The worktree row's box** (`ProjectCard.tsx`, `fleet.css`) says `aria-busy` while its act is in flight and draws the
+  page's focus ring after a keyboard action, reversing review 1623 F8 (d) (item 3).
+- **Worktrees left behind's read** (`useDelegationAdoptView.ts`): a poll nobody asked for moves no `landed`, so a failed
+  poll no longer re-renders the Settings page once a minute (item 7).
+- **Not changed.** Item 6: the console has no words table for ccd's free failure text, so a switch card keeps relaying
+  it after its own sentence. Item 4 reproduces, and waits: its file, `pwa/src/lib/refusalWords.ts`, was under another
+  programme's claim for the whole task.
+- **Tests.** `sheet-trap-hide.test.tsx` and `delegation-adopt-view.test.tsx` (new), a row in `project-card.test.tsx`,
+  `browser/confirm-focus.browser.test.ts` (new, Chrome), the ring row in `delegation-rows.browser.test.ts`, and
+  Shadow lanes' browser row now waiting out its confirm's exit. Red first on `main`, and every fix mutated away once
+  (`c38.md`'s table).
+
+- **D-8670** — `c38-sheet-owns-the-close`: Task C38, issued on 2026-11-16. Items 1, 2 and 5 are fixed once in the
+  Sheet, not per caller. The further departures are named by slug in `c38.md`: the box draws the ring
+  (`c38-box-draws-the-ring`), a radio opener's focus goes to its group's checked radio (`c38-radio-opener-goes-home`),
+  ccd's text stays verbatim (`c38-ccd-text-stays-verbatim`), item 4 waits for its file
+  (`c38-item-4-waits-for-claim-4522`), and Shadow lanes' browser row waits out its confirm's exit
+  (`c38-shadow-lanes-row-waits-out-the-exit`).
+
+**Acceptance.** pwa's whole suite and ui's typecheck pass at the PR's tip; the new rows are red on `main`; the browser
+leg passes, with `confirm-focus.browser.test.ts` red on `main`'s Sheet.
+
 ### Task C39: a masked key is one column in the terminal view, so no row moves (D-8694) — now
 
 **Why.** Review 2248 (F1) found C36's residual broader than its note said: the drawer's final mark, `SECRET_MASK`
@@ -3904,6 +3941,7 @@ options and the screenshots.
 **Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its six C39 cases are red on `main`'s masker;
 `secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
 fixture.
+
 **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)

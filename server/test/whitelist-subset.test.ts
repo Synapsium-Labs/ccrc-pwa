@@ -301,6 +301,17 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(() => CCD_ARGV.poolAnswer('a b')).toThrow(/not a registry id/);
   });
 
+  // Overlord W1 ccd arms (plan Task 3, question 7): the sleep markers' verb cannot be reached with a positional tail. Its
+  // grant stops at the flag, and the agent's `REQUIRED_VERB_FLAG` enrolment makes a bare grant a boot refusal.
+  it('keep-awake is grantable ONLY with --session', () => {
+    const ka = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'keep-awake');
+    expect(ka).toEqual([['keep-awake', '--session']]);
+    expect(isExecAllowed('ccd', ['keep-awake'])).toBe(false);
+    expect(isExecAllowed('ccd', ['keep-awake', '--state', 'on', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.keepAwake('demo-quiet-basin', 'on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.keepAwake('demo-quiet-basin', 'off')])).toBe(true);
+  });
+
   it('win-size is grantable ONLY with --session', () => {
     const ws = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'win-size');
     expect(ws.length, 'exactly one win-size grant').toBe(1);
@@ -649,6 +660,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
     winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
     poolAnswer: ['pool-answer', '--session', 'demo-quiet-basin'],
+    keepAwake: ['keep-awake', '--session', 'demo-quiet-basin', '--state', 'on'],
     // NATIVE DOCS READER wave 2: spec 2026-10-01 section 2 (a)'s verb table, token for token. The verb, then
     // `--project` (or `--all`), then every flag pair in ccd's argv order; `--max-bytes` is the class cap,
     // stringified. Committed show is 12 tokens after the verb, draft show 14.

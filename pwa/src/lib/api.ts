@@ -5,7 +5,7 @@
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
-import type { GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
@@ -38,6 +38,7 @@ import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/face`'s answer. */
@@ -1084,6 +1085,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */
     goals: (slug: string) =>
       getJson<{ readonly ok: true; readonly goals: GoalsView }>(`/api/programmes/${encodeURIComponent(slug)}/goals`),
+    /** `POST /api/programmes/:slug/goals/ratify` (Overlord W1, portfolio B): the operator ratifies the pin (at the stamp the panel
+     *  rendered) or one modification. 409 `goals-changed`, 501 `auth-off`/`not-configured`, and an older server's 404 reject with
+     *  `ApiError`; the screen reads the last two as not available on this server. Session-gated. */
+    ratifyGoals: (slug: string, version: GoalsVersion) =>
+      postJson<{ readonly ok: true; readonly changed: boolean; readonly goals: GoalsView }>(
+        `/api/programmes/${encodeURIComponent(slug)}/goals/ratify`, version),
     /** `GET /api/programmes/:slug/secrets` (the PL6 follow-up, programme item 9): the programme's stored secrets by slot name,
      *  with when each was saved and the item that asked for it, never any part of a value. `secrets-unreadable` (a store the
      *  box could not read) rejects with an `ApiError`, never an empty list. Session-gated when armed. */
@@ -1102,6 +1109,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  armed; it works dark too. */
     setAnswerMark: (kind: AnswerMarkKind, id: number, mark: AnswerMarkName, value: boolean) =>
       postJson<{ readonly ok: true; readonly mark: AnswerMarkName; readonly answerMark: AnswerMarkView }>('/api/answer-marks', { kind, id, mark, value }),
+    /** `POST /api/responses/receipts` (Overlord W1, C67): the console's `opened` receipts, at most `RECEIPTS_MAX_PER_BODY` a body. */
+    postResponseReceipts: (receipts: readonly ReceiptIn[]) => postJson<{ readonly ok: true; readonly kept: number; readonly dropped: unknown }>('/api/responses/receipts', { v: 1, receipts }),
+    /** `GET /api/responses?ref=` (C69): the response rows of one message, `ref` as `item:<id>` or `digest:<key>`. A failure rejects, never an empty list. */
+    responsesFor: (ref: string) => getJson<{ readonly ok: true; readonly rows: readonly ResponseRowBrief[] }>(`/api/responses?ref=${encodeURIComponent(ref)}`),
+    /** `POST /api/responses/:id/handled` (C69): the operator handled that message elsewhere; no body, no undo. */
+    markResponseHandled: (id: number) => postJson<{ readonly ok: true; readonly id: number; readonly handledAt: number | null; readonly changed: boolean }>(`/api/responses/${id}/handled`),
+    /** `GET /api/responses/retention`: the retention in days, `days: null` with `unreadable` when the setting cannot be read (for a later Settings row). */
+    responseRetention: () => getJson<ResponseRetentionView>('/api/responses/retention'),
+    /** `POST /api/responses/retention`: sets the days; lowering takes a step-up, a refusal rejects with its `ApiError`. */
+    setResponseRetention: (days: number) => postJson<ResponseRetentionView>('/api/responses/retention', { days }),
     /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
      *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
     sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
