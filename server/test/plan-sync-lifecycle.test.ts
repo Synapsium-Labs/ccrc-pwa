@@ -679,6 +679,23 @@ describe('the pass: moves and closes', () => {
     expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'failed', failedWord: 'ticket-workspace-mismatch' });
   });
 
+  it('A2: a workspace-mismatch skip whose old workspace has no slot fails the binding and mails once; the programme is not due again', async () => {
+    const r = await rig();
+    await tick(r);
+    const eb = r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'epic')!;
+    r.db.prepare("UPDATE linear_bindings SET workspaceId = 'ws-old' WHERE id = ?").run(eb.id);     // no slot serves ws-old
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.id === eb.id)).toMatchObject({ state: 'failed', failedWord: 'workspace-mismatch', workspaceId: 'ws-old' });
+    expect(mails(r).filter((m) => m.subject.includes('workspace-mismatch'))).toHaveLength(1);
+    expect(r.db.prepare('SELECT 1 FROM plan_sync_due WHERE program = ?').get(SLUG)).toBeUndefined();
+    const failedAt = r.plan.bindingsOf(SLUG).find((b) => b.id === eb.id)!.failedAt;
+    await tick(r); await tick(r);                                       // two more 5 s beats: nothing re-runs
+    expect(r.asks).toHaveLength(from);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.id === eb.id)!.failedAt).toBe(failedAt);
+    expect(mails(r).filter((m) => m.subject.includes('workspace-mismatch'))).toHaveLength(1);
+  });
+
   it('a ticket re-projected inside the workspace moves teams, and the identifier is refreshed from the answer', async () => {
     const r = await rig({ extraTeam: true });
     r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);

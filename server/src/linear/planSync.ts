@@ -94,8 +94,10 @@ interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; ke
 type RestorePass = Extract<CcrcPass, `${string}restore`>;
 type Flow = 'next' | 'defer';
 type Failure = Exclude<CcrcOpOutcome, { ok: true }>;
+/** What failing a binding needs to know about its object (a skip's binding is failed with no slot: A2). */
+interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan }
 /** What a failed outcome needs to know about the object it was for. */
-interface Subject { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; slot: SlotInfo; plan: StoredPlan }
+interface Subject extends Told { slot: SlotInfo }
 
 const OBJECT_WORD: Record<BindingKind, string> = { programme: 'programme', epic: 'epic', checkpoint: 'checkpoint', ticket: 'ticket' };
 
@@ -451,9 +453,9 @@ export class PlanSync {
       const b = step.bindingId !== null ? built.snap.bindings.find((x) => x.id === step.bindingId) ?? null
         : plan.ensurePending(step.local.kind, step.local.id, ws, null);
       if (b === null) return 'next';
-      const slot = built.slots.get(ws);
-      if (slot === undefined) { this.notConfigured.add(ws); return 'next'; }
-      this.fail({ slug, local: step.local, workspaceId: ws, bindingId: b.id, inputs: step.inputs ?? '', slot, plan: built.snap.plan }, step.why);
+      // A2: failing a binding writes coord.db and mails; it calls nothing in Linear, so it needs no slot. A `workspace-mismatch`
+      // whose old workspace no slot serves is failed and told once like any other, never left due at every beat.
+      this.fail({ slug, local: step.local, workspaceId: ws, bindingId: b.id, inputs: step.inputs ?? '', plan: built.snap.plan }, step.why);
       return 'next';
     }
     const slot = built.slots.get(step.workspaceId);
@@ -690,7 +692,7 @@ export class PlanSync {
   }
 
   /** The binding is failed with the word, and the coordinator is told once per object and word. */
-  private fail(s: Subject, word: string): void {
+  private fail(s: Told, word: string): void {
     if (s.bindingId === null) return;
     this.deps.plan.markFailed(s.bindingId, word, s.inputs, this.deps.now());
     this.mailFailed(s, word);
@@ -707,7 +709,7 @@ export class PlanSync {
     tx(coord.db, () => { insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); });
   }
 
-  private mailFailed(s: Subject, word: string): void {
+  private mailFailed(s: Told, word: string): void {
     const key = s.local.kind === 'programme' ? s.slug : this.planKeyOf(s.plan, s.local);
     this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} ${word} (${s.slug})`,
       `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`);
