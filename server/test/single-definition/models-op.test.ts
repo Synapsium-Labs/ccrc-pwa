@@ -23,3 +23,10 @@ describe('the models op is declared once (D-8692)', () => {
     expect(holders(/MODELS_LANE_ID_RE\.test\(/)).toEqual(['shared/agent-protocol.ts']);
   });
 });
+
+describe('the lane advance states are declared once (D-8686, D-5228)', () => {
+  it('LANE_ADVANCE_STATES is declared only in shared/models.ts (unexported there: D-TBD-models-ts-pins)', () => {
+    expect(holders(new RegExp(String.raw`^\s*(?:export )?const LANE_ADVANCE_STATES\b`, 'm'))).toEqual(['shared/models.ts']);
+    expect(holders(decl('LaneAdvanceState'))).toEqual(['shared/models.ts']);
+  });
+});
