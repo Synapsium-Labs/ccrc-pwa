@@ -23,6 +23,10 @@ const REPO = path.resolve(__dirname, '..', '..');
 const CCD_FILE = path.join(REPO, 'ccd', 'ccd');
 const CCD_DIR = path.join(REPO, 'ccd');
 const SELF = path.join(REPO, 'server', 'test', 'ccdReadGuard.ts');
+/** Wrappers that pass a listing through unchanged: a full run's tree-scan recorder (`tree-scans.setup.mjs`, loaded after this
+ *  guard, so its wrapper sits outside it) records which roots a test lists and calls the lister it wrapped. A frame in one is
+ *  passed over like this guard's own, and the caller below it is judged. */
+const TRANSPARENT = new Set([path.join(REPO, '.github', 'ci', 'tree-scanners.mjs'), path.join(REPO, 'server', 'test', 'tree-scans.setup.mjs')]);
 
 /** Files about the bytes of ccd/ccd itself: they read, copy or list the file on purpose. Repo-relative. */
 export const FILE_READERS: readonly string[] = [
@@ -37,6 +41,8 @@ export const FILE_READERS: readonly string[] = [
   'server/test/build-release.test.ts',        // the release ships the body's bytes, each under its MANIFEST digest
   'agent/test/deploy-verify.test.ts',         // deploy.sh places the body's bytes beside its libraries
   'agent/test/ccd-entry-exec.test.ts',        // the launcher execs the installed body
+  'server/test/growth-check.test.ts',         // each tracked file's own line count: the growth check measures files, and the program row
+  'server/test/ci-fast-plan.test.ts',         // lists ccd/ on purpose: the tree-scan capture records a ccd scan
 ];
 
 /** Walks that take in ccd/lib/ beside ccd/ccd, so they see the whole program. Repo-relative. */
@@ -82,6 +88,19 @@ export const PROGRAM_READERS: readonly string[] = [
   'server/test/no-default-saving-keystroke.test.ts', // ccd/ walked whole, its lib among it
   'server/test/single-definition/roster-card.test.ts', // ccd/ walked whole for its jq programs
   'server/test/testbox-config-file.test.ts',  // ccd/ listed for its testbox-* files; no program file is read
+  'server/test/single-definition/advance-switches.test.ts', // BASH walked whole (ccd/lib/*.sh among it); a writer named by programFile()
+  'server/test/single-definition/late-census.test.ts', // every tracked file, each library among them
+  'server/test/single-definition/vocabularies.test.ts', // every tracked file, each library among them; ccd's own lines through ccdSource()
+  'server/test/single-definition/injected-prompts.test.ts', // ccd/ walked recursively; ccd/ccd as ccdSource(), its libraries included
+  'server/test/codex-bridge-live-tools.test.ts', // the shipped roots walked whole
+  'server/test/delegation-wave3.integration.test.ts', // ccd/ccd and ccd/lib walked together; a holder in a library allowed as ccd/ccd (programFile())
+  'server/test/deviation-refs.test.ts',       // every tracked file, each library among them
+  'server/test/docs-parity.test.ts',          // its roots' tracked files, each library among them; ccd's lines through ccdSource()
+  'server/test/graph-build.test.ts',          // every tracked file under ccd/, each library among them
+  'server/test/shellcheck-ratchet.test.ts',   // every tracked bash file, each library among them; the group linted over the splice
+  'server/test/topology-clean.test.ts',       // every tracked file, each library among them
+  'server/test/continued-in-parity.test.ts',  // every tracked file under ccd/, each library among them
+  'server/test/macos-platform.test.ts',       // ccd/ listed for its shebang'd scripts; ccd itself read as ccdSource(), every library in it
 ];
 
 const allowed = new Set([...FILE_READERS, ...PROGRAM_READERS]);
@@ -100,7 +119,7 @@ export function firstRepoFrame(stack: string): string | null {
     const m = /\(?((?:file:\/\/)?\/[^():]+):\d+:\d+\)?\s*$/.exec(line);
     if (!m) continue;
     const file = m[1]!.startsWith('file://') ? fileURLToPath(m[1]!) : m[1]!;
-    if (file === SELF || !file.startsWith(REPO + path.sep) || file.includes(`${path.sep}node_modules${path.sep}`)) continue;
+    if (file === SELF || TRANSPARENT.has(file) || !file.startsWith(REPO + path.sep) || file.includes(`${path.sep}node_modules${path.sep}`)) continue;
     return path.relative(REPO, file).split(path.sep).join('/');
   }
   return null;

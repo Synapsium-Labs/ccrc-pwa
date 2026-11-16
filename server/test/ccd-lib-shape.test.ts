@@ -224,7 +224,8 @@ describe('one library table, and every list on it (D-8048)', () => {
     // CONTROL: each form the row refuses, and the one it takes.
     const root = tableTree(path.join(h.home, 'decl'), ['d']);
     fs.appendFileSync(path.join(root, 'ccd', 'lib', 'd.sh'), 'declare -A _M=([k]=v)\ntypeset -a _L=()\nlocal z=1\ndeclare -gA _G=([k]=v)\n');
-    expect(topLevelDeclares(['d'], root)).toEqual(['ccd/lib/d.sh:6: declare -A _M=([k]=v)', 'ccd/lib/d.sh:7: typeset -a _L=()', 'ccd/lib/d.sh:8: local z=1']);
+    const d = (n: number, raw: string): string => `${'ccd/lib/d.sh'}:${n}: ${raw}`;   // composed: a file-and-line spelling reads as a citation
+    expect(topLevelDeclares(['d'], root)).toEqual([d(6, 'declare -A _M=([k]=v)'), d(7, 'typeset -a _L=()'), d(8, 'local z=1')]);
   });
 
   it('no library reads a positional or returns at its top level', () => {
@@ -232,8 +233,9 @@ describe('one library table, and every list on it (D-8048)', () => {
     // CONTROL: each form the row refuses; a positional inside a function or in single quotes is not one.
     const root = tableTree(path.join(h.home, 'pos'), ['p']);
     fs.appendFileSync(path.join(root, 'ccd', 'lib', 'p.sh'), 'X="$1"\nY=${2:-}\nN=$#\nshift\n[ -n "$X" ] || return 0\nA=\'$1\'\nB=${#X}\ng() { echo "$1"; }\n');
-    expect(topLevelPositionals(['p'], root)).toEqual(['ccd/lib/p.sh:6: X="$1"', 'ccd/lib/p.sh:7: Y=${2:-}', 'ccd/lib/p.sh:8: N=$#',
-      'ccd/lib/p.sh:9: shift', 'ccd/lib/p.sh:10: [ -n "$X" ] || return 0']);
+    const at = (n: number, raw: string): string => `${'ccd/lib/p.sh'}:${n}: ${raw}`;
+    expect(topLevelPositionals(['p'], root)).toEqual([at(6, 'X="$1"'), at(7, 'Y=${2:-}'), at(8, 'N=$#'), at(9, 'shift'),
+      at(10, '[ -n "$X" ] || return 0')]);
   });
 
   it('a library header holds comment lines only', () => {
@@ -264,6 +266,11 @@ describe('the one-text guard (ccdReadGuard.ts, D-8048)', () => {
     expect(guardRefusal('list', DIR, stack(frame(test)))).toMatch(/lists ccd\/ flat/);
     // A frame in node_modules is passed over; a listed reader is let through; another file, or a library, is not guarded.
     expect(guardRefusal('read', FILE, stack(`    at f (${path.join(REPO, 'server', 'node_modules', 'x', 'i.js')}:1:1)`, frame(test)))).not.toBeNull();
+    // A full run's tree-scan recorder (tree-scans.setup.mjs, loaded after this guard) wraps fs's listers outside it, so its
+    // frame sits above the caller's: it is passed over, and the caller below it is judged, listed or not.
+    const recorder = frame('.github/ci/tree-scanners.mjs', 'w');
+    expect(guardRefusal('list', DIR, stack(recorder, frame('server/test/consolidationCensus.ts')))).toBeNull();
+    expect(guardRefusal('list', DIR, stack(recorder, frame(test)))).toMatch(/some-scan\.test\.ts lists ccd\/ flat/);
     expect(guardRefusal('read', FILE, stack(frame('server/test/ccdWsHelpers.ts', 'ccdSource'), frame(test)))).toBeNull();
     expect(guardRefusal('list', DIR, stack(frame('server/test/consolidationCensus.ts'), frame(test)))).toBeNull();
     expect(guardRefusal('read', path.join(REPO, 'ccd', 'lib', 'docs.sh'), stack(frame(test)))).toBeNull();

@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { PROVIDER_IDS } from '../../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
+import { ccdSource } from '../ccdWsHelpers.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, prose, rel, sources } from './helpers.js';
 import { accountMarkerWriters, disabledProjectionWriters } from '../census-w5/accountMarkers.js';
 import { gateDefinitions, inlineGates, loopbackSets, verdictTypeDecls } from '../census-kernel/baseUrl.js';
@@ -1076,7 +1077,8 @@ describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all
   });
 
   it('every one of the four resolves to the same file', () => {
-    const src = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    // ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+    const src = (f: string): string => (f === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(ccrcRoot, f), 'utf8'));
 
     const reader = /^CCRC_RC_FILE="([^"]+)"$/m.exec(src('ccd/ccd'));
     expect(reader, 'ccd/ccd declares no CCRC_RC_FILE').toBeTruthy();
