@@ -23,7 +23,13 @@ the programme ledger.
   hyphenated number word, and `WORDS` gains "twenty-one". The plan named only the count word pin.
 - **door-cited-outside-the-clause** — the brief asks that the note door be cited by name; the plan pins the clause
   byte-identical to the spec's §11.4 text, which names the act (keep your notes current), not the door. The clause stays
-  as the plan writes it, and the door (`POST /api/sessions/:id/notes`, `ccrc-api note add`) is cited in the pin's
-  comment and in the pull request's description.
+  as the plan writes it, and the door (`POST /api/sessions/:id/notes`, `ccrc-api note add`) is cited here and in the
+  pull request's description. The pin's literal carries no comment of its own: the test file is another run's claim,
+  and its holder granted the literal alone.
 - **merge-gate-at-landing** — the replay baseline row in `continuity_quiz_runs` cannot be read from the fleet box. The
   pull request says the baseline must be measured before it is enqueued; that gate is the coordinator's, at landing.
+- **pin-test-scoped-by-its-holder** — `server/test/coordinator-skill.test.ts` and `README.md` are claimed by another
+  run, whose holder granted only: the one literal, `'twenty-one'` in `WORDS`, the two count regexes widened, and the
+  README's one count word. The stale "twenty" in the test's comment and title (lines 116 and 166) and the
+  `toHaveLength(20)` in clause 17's test (line 655, which the new literal reds) were asked for; this branch changes them
+  only once that holder grants them.
