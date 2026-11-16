@@ -557,7 +557,13 @@ describe('sessionBehind: one session still on a model a move replaced (§2.8; pl
     ['a sidecar ts that is not a whole number', { usage: usage({ ts: RENDER_S + 0.5 }) }],
     ['a marker whose turn was cleared', { turn: turn({ turnAt: null }) }],
     ['a marker turnAt in seconds reads as before every move', { turn: turn({ turnAt: TURN / 1000 }) }],
-    ['a marker with no session id', { turn: turn({ sessionId: '' }) }],
+    // The sidecar's uuid matches the bad id in each, so the marker's own sid test decides it, never `uuid !== sid`.
+    ['a marker with an empty session id', { turn: turn({ sessionId: '' }), usage: usage({ uuid: '' }) }],
+    ['a marker with no session id, beside a sidecar with no uuid', {
+      turn: turn({ sessionId: undefined }), usage: usage({ uuid: undefined }) }],
+    // A turnAt that is not a whole ms epoch passes both time comparisons, so only isEpochMs keeps it out: without it
+    // the rule would answer behind with a `turnAt` of null.
+    ['a marker turnAt that is not a whole number of ms', { turn: turn({ turnAt: TURN + 0.5 }) }],
     ['a marker that is not an object', { turn: null }],
     ['no sidecar at all', { usage: null }],
     // The status line writes `model: (.model.id // null)`. With all four classes pinned no class pins null, and

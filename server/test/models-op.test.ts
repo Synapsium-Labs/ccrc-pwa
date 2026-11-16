@@ -5250,6 +5250,26 @@ describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
       expect(lane['sessionsUnmeasured']).toEqual([{ session: H_SID, why: 'advance-file-unreadable' }]);
     });
 
+    // D-5220, a finding of R2's review: a registry that cannot be read or parsed ends
+    // the lane before any session is judged, so each of the lane's sessions is named unmeasured with the registry's
+    // own word, as the advance-file arm above names its own; never in neither list. With no advance file nothing has
+    // moved, so no session is read there, whatever the registry says.
+    it.each([
+      ['cannot be read', 'registry-unreadable', (): void => { fs.rmSync(regPath('lane-a')); fs.mkdirSync(regPath('lane-a')); }],
+      ['cannot be parsed', 'registry-invalid', (): void => {
+        fs.writeFileSync(regPath('lane-a'), `${JSON.stringify({ ...MOVED_REG, extra: 1 }, null, 2)}\n`);
+      }],
+    ] as [string, string, () => void][])('a lane whose registry %s names every session of it unmeasured, as %s', (_w, why, spoil) => {
+      plantH({ registry: MOVED_REG, advance: MOVED_ADV });
+      plantSessionH();
+      spoil();
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([{ session: H_SID, why }]);
+      fs.rmSync(advPath('lane-a'));
+      expect(laneH(health())['sessionsUnmeasured']).toEqual([]);
+    });
+
     it('a hand set-class a crash cut short is judged as the next locked writer will record it, and the file is not written', () => {
       const adv = `${JSON.stringify(stepAdvance({}, { how: 'hand', class: 'opus', from: 'model-5.6-gamma',
         to: 'model-6.1-gamma', emptied: [], at: H_MOVED }), null, 2)}\n`;
@@ -5371,6 +5391,21 @@ describe('advance-backfill reaps a stale catalogue staging file, and only that (
 
   it('a staging file whose pid still runs is kept, however old', () => {
     plantTmp(`lane-a.json.tmp.${process.pid}`);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  // EPERM is a live process of ANOTHER account, so its file is kept. Pid 1 is root's on Linux and macOS alike, and
+  // signal 0 to it from any other account answers EPERM; the case runs only where that is measured true here (never
+  // as root, nor in a namespace where pid 1 is this account's own).
+  const pid1Eperm = ((): boolean => {
+    try { process.kill(1, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+  })();
+  it.skipIf(!pid1Eperm)('a staging file whose pid runs under another account (EPERM) is kept, however old', () => {
+    plantTmp('lane-a.json.tmp.1');
     const before = listing();
     const r = backfill();
     expect(r.code, r.stdout + r.stderr).toBe(0);

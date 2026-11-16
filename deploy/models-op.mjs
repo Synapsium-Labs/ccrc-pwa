@@ -2175,7 +2175,9 @@ function sessionsBehindOf(id, ctx, advance, registry) {
  *  is fixed: the lock, the advance file, then the registry, the lane's kind or the catalogue, then each class in
  *  `CLASSES` order, then the windows file.
  *   - Every lane in the population: its lock path, and its advance file when that is present and unreadable.
- *   - A registry that cannot be read or parsed is reported whatever the lane's probe, and ends the lane.
+ *   - A registry that cannot be read or parsed is reported whatever the lane's probe, and ends the lane; each of the
+ *     lane's sessions is then named in `sessionsUnmeasured` with the registry's word, unless no advance file stands
+ *     (nothing has moved), so no session sits in neither list (D-5220).
  *   - Everything else is for probe `codex` alone. `sessionsBehind` is judged against the advance file as the next
  *     locked writer will settle it (`reconcilePending`, in memory: a move a crash cut short counts as the move it
  *     was, D-5188, and nothing is written); `sessionsUnmeasured` names each session it could
@@ -2200,12 +2202,13 @@ function laneHealth(acc, ctx) {
   if (lockWhy !== null) block(null, 'lock-unwritable', lockWhy);
   const rd = readAdvance(id);
   if (rd.err !== undefined) block(null, rd.err[0], rd.err[1]);
-  if (reg.err !== undefined) {
-    block(null, reg.err[0], reg.err[1]);
-    return lane;
-  }
-  if (reg.invalid !== undefined) {
-    block(null, 'registry-invalid', reg.invalid.message);
+  if (reg.err !== undefined || reg.invalid !== undefined) {
+    const word = reg.err !== undefined ? reg.err[0] : 'registry-invalid';
+    block(null, word, reg.err !== undefined ? reg.err[1] : reg.invalid.message);
+    // No session is judged here, so each is named unmeasured, by the registry's word (D-5220; review of R2).
+    if (rd.err !== undefined || rd.advance !== null) {
+      lane.sessionsUnmeasured = (ctx.sessions.byLane.get(id) ?? []).map((session) => ({ session, why: word }));
+    }
     return lane;
   }
   const registry = reg.registry;
