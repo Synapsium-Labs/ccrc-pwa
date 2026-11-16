@@ -1677,7 +1677,7 @@ which is why both write it to a temp file and `mv` it into place — the deploy 
 scp-to-temp + `mv` as `ccd` itself, landing it **before** `ccd` and before every installer.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden, pool, fableBilling, continuity}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool, fableBilling, continuity, org}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -1769,6 +1769,7 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
 | `fableBilling` | `FABLE_BILLINGS` (included or credits), optional; a written `null` is refused; emitted into accounts.sh | `FABLE_BILLINGS` | “a fableBilling outside the set” |
 | `continuity` | an object whose one key is `recordedAt`, non-negative integer epoch seconds, optional; a written `null` is refused; emitted into accounts.sh | `recordedAt` | “a continuity with an extra key” |
+| `org` | `orgLabelVerdict`: `POOL_NAME_RE`'s shape, never `ORG_CLEAR_WORD` or one of `ORG_ID_SHAPES` (an organization id), optional; a written `null` is refused; emitted into accounts.sh | `orgLabelVerdict` | “an org shaped like an organization id” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
