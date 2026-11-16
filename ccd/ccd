@@ -31693,8 +31693,16 @@ _swap_rescue_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelle
 }
 
 cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — move a session to another account, conversation intact.
-  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): carry the
-  # session's transcripts into the target config dir, flip the registry wrapper, restart.
+  # The transcript FILE has no account binding (validated 2026-07-03), so it carries: copy the
+  # session's transcripts into the target config dir, flip the registry wrapper, restart. The
+  # THINKING inside it is another matter: for some models it is bound to the Claude organization
+  # that wrote it, and in another organization the API drops it without an error (the platform's
+  # preserved-thinking docs, read 2026-11-16), so the session rereads its history with no thinking
+  # and thinks again; it is read again once the session is back in the first organization. ccrc
+  # knows an account's organization only by the operator's label (`_acct_org`), and relates two
+  # accounts by `_org_rel`. The rescue breaks load ties toward the session's own organization
+  # (`_swap_target`'s `_org_tie`) and never overrides load for it; this verb records the landing's
+  # relation as `meas.org`.
   # A manual swap is now pool-constrained exactly like an automatic one — see
   # the POOL POLICY block below — and `--cross-pool` is the operator's one way
   # past it. Only `--force` is unconstrained by pools: it overrides the
