@@ -131,6 +131,26 @@ describe('the managed account deny file (D-6202)', () => {
     expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets-notes.md' })).toBeUndefined();
   });
 
+  it('the list refuses a Read of the operator private store, journal, quarantine, backup copy and restore leftovers (Overlord W1 private store A, spec §9.4)', () => {
+    const rules: Array<[string, string]> = [
+      ['~/.ccrc/operator-model.db*', '~/.ccrc/operator-model.db'], ['~/.ccrc/operator-model.db*', '~/.ccrc/operator-model.db-wal'],
+      ['~/.ccrc/operator-model.db*', '~/.ccrc/operator-model.db.tmp-journal'], ['~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.log'],
+      ['~/.ccrc/privacy-journal.torn/**', '~/.ccrc/privacy-journal.torn/20261115.torn'],
+      ['~/ccrc-backups/*/operator-model.db*', '~/ccrc-backups/20261115-120000/operator-model.db'],
+      ['~/ccrc-backups/*/operator-model.db*', '~/ccrc-backups/20261115-120000/operator-model.db.tmp'],
+      ['~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.stage/new/operator-model.db'],
+      ['~/.ccrc/coordination-restore.foreign/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/0123456789abcdef/operator-model.db'],
+    ];
+    for (const [rule, file] of rules) {
+      expect(ACCOUNT_SECRET_PATHS, rule).toContain(rule);
+      expect(anyRule('Read', { file_path: file }), file).toBe(`Read(${rule})`);
+    }
+    // the coordination database and a sibling that only begins like the journal are not the store
+    expect(anyRule('Read', { file_path: '~/.ccrc/coord.db' })).toBeUndefined();
+    expect(anyRule('Read', { file_path: '~/.ccrc/privacy-journal.log.md' })).toBeUndefined();
+    expect(anyRule('Read', { file_path: '~/ccrc-backups/20261115-120000/coord.db' })).toBeUndefined();
+  });
+
   it('the list refuses a write of the roster and its mirror and a direct run of the verb script, and never a read of them (F2)', () => {
     expect(ACCOUNT_ROSTER_FILES).toEqual(['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh']);
     for (const f of ACCOUNT_ROSTER_FILES) {

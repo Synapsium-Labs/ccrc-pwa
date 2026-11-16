@@ -57,7 +57,8 @@ export const ROLL_COMPACT_QUIET_MS = 10 * 60_000;
  *  it holds do not hold a roll, which comes straight back as the same session with its runs and claims standing. Every
  *  other hold of hibernation's gate still holds. Used here only: hibernation and every other caller keep the default. */
 export const ROLL_IDLE_GATE: IdleGateOptions = { claims: 'pass' };
-/** `$REG/<id>.no-roll` (decision U4): that session is never rolled automatically. Written by hand, never by the tree. */
+/** `$REG/<id>.no-roll` (decision U4): that session is never rolled automatically. Written by hand, and by `ccd keep-awake`
+ *  on the Overlord's body (spec §3.2, Overlord W1 ccd arms); the server lists it, never reads its bytes. */
 export const NO_ROLL_SUFFIX = 'no-roll';
 /** The actor the act declares on `ccd hibernate --roll`, as every unattended lane names itself. */
 export const ROLL_SWEEP_ACTOR = 'sweep:roll';

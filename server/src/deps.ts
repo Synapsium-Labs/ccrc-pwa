@@ -23,6 +23,7 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
+import type { OperatorModelStore } from './operatorModel/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
@@ -159,6 +160,9 @@ export interface Deps {
    *  never runs, which is what a box with no coordination configured should
    *  do. */
   coord?: CoordStore;
+  /** The Overlord's private store (`operator-model.db`, context C11), opened at the root after `coord`. Absent in a test
+   *  that builds no store; nothing in PR A reads it. */
+  operatorModel?: OperatorModelStore;
   /** The flat-file journal under `pool_edges`/`pool_epoch` (account-pool
    *  membership, design 2026-09-18 §5.2). Constructed in `index.ts` beside
    *  `coord`, not inside a route: `CoordStore.setAccountPools` calls

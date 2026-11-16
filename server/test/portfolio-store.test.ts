@@ -234,3 +234,20 @@ describe('the facts portfolioFor reads', () => {
     expect(f.items[0]!.events).toEqual([{ at: NOW - 40 * DAY, act: 'raise' }, { at: NOW - 2 * HOUR, act: 'tick' }, { at: NOW - HOUR, act: 'return' }]);
   });
 });
+
+describe('a rebuilt run (review 2130 F10)', () => {
+  it('a run reconstruct minted reads rebuilt, and its open wave is never aged from the rebuild; an ordinary run reads no flag', () => {
+    const [rebuilt] = coord.reconstruct({
+      ledger: { slug: 'prog-a', title: 'Prog A', waves: [{ wave: 1, of: 1, handoffCommit: null }] },
+      registry: { sessionId: 'lane-a-project-a', project: 'project-a', workspace: 'ws-a', branch: 'ws/a', held: 'program:prog-a wave:1/1' },
+      prHistory: [],
+    });
+    programme('prog-b');
+    const plain = run('prog-b');
+    const facts = coord.portfolioFacts(NOW, none);
+    expect(facts.runs.find((r) => r.id === rebuilt!.id)).toMatchObject({ state: 'working', rebuilt: true });
+    expect(facts.runs.find((r) => r.id === plain)).not.toHaveProperty('rebuilt');
+    const entry = portfolioFor(facts, Date.now()).programmes.find((p) => p.slug === 'prog-a')!;
+    expect(entry).toMatchObject({ oldestOpenMs: null, oldestOpenUnmeasured: 1 });
+  });
+});

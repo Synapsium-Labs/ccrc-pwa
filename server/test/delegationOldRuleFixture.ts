@@ -13,7 +13,8 @@
 // such a lease writes it through the journal writer AFTER the helper's applied position, and the fixture's recovery replays it.
 // No IO, no clock, no randomness: the output is a function of the records alone.
 import type { DelegationActivityNaturalKey, DelegationEventEnvelopeV1 } from '../../shared/api.js';
-import { encodeDelegationCheckpoint, recoverDelegation } from '../src/coord/delegation-checkpoint.js';
+import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import {
   deriveDelegationActivityId,
   encodeDelegationNaturalKey,

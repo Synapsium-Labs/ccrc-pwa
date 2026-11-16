@@ -353,8 +353,8 @@ describe('the drawer stream (D-5513)', () => {
     d.push('sk-pa');                             // an open run that could start a shape is held, at most 50 ms (D-5995)
     expect(out).toEqual(['prompt> ']);
     vi.advanceTimersByTime(50);
-    expect(out).toEqual(['prompt> ', SECRET_MASK]);   // the expired hold draws a provisional mask (D-5995)
-    d.push('ss x');                               // the run ends as no shape: the mask is erased and the text drawn
+    expect(out).toEqual(['prompt> ']);   // the expired hold withholds the run and draws nothing in its place (D-8665)
+    d.push('ss x');                               // the run ends as no shape: the text is drawn as one chunk would be
     expect(screen(out.join(''))).toBe('prompt> sk-pass x');
     d.dispose();
   });
@@ -815,7 +815,7 @@ describe('the review findings: the mask stays cheap and the drawer stays live (D
     vi.advanceTimersByTime(4);
     d.push('y');                       // still held; the deadline does not restart
     vi.advanceTimersByTime(2);
-    expect(out.join('')).toBe(`x e ${SECRET_MASK}`);   // 6 ms after the first hold, failed closed on the begun shape
+    expect(out.join('')).toBe('x e ');   // 6 ms after the first hold, failed closed on the begun shape: withheld, nothing drawn (D-8665)
     d.dispose();
   });
 });
