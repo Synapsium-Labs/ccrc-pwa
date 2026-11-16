@@ -11,21 +11,24 @@
 - **PR A, the record.** `overlord_requests`, its cited messages and its moves, in one migration. `REQUEST_TRANSITIONS` in
   a new `shared/overlordRequests.ts`, shaped as `shared/ledgers.ts#ITEM_TRANSITIONS`, with its tests: no open state
   without an exit, hand back as three rows, and close and close unverified apart. One move writer stamps the `request`
-  row of `SEQUENCE_KIND_MAP`, raises `revision`, and sets the follow-up clock. One message founds one root request
-  within 24 hours, by a unique index in `coord.db`. The private store's boot pass gains its measured citation reader and
-  its `spent` arm. I12's predicate joins sequence B's invariant table.
+  row of `SEQUENCE_KIND_MAP`, raises `revision`, and sets the follow-up clock, a parent's included. Each writer is a
+  read-only plan and an apply that cannot refuse, so nothing refuses after the act journal's record (RQ18). One message
+  founds one root request within 24 hours. The private store gains a citing reader that never hands out the text, and
+  its boot pass gains the measured citation reader, the `spent` arm and the restore floor. I12's predicate joins
+  sequence B's invariant table.
 - **PR B, the doors.** Open, drop, `close-request` and escalate (index questions 2 and 7), each with its
   `OVERLORD_DOORS` row through `overlordGateRun` and an act row per move. `said-not-operator` on a bad citation, and
   `operator-has-it` on a stale revision. The code shortlist (ruling F5): a pure decider that names at most six candidate
   programmes from `expectedPaths`, live claims and history's `touched`, which the open door returns and asks
-  `programme.pick` about. Their `ccrc-api` verbs and `DOOR_TOOLS` rows.
+  `programme.pick` about. History is read once per open, under a budget sized to the agent's one history slot. Their
+  `ccrc-api` verbs and `DOOR_TOOLS` rows.
 - **Q28 is built as ruled.** A request that needs a start or a proposal goes to the operator through the escalate door,
   and nothing raises an item before W3.
 - **What changes at merge.** Nothing a running session sees. PR A writes no row until a door exists. PR B's doors refuse
   `capability-missing` naming `overlord-route-v1` until the index's last piece ships that word.
-- **What the reader must check.** Seventeen open questions (§2): sixteen with a recommendation, and question 13, the
-  escalate door's act kind, ruled by the coordinator. None is for the operator. One needs the coordinator's eye:
-  history's `touched` has no server reader today, so PR B adds one (question 5).
+- **What the reader must check.** Nineteen questions (§2). Five are ruled by the coordinator: question 13, and in fix
+  round 1 (review 2273) questions 5, 6's parent clock, 18 and 19. The rest carry a recommendation. None is for the
+  operator.
 
 ## 1. Goal, scope and the rulings this plan builds on
 
@@ -47,13 +50,13 @@ store), which the open door reads and moves through its own writer.
 | Ring | File | What it holds | PR |
 |---|---|---|---|
 | L0 | `shared/overlordRequests.ts` (new) | The ten states, the actors, `REQUEST_TRANSITIONS`, the move reasons, the fields each move may set, the bounds | A |
-| L1 | `server/src/coord/overlordRequests.ts` (new) | `nextRequestState`, `followUpAfterMove`, `citationVerdict`, `nextRequestId`, `answeredSinceNeedsYou`, `closeUnownedVerdict` | A |
+| L1 | `server/src/coord/overlordRequests.ts` (new) | `nextRequestState`, `followUpAfterMove`, `parentClockAfterChildMove`, `citationVerdict`, `nextRequestId`, `answeredSinceNeedsYou`, `closeUnownedVerdict` | A |
 | L1 | `server/src/coord/requestShortlist.ts` (new) | `codeShortlist` | B |
-| L3 | `server/src/coord/overlordRequestStore.ts` (new) | The one insert, the one move writer and the readers | A |
+| L3 | `server/src/coord/overlordRequestStore.ts` (new) | The insert and the move writer, each a read-only plan and an apply, the private `appendMove`, and the readers | A |
 | L3 | `server/src/coord/requestShortlistRead.ts` (new) | Live claims by programme, and history's `touched` by programme, for the shortlist | B |
 | L4 | `server/src/coord/overlordRoutes.ts` (W1's) | The four door handlers | B |
 | L1, L3 | `server/src/coord/invariants.ts`, `invariantFacts.ts` (sequence B's) | I12's predicate and its gatherer | A |
-| L1, L4 | `server/src/operatorModel/messages.ts`, `bootPass.ts` (private store B's) | The boot pass's `spent` arm, and its measured citation reader wired | A |
+| L1, L3, L4 | `server/src/operatorModel/messages.ts`, `store.ts`, `bootPass.ts` (private store's) | `citedMessageFacts` with its ledger line (RQ19), the boot pass's `spent` arm and restore floor, and its measured citation reader wired | A |
 
 *Table 1. Where the code goes.*
 
@@ -106,7 +109,10 @@ operator: each is an implementation choice under a direction the spec already gi
   Claims are per project (`shared/api.ts#ClaimSummary`), and a request has no project column. No glob matcher exists:
   `server/src/coord/claims.ts#pathsOverlap` is exact or directory-prefix only. **Recommendation:** each entry is
   `{ project, path }`. The path is normalised by `server/src/coord/claims.ts#normalizeClaimPath`, and matched by
-  `pathsOverlap`, so a directory covers what is under it. A second matcher is not added.
+  `pathsOverlap`, so a directory covers what is under it. A second matcher is not added. A path that
+  `normalizeClaimPath` refuses (it answers null for an empty, absolute or `..` path), or one that holds `*`, `?` or `[`,
+  refuses `bad-request`, so "never a glob" is enforced at the door (F12). History's `touched` matches files only, so a
+  directory reaches a programme through claims alone (§7).
 - **RQ4. An empty `expectedPaths` shortlists the programmes that hold live claims** (§5.3: "When it is empty, the
   shortlist matches on live claims alone"). With no path there is nothing to match, so the sentence can only mean that
   a live claim alone qualifies a programme. **Recommendation:** with no expected path, every programme holding a live
@@ -116,12 +122,21 @@ operator: each is an implementation choice under a direction the spec already gi
   `touched-is-a-fourth-history-verb`). Measured: `touched` lives only in the fleet box's history store
   (`ccd/history/recall.mjs`, its "touched" section). The agent op `overlord-history` runs three verbs
   (`shared/overlordHistory.ts#OverlordHistoryVerb`), and `touched` is not among them. Each `touched` row names its
-  session's ccrc id. **Recommendation:** add `touched` to `OverlordHistoryVerb` and to
-  `ccd/history/overlord-read.mjs`'s `CLI_VERB` map. One read per expected path is made, targeted at that path's project,
-  at most eight, under one 2 s deadline. The server maps each row's ccrc id to a programme through `runs.sessionId` and
-  `runs.claimedBy`. The shortlist fails open: a read that did not answer leaves the claims standing alone, and the
-  answer says `touched: 'unmeasured'` or `'partial'`. The history door of W1's board-history piece then serves
-  `touched` to the Overlord too, which C54 asks for.
+  session's ccrc id. The op has one slot per agent process, answers a second request `busy`, and frees the slot only
+  when its worker exits (`agent/src/historyOp.ts`, 20 s deadline). **Recommendation, as ruled in fix round 1 (F3):**
+  - **One history read per open.** `touched` joins `OverlordHistoryVerb` and `overlord-read.mjs`'s `CLI_VERB` and
+    `VERBS` maps. One op call carries the first eight expected paths, in the request's stated order.
+  - **A budget sized to the one slot.** The runner stops itself between paths after 4 s and answers what it read, so
+    its worker exits and frees the slot. The door waits at most 5 s.
+  - **What reads as not measured.** `busy` reads as `unmeasured`. `partial` covers a `shown` below its `total`, more
+    than eight expected paths, and a cut by the budget.
+  - **The directory rule:** `touched` matches a file exactly or by suffix, so a directory expected path reaches a
+    programme only through claims.
+  - **The multi-programme rule:** a ccrc id that matches runs of several programmes, through `runs.sessionId` or
+    `runs.claimedBy`, counts toward each of them.
+
+  The shortlist fails open: a read that did not answer leaves the claims standing alone, and the answer says which
+  (§7). The history door of W1's board-history piece then serves `touched` to the Overlord too, which C54 asks for.
 - **RQ6. The move writer stamps the follow-up clock** (slug `move-writer-stamps-the-clock`). I12 must hold from the
   first row, and the follow-up piece lands after this one. **Recommendation:** `followUpAfterMove` (L1) gives the clock
   at each move:
@@ -129,6 +144,10 @@ operator: each is an implementation choice under a direction the spec already gi
     (`REQUEST_NEXT_MOVE_MS`, Table 11.5b's "One hour"), or the read-back's promise when the move carries one.
   - **Entering `needs-you`, `done-unverified`, `blocked` or a terminal state:** none.
   - **A parent with an open child:** none. The insert of a child clears its parent's clock in the same transaction.
+  - **The insert stamps its own clock** (F6): a new request is `received`, so its clock is an hour on.
+  - **A parent left with no open child** (ruled, fix round 1, F2): when a move ends a parent's last open child and the
+    parent is `received` or `in-progress`, the move writer stamps the parent's clock an hour on, in the same
+    transaction, as a bookkeeping write.
 
   The follow-up piece keeps `followUpDue`, the arm, the nudges and the re-time after a nudge. It calls a bookkeeping
   writer of this store and never stamps a move's clock itself.
@@ -142,6 +161,10 @@ operator: each is an implementation choice under a direction the spec already gi
   - a stale revision, a request in `needs-you` the operator has not answered, or a request the operator took:
     `operator-has-it`, with the row and its last move;
   - any other move the table does not allow: `bad-transition`.
+
+  The order matters (F5): for an Overlord move, `nextRequestState` reads a taken row and an unanswered `needs-you` row
+  first, before the move's `from`. Otherwise a close or an escalate on such a row would fail its `from` and answer
+  `bad-transition`, where Table 11.6 says `operator-has-it`.
 
   Both `not-found` and `bad-transition` are in `shared/refusal.ts#GENERIC_REFUSALS` today, so no word is added.
 - **RQ9. A child is one level deep, and cites only its root's messages.** Figure 4 makes "a parent request, one child
@@ -161,6 +184,9 @@ operator: each is an implementation choice under a direction the spec already gi
     logged, and the boot pass's `spent` arm repairs it.
   - **The 24-hour window is checked at the door from the message's `at`, and never written.** A message past the window
     is spent by its age, and no lane writes it.
+  - **After a confirmed restore** every message up to the highest id on record is spent (§5.1). Request record A builds
+    the boot pass's arm for it, which takes that floor as an input, and act journal B supplies the floor from Confirm
+    the restore (F14).
 - **RQ12. `close-request` on `received` is this plan's, and on other states the done tests piece's.** The server's
   close from `received` to `done` happens "at the Overlord's close door", when every act on the request was a read or an
   answer. The close of an `in-progress` request is the done-test lane's. **Recommendation:** PR B's close door moves
@@ -179,7 +205,9 @@ operator: each is an implementation choice under a direction the spec already gi
 - **RQ15. The open door asks `programme.pick`, so PR B needs decision model A** (the decision-model plan, #2922, Figure
   2). **Recommendation:** the open door calls decision model A's `gatherDecisions` before its transaction, with the rows
   `programme.pick` and `programme.any`. It records the checks on its act row and returns each check's mark. With every
-  row `off` (Q29), the check is `disarmed` and costs nothing.
+  row `off` (Q29), the check is `disarmed` and costs nothing. When the row is not `off`, the door reads each
+  candidate's ratified goals version and text through `server/src/coord/ledgersStore.ts#goalsFor` and passes them as
+  the row asks (F15).
 - **RQ16. The bounds.** **Recommendation**, as starting values for Table 11.5b:
   - at most 8 cited messages;
   - a summary of at most 200 characters (the act row's own cap);
@@ -187,11 +215,29 @@ operator: each is an implementation choice under a direction the spec already gi
   - at most 6 consulted programmes;
   - a close note of at most 600 characters.
 
-  Summary and close note are masked on the way in by the server's masker (`server/src/accounts/mask.ts#maskText`).
+  Summary and close note are masked on the way in by the server's masker, `SecretMasker`'s `maskText` method
+  (`server/src/accounts/mask.ts#SecretMasker`).
   A larger body refuses `too-large`, an existing word.
 - **RQ17. Where the drop's reason sits.** Table 5.1a: "A drop carries the dropper's reason". **Recommendation:** the
   drop door requires a reason of 1 to 600 characters, masked, in `closeNote`. Its move row carries the reason word
   `dropped`. The text is the Overlord's own words, never the operator's.
+- **RQ18. Nothing refuses after the journal record** (ruled, fix round 1, F1; slug `decide-before-the-append`). An act
+  journal record appended before a refusal stays in the file when the transaction rolls back. It trails the database,
+  and the guard fences every Overlord door.
+  - **Decide first.** Each writer is split into a read-only plan and an apply that cannot refuse. Inside the
+    transaction and before the act writer, the open door runs `planRequestInsertInTx`: is each root citation free, and
+    is the parent open? The move doors run `planRequestMoveInTx`: the row, its revision and `nextRequestState`.
+    `DatabaseSync` is synchronous, so that check is final. The unique index stays as a backstop.
+  - **The open door** then keeps the act journal's insert-first order (`open-request-after-its-row`). The request row
+    is inserted, and then the act writer runs with `opens: <request id>`.
+  - **The link:** the `open` move row carries `actId` null, and links to its act through the act's `opens` (ruled). A
+    test pins the link.
+  - **A move door** runs the act writer, and then applies its move with that act's id.
+- **RQ19. The open door's read of the private store** (ruled, fix round 1, F11).
+  - **The reader:** a C11 reader, `citedMessageFacts`, answers `{ state, at, sha256, hashMatches }`, as
+    `messageSessionOf` does for the session. So the open door never holds the text, and the rehash is the reader's.
+  - **The ledger line:** each read leaves one line in the read ledger, under a new read door `open-request` (§9.4 rule
+    3).
 
 ## 3. What exists today
 
@@ -217,7 +263,7 @@ process A2 and the Overlord's routes file are planned only.
 | The Overlord's history op | `shared/overlordHistory.ts#OverlordHistoryVerb` (`search`, `describe`, `expand`), `ccd/history/overlord-read.mjs#overlordRead` | Gains `touched` (RQ5) |
 | Generic words | `shared/refusal.ts#GENERIC_REFUSALS`: `not-found` (404), `bad-transition` (409), `too-large`, `unmeasured` | Reused (RQ8, RQ16) |
 | The Overlord's words | `shared/refusal.ts#OVERLORD_REFUSALS`: W1's words. `said-not-operator` and `operator-has-it` arrive with the W2 vocabulary piece or W1's inbox | Read from the group, never re-declared |
-| The masker | `server/src/accounts/mask.ts#maskText` | Masks the summary and the close note |
+| The masker | `server/src/accounts/mask.ts#SecretMasker`, its `maskText` method | Masks the summary and the close note |
 | A routes file registered from the coordination routes | `server/src/coord/coordCallsRoute.ts#registerCoordCallsRoute` | Not used: the doors go in W1's `overlordRoutes.ts` (RQ14) |
 | The growth check | `server/test/growthCheck.ts#GROWTH_LIMIT` (40 net lines per growth-checked file) | `schema.ts` is the only growth-checked file this plan grows |
 | The table, clock and mutation registries | `server/test/single-definition/writers-map.test.ts#TABLES`, `server/test/single-definition/time-ports.test.ts#TIME_PORT_FILES`, `server/test/sim/mutation-floors.test.ts#MUTANT_SETS` with `mutation-floors.json` | Each new table, clock-free file and decider joins |
@@ -274,37 +320,40 @@ another file, written in the same transaction where the target is in `coord.db`.
 
 | Column | Holds | Written by |
 |---|---|---|
-| `id` | The request's number, from `nextRequestId` (RQ10) | `insertRequestInTx` |
-| `origin` | `operator` when it cites a message, else `overlord`. A child takes its root's | `insertRequestInTx` |
-| `summary` | The Overlord's one line, masked, at most 200 characters | `insertRequestInTx` |
-| `owner` | One programme slug, or none before routing | `moveRequestInTx` (route, re-relay, route elsewhere) |
-| `parentRequestId` | The parent, for a child (RQ9) | `insertRequestInTx` |
-| `consulted` | Programmes consulted, a JSON list of at most 6 slugs | `insertRequestInTx` |
-| `state` | One of ten states | `moveRequestInTx` only (the insert writes `received`) |
-| `doneTest` | Typed predicates, opaque here (index question 13) | `moveRequestInTx` (route, re-relay), for the relay |
-| `expectedPaths` | `{ project, path }[]`, at most 32 (RQ3) | `insertRequestInTx`. The relay refines it in its route move |
-| `dependsOn` | `request:<id>` or `programme:<slug>` | `moveRequestInTx` (block), for the coordinator doors |
-| `takenFrom` | `routed`, `in-progress` or `blocked`, or none | `moveRequestInTx` (take sets it, hand back clears it) |
-| `openedAt` | When it was opened | `insertRequestInTx` |
+| `id` | The request's number, from `nextRequestId` (RQ10) | `applyRequestInsertInTx` |
+| `origin` | `operator` when it cites a message, else `overlord`. A child takes its root's | `applyRequestInsertInTx` |
+| `summary` | The Overlord's one line, masked, at most 200 characters | `applyRequestInsertInTx` |
+| `owner` | One programme slug, or none before routing | `applyRequestMoveInTx` (route, re-relay, route elsewhere) |
+| `parentRequestId` | The parent, for a child (RQ9) | `applyRequestInsertInTx` |
+| `consulted` | Programmes consulted, a JSON list of at most 6 slugs | `applyRequestInsertInTx` |
+| `state` | One of ten states | `applyRequestMoveInTx` only (the insert writes `received`) |
+| `doneTest` | Typed predicates, opaque here (index question 13) | `applyRequestMoveInTx` (route, re-relay), for the relay |
+| `expectedPaths` | `{ project, path }[]`, at most 32 (RQ3) | `applyRequestInsertInTx`. The relay refines it in its route move |
+| `dependsOn` | `request:<id>` or `programme:<slug>` | `applyRequestMoveInTx` (block), for the coordinator doors |
+| `takenFrom` | `routed`, `in-progress` or `blocked`, or none | `applyRequestMoveInTx` (take sets it, hand back clears it) |
+| `openedAt` | When it was opened | `applyRequestInsertInTx` |
 | `lastNewsAt`, `news` | The latest news and its time, masked | A bookkeeping writer, added by request ids A |
-| `followUpAt` | The next follow-up time (RQ6) | `moveRequestInTx`, `insertRequestInTx` (a child clears its parent's), and the follow-up piece's bookkeeping writer |
+| `followUpAt` | The next follow-up time (RQ6) | `applyRequestInsertInTx` (its own, an hour on, and a child clears its parent's), `applyRequestMoveInTx` (the moved row's, and a parent's when its last open child ends, F2), and the follow-up piece's bookkeeping writer |
 | `nudges` | The nudges sent | The follow-up piece's bookkeeping writer |
-| `counters` | The counters received | `moveRequestInTx` (counter) |
-| `closedAt`, `closeNote` | When and why it ended, the note masked, at most 600 characters | `moveRequestInTx` (every move to a terminal state) |
-| `revision` | The counter of RQ7 | `moveRequestInTx` only |
+| `counters` | The counters received | `applyRequestMoveInTx` (counter) |
+| `closedAt`, `closeNote` | When and why it ended, the note masked, at most 600 characters | `applyRequestMoveInTx` (every move to a terminal state) |
+| `revision` | The counter of RQ7 | `applyRequestMoveInTx` only |
 
 *Table 3. `overlord_requests`. Every writer is a function of `server/src/coord/overlordRequestStore.ts`, the one owner
 of the table's SQL.*
 
 - **`overlord_request_messages`:** `requestId`, `messageId`, `sha256`, `root`, `at`, with primary key
   `(requestId, messageId)` and the unique index `overlord_request_messages_one_root ON (messageId) WHERE root = 1`.
-  `insertRequestInTx` is its one writer.
+  `applyRequestInsertInTx` is its one writer.
 - **`overlord_request_moves`:** `id`, `requestId`, `move`, `actorKind`, `actor`, `fromState` (none for `open`),
-  `toState`, `reason`, `actId`, `revision`, `at`, with an index on `(requestId, id)`. `moveRequestInTx` and
-  `insertRequestInTx` write it, and nothing updates or deletes it.
-- **No vocabulary sits in a CHECK** (the private store's slug `no-vocabulary-in-check`). The L0 table governs every
-  word. A CHECK holds shapes only, such as `(closedAt IS NULL) = (closeNote IS NULL OR closeNote = '')` where it
-  helps.
+  `toState`, `reason`, `actId` (none for `open`, whose act links back through its `opens`), `revision`, `at`. One
+  private function of the store, `appendMove`, writes it for both appliers (F7), and nothing updates or deletes it.
+- **The four indexes:** `overlord_requests_by_state (state)`, `overlord_requests_by_parent (parentRequestId)`,
+  `overlord_request_messages_one_root (messageId) WHERE root = 1` (unique), and `overlord_request_moves_by_request
+  (requestId, id)`.
+- **No CHECK holds a word or a close note** (the private store's slug `no-vocabulary-in-check`). The L0 table governs
+  every word. `close-unowned`, `close` and `fail` may end a request with no note, so no CHECK ties `closeNote` to
+  `closedAt` (F10).
 - **A newer column is additive.** An older build ignores all three tables (Table 11.5, "Ignored").
 
 ## 5. The moves
@@ -388,17 +437,22 @@ stateDiagram-v2
 *Figure 2. Every edge of `REQUEST_TRANSITIONS`, labelled by its moves. It is Figure 3 of the spec with each edge named
 by the move that makes it. A self-loop is a move that keeps the state and still raises the revision.*
 
-**The guards the table cannot hold.** `nextRequestState(row, move, actor, ctx)` checks the row's move first. Then it
-checks four facts from `ctx`, which the move writer reads in its transaction:
+**The guards the table cannot hold.** `nextRequestState(row, move, actor, ctx)` reads four facts from `ctx`, which the
+move writer's plan reads in its transaction. For an Overlord move it reads the first two before anything else (F5),
+so a move on a row the operator holds answers `operator-has-it` whatever its `from`:
 
-| Fact | Guards | Refusal (internal) | Door word |
-|---|---|---|---|
-| `answered`: the operator answered since the row last entered `needs-you` (`answeredSinceNeedsYou` over its moves) | `drop`, `route-elsewhere` from `needs-you` | `not-answered` | `operator-has-it` |
-| `takenFrom` | An Overlord move on a taken row. Each `hand-back-*` needs `takenFrom` equal to its target | `taken`, `not-taken-from` | `operator-has-it`, `bad-transition` |
-| `ownerAcknowledged`: the row's moves hold an `acknowledge` | `answer` (else `answer-recorded`) | `not-acknowledged` | (the operator's door picks the move) |
-| `openChildren` | `close-unowned`, `drop` and `escalate` on a parent | `has-open-children` | `bad-transition` |
+| Order | Fact | Guards | Refusal (internal) | Door word |
+|---|---|---|---|---|
+| 1 | `takenFrom` | Any Overlord move on a taken row | `taken` | `operator-has-it` |
+| 2 | `answered`: the operator answered since the row last entered `needs-you` (`answeredSinceNeedsYou`; "entered" means a move whose `fromState` is not `needs-you`, F9) | Any Overlord move on a `needs-you` row before that answer | `not-answered` | `operator-has-it` |
+| 3 | The move's `from` | Every move | `not-from` | `bad-transition` |
+| 4 | The move's actor | Every move | `wrong-actor` | `bad-transition` (a programming error at a door, which the call-site census prevents) |
+| 5 | `takenFrom` again | Each `hand-back-*` needs `takenFrom` equal to its target | `not-taken-from` | `bad-transition` |
+| 6 | `ownerAcknowledged`: the row's moves hold an `acknowledge` | `answer` (else `answer-recorded`) | `not-acknowledged` | (the operator's door picks the move) |
+| 7 | `openChildren` | `close-unowned`, `drop` and `escalate` on a parent | `has-open-children` | `bad-transition` |
 
-*Table 5. The guards. The refusal order is: the move's actor, then its `from`, then the guards in this table's order.*
+*Table 5. The guards, in the order `nextRequestState` reads them. Rows 3 and 4 follow `shared/ledgers.ts#nextItemState`,
+which reads `from` before the actor.*
 
 **What each move may set.** `REQUEST_MOVE_FIELDS` is an L0 map from each move to the columns it may set:
 
@@ -414,9 +468,10 @@ the escalate door's three, `needs-start`, `needs-proposal` and `unnamed-widening
 piece adds its own words in its own pull request: `two-counters`, `two-silent-nudges`, `off-before-ack`,
 `child-ended`, `dependency-ended` and `operator-took-it`. A test holds that every move to `needs-you` carries a reason.
 
-## 6. Citing the operator's messages
+## 6. Citing the operator's messages, and the order inside the transaction
 
-This section says how the open door binds a request to whole operator messages across the two files.
+This section says how the open door binds a request to whole operator messages across the two files, and fixes the one
+order every door of this plan keeps: **nothing may refuse after the journal record** (ruled, fix round 1, F1).
 
 ```mermaid
 sequenceDiagram
@@ -427,63 +482,102 @@ sequenceDiagram
   participant DM as Decision model A
   participant C as coord.db
   O->>D: cites, summary, expectedPaths, parent
-  D->>D: gate steps 1 to 10, the op-key lookup
-  D->>PS: messageById, for each cited id
-  PS-->>D: rows, or absent, or unmeasured
-  D->>D: citationVerdict on the rows
-  D->>C: live claims by programme
-  D->>H: touched, one read per expected path
+  D->>D: bounds, then gate steps 1 to 10 and the op-key lookup
+  D->>PS: citedMessageFacts, for each cited id
+  PS-->>D: state, at, hashMatches, or absent, or unmeasured
+  D->>D: citationVerdict
+  D->>C: live claims and programmes, each candidate's goals
+  D->>H: one touched read, the first eight paths
   D->>D: codeShortlist
   D->>DM: gatherDecisions, programme.pick
-  D->>C: one transaction, see below
+  D->>C: one transaction, decide then apply
   C-->>D: committed
   D->>PS: moveMessage spend or settle, the copy
   D-->>O: request, shortlist, marks
 ```
 *Figure 3. The open door. Every read that can be slow, the private store's and the agent's, happens before the
-transaction, as `gatherDecisions` requires. Inside it the door re-decides what can race: the one root citation, by the
-unique index.*
+transaction, as `gatherDecisions` requires. Inside it the door decides everything that can refuse, read-only, and only
+then appends and writes.*
 
-**Inside the one transaction**, in the order the sequence plan fixes (journal, then row, then stamp):
+**Inside the one transaction.** `coord.db` is a synchronous `DatabaseSync` under `BEGIN IMMEDIATE`, so a read-only check
+made inside the transaction is final: nothing can change between the check and the write. Each door runs in this order.
 
-1. `overlordMayAct` (act catalogue B) runs inside the transaction that commits the act (§7.1). For a class-none kind
-   it allows, unless the caller's strength is under the kind's least (`identity-too-weak`).
-2. The act writer of act rows A appends the act journal record `open-request` with the request's id, writes the act
-   row with its decision checks, and stamps the `act` line.
-3. `insertRequestInTx` writes the request, its cited messages and its `open` move row, and stamps the `request` line.
-4. If the unique index refuses a root citation, the transaction rolls back, and the door answers `said-not-operator`
-   with the detail `spent`.
+1. **Decide, read-only.**
+   - The open door calls `planRequestInsertInTx`. It checks that each root citation is free, that the parent is open,
+     and that the parent is a root. It returns the plan, with the id from `nextRequestId`, or a refusal.
+   - The move doors call `planRequestMoveInTx`. It re-reads the row, checks the revision, and runs `nextRequestState`
+     with the guards of Table 5. It returns the plan, or a refusal with the row and its last move.
+   - Then `overlordMayAct` (act catalogue B) runs. The act writer's own checks run inside `writeActInTx` before its
+     append (act rows A: the allow, the ceilings, the natural key and the operation key).
+2. **Apply, which cannot refuse.**
+   - **The open door,** in the act journal's insert-first order (`open-request-after-its-row`):
+     - `applyRequestInsertInTx` writes the request, its cited messages and its `open` move row, and stamps its
+       `request` line. The `open` move row carries `actId` null (ruled, F1).
+     - Then `writeActInTx` runs with `opens: <request id>`. It appends `act-settle` and then `act-open-request`, writes
+       the act row, and stamps the `act` line. The act's `opens` is the one link from the request to the act that
+       opened it.
+   - **A move door:**
+     - `writeActInTx` appends its record, writes the act row and stamps its line.
+     - Then `applyRequestMoveInTx` writes the move with that act's id, and stamps the `request` line when the state word
+       changed.
+3. **What can still fail after the append** is the disk, and the act journal plan reads that as `trailing`. A refusal
+   from an apply step is a programming error. The door answers 500 and logs it, and the test of step 1 pins that each
+   apply re-decides with the same decider and agrees with its plan.
+4. **The unique index stays as a backstop.** `overlord_request_messages_one_root` can only meet a second root citation
+   that step 1 already refused, inside the same transaction.
 
-**`citationVerdict` (L1)** decides from the rows the door read. It is first match:
+**`citedMessageFacts` (C11, PR A; ruled, F11)** is the private store's reader for a citing door, beside
+`messageSessionOf`. It never hands the text out:
+
+```ts
+// server/src/operatorModel/store.ts (C11, L3), a method of OperatorModelStore
+citedMessageFacts(id: number, reader: { door: 'open-request'; caller: ReadCaller; at: number }):
+  StoreRead<{ readonly state: MessageState; readonly at: number; readonly sha256: string;
+    readonly hashMatches: boolean } | 'absent'>;
+```
+
+- **It rehashes.** The private store rehashes the stored text with its own `sha256Of` and compares the result with the
+  row's `sha256`. The open door holds no text and computes no hash.
+- **It leaves a ledger line** (§9.4 rule 3, "every read leaves a ledger line"): one `recordRead` line per call, under
+  the new read door `open-request` in `READ_DOOR_MAP`.
+- **A gone row is absent.** A row W4's wipe made `gone` answers `absent`.
+
+**`citationVerdict` (L1)** decides from those facts. It is first match:
 
 | Case | Answer |
 |---|---|
-| The private store read failed for an id | `unmeasured` (502): never folded into absent |
-| An id is no row of the store, or a row W4's wipe made `gone` | `said-not-operator`, `absent` |
-| `sha256Of(row.text)` is not `row.sha256` | `said-not-operator`, `changed` |
+| More than 8 ids | `too-large` |
+| An id repeated | `bad-request` |
+| A read failed for an id | `unmeasured` (502): never folded into absent |
+| An id is absent | `said-not-operator`, `absent` |
+| `hashMatches` is false | `said-not-operator`, `changed` |
 | A root request cites a row whose state is `spent` | `said-not-operator`, `spent` |
 | A root request cites a row older than 24 hours (`ROOT_FOUND_WINDOW_MS`) | `said-not-operator`, `spent` |
 | A child cites an id its root does not cite (RQ9) | `said-not-operator`, `not-in-root` |
-| More than 8 ids, or a repeated id | `too-large`, `bad-request` |
-| Otherwise | `ok`, with each id's hash and whether it is a root citation |
+| Otherwise | `ok`, with each id's stored hash and whether it is a root citation |
 
-*Table 6. `citationVerdict`. A request with no citation is the Overlord's own (`origin: overlord`) and needs no
-verdict.*
+*Table 6. `citationVerdict`. The bounds come first (F13), so a bad body never waits on a read. A request with no
+citation is the Overlord's own (`origin: overlord`) and needs no verdict. A root citation another request already holds
+is refused by `planRequestInsertInTx`, inside the transaction, with the same word and detail `spent`.*
 
-**The boot pass's two arms** (private store B's pass, PR A here):
+**The boot pass's three inputs** (private store B's pass, PR A here):
 
 - **The measured citation reader.** `citedMessagesForBoot(db)` reads `overlord_request_messages`. The cited set settles
   a `cite` row, as private store B's open question 9 foresees.
 - **The `spent` arm.** `CitationRead`'s measured arm gains `rootCited` (additive). `bootSettlement` gains the answer
-  `spend` for a row whose id is root-cited and whose state is not `spent`. It never takes a mark away: a `spent` row with
-  no root citation stays spent, because a confirmed restore spends every message up to the highest id on record
-  (§5.1).
-- **A table not yet migrated answers `not-applicable`,** as W1's adapter did, and a read that throws answers
-  `unmeasured`.
+  `spend` for a row whose id is root-cited and whose state is not `spent`. It never takes a mark away.
+- **The restore floor** (F14). `CitationRead`'s measured arm also gains `restoreFloor: number | null`. After a confirmed
+  restore, §5.1 spends "every message up to the highest id the privacy journal or a witness holds". Request record A
+  builds the arm, which answers `spend` for every row with `id <= restoreFloor`. Act journal B, which owns the
+  reconciliation pass of Confirm the restore, supplies the floor. It is `null` until then, and the arm spends nothing on
+  it.
+- **A table not yet migrated answers `not-applicable`,** as W1's adapter did. A read that throws answers `unmeasured`,
+  which changes nothing.
 
 ## 7. The code shortlist
 
-This section gives the decider that names at most six candidate programmes (ruling F5, §5.3, Table 3.7a).
+This section gives the decider that names at most six candidate programmes (ruling F5, §5.3, Table 3.7a), and the one
+history read that feeds it (ruled, fix round 1, F3).
 
 `codeShortlist(input): Shortlist` is L1, pure and total. Its inputs come from `requestShortlistRead.ts` (L3), which the
 open door calls before its transaction:
@@ -494,10 +588,13 @@ export type ExpectedPath = { readonly project: string; readonly path: string }; 
 export type ClaimByProgramme = { readonly programme: string; readonly project: string;
   readonly paths: readonly string[]; readonly renewedAt: number };                  // live claims with a run only
 export type TouchedRead =
-  | { readonly kind: 'measured' | 'partial'; readonly hits: readonly { programme: string; project: string;
-      file: string; latestMs: number | null }[]; readonly why: string | null }
-  | { readonly kind: 'unmeasured'; readonly why: string }
+  | { readonly kind: 'measured'; readonly hits: readonly TouchedHit[] }
+  | { readonly kind: 'partial'; readonly hits: readonly TouchedHit[];
+      readonly why: 'more-than-eight' | 'shown-below-total' | 'budget' }
+  | { readonly kind: 'unmeasured'; readonly why: 'busy' | 'deadline' | 'unavailable' | 'refused' }
   | { readonly kind: 'not-asked' };                                                 // no expected path (RQ4)
+export type TouchedHit = { readonly programme: string; readonly project: string; readonly file: string;
+  readonly latestMs: number | null };
 export type ShortlistCandidate = { readonly programme: string; readonly claimHits: number;
   readonly touchedHits: number; readonly newest: number | null };
 export type Shortlist = { readonly candidates: readonly ShortlistCandidate[];        // at most SHORTLIST_MAX (6)
@@ -510,10 +607,10 @@ export function codeShortlist(input: { expected: readonly ExpectedPath[]; claims
 
 | Step | Rule |
 |---|---|
-| 1 | A programme not in `live` (not open) is never a candidate |
+| 1 | A programme not in `live` is never a candidate |
 | 2 | With no expected path: every programme with a live claim is a candidate, `claimHits` = its live claimed paths (RQ4) |
-| 3 | Otherwise `claimHits` counts the expected paths that `pathsOverlap` a live claimed path of that programme in the same project |
-| 4 | `touchedHits` counts the expected paths that a `touched` hit of that programme names in the same project. An `unmeasured` read adds none |
+| 3 | Otherwise `claimHits` counts the expected paths that `pathsOverlap` a live claimed path of that programme in the same project. A directory covers what is under it |
+| 4 | `touchedHits` counts the expected paths that a `touched` hit of that programme names in the same project. `touched` matches a file exactly or by suffix, never by directory, so a directory expected path reaches a programme only through claims. An `unmeasured` read adds none |
 | 5 | A programme with no hit of either kind is not a candidate |
 | 6 | Rank: more `claimHits` first, then more `touchedHits`, then the newest claim or touch, then slug. Cut at six |
 
@@ -525,17 +622,32 @@ export function codeShortlist(input: { expected: readonly ExpectedPath[]; claims
 - **Fail-open:** turning `touched` from `measured` into `unmeasured` removes no programme that had a claim hit.
 - **Capped:** never more than six candidates.
 - **No goals:** the decider reads no goals text. Nothing parses `doneWhen` (§5.3).
-- **Deterministic:** the same input gives the same order.
+- **Deterministic:** the same input gives the same order. The paths read are named (below), so the input is fixed by
+  the request.
 
-**`requestShortlistRead.ts` (L3)** composes two readers and decides nothing:
+**`requestShortlistRead.ts` (L3)** composes its readers and decides nothing:
 
-- **`claimsByProgramme(db, now)`:** `activeClaims()`, kept where `expiresAt > now` (the route's own filter), joined to
-  `runs.program` through `runId`. A claim with no run is dropped.
-- **`touchedByProgramme(fleet, db, expected, deadline)`:**
-  - one `overlord-history` read with verb `touched` per expected path, at most eight, target `project`;
-  - each row's ccrc id is mapped to a programme through `runs.sessionId`, else `runs.claimedBy`, and an unmapped id is
-    dropped;
-  - the answer is `partial` when the deadline cut a read, and `unmeasured` when none answered.
+- **`liveProgrammes(db)`:** the slugs of `programs` whose state is `active`, `paused` or `unknown`, that is, not `done`
+  and not `abandoned` (`shared/api.ts#ProgramState`). A paused programme still holds its claims.
+- **`claimsByProgramme(coord, now)`:** `CoordStore.activeClaims()`, kept where `expiresAt > now` (the route's own
+  filter), joined to `runs.program` through `runId`. A claim with no run is dropped.
+- **`touchedByProgramme(fleet, db, expected, time)`**, one history read per open:
+  - **Which paths:** the first eight expected paths, in the request's stated order (`SHORTLIST_TOUCHED_PATHS`, 8). One
+    op call carries them all, so the open door holds the agent's one history slot once. More than eight answers
+    `partial` (`more-than-eight`).
+  - **Its budget, sized to the slot.** Measured on `main`: `agent/src/historyOp.ts` runs one read at a time, answers a
+    second request `busy`, and frees its slot only when the worker exits, under a 20 s deadline. So the `touched` runner
+    in `ccd/history/overlord-read.mjs` stops itself between paths once `TOUCHED_OPEN_BUDGET_MS` (4 s) has passed, and
+    answers `partial` (`budget`) with what it read. The worker then exits and frees the slot. The door waits at most
+    `TOUCHED_OPEN_WAIT_MS` (5 s), read through the time port. A wait past that answers `unmeasured` (`deadline`), and the
+    slot frees when the runner's own budget ends.
+  - **`busy`:** the op's `busy` answer reads as `unmeasured` (`busy`). The door never retries, and the shortlist falls
+    back to the claims.
+  - **A cut answer:** an answer whose `shown` is below its `total` reads as `partial` (`shown-below-total`), with the
+    hits it holds. So does a read that hit `touched`'s candidate cap: the runner keeps that answer's
+    `candidatesCapped`, which `ccd/history/overlord-read.mjs`'s `outcomeOf` drops today.
+  - **Mapping a row to programmes:** each row's ccrc id maps through `runs.sessionId` and `runs.claimedBy`. An id
+    that matches runs of several programmes counts toward each of them. An id that matches none is dropped.
 
 ## 8. The Overlord's four doors
 
@@ -559,35 +671,45 @@ flowchart TD
   T["box token at onRequest"] --> B["body parse and bounds<br/>(too-large, bad-request)"]
   B --> G["overlordGateRun, steps 1 to 10<br/>(the op-key lookup after 7, act rows A)"]
   G -->|"refused"| X["the gate's word"]
-  G -->|"pass"| R["read the request, or the cited messages"]
-  R -->|"no row"| NF["not-found"]
-  R --> V{"step 11: the revision<br/>and the move"}
-  V -->|"stale, or the operator has it"| OH["operator-has-it,<br/>the row and its last move"]
-  V -->|"not a move of the table"| BT["bad-transition"]
-  V -->|"allowed"| TX["one transaction: overlordMayAct,<br/>the act writer, the move writer"]
-  TX --> OK["the answer"]
+  G -->|"pass"| S["slow reads, outside any transaction<br/>(the open door only)"]
+  S --> P["in the transaction: the read-only plan<br/>(the row, its revision, the move, the citations)"]
+  P -->|"no row"| NF["not-found"]
+  P -->|"taken, unanswered, or a stale revision"| OH["operator-has-it,<br/>the row and its last move"]
+  P -->|"not a move of the table"| BT["bad-transition"]
+  P -->|"allowed"| M["overlordMayAct, then the act writer's own checks"]
+  M -->|"refused"| AW["its word, nothing appended"]
+  M -->|"allowed"| AP["apply: the journal, the rows, the stamps"]
+  AP --> OK["the answer"]
 ```
-*Figure 4. One door's order. Steps 1 to 10 are the gate runner's. Step 11 is the door's own: the target row and its
-revision, then the citations, then `overlordMayAct`. The move writer re-decides the move inside the transaction, so a
-race between the read and the transaction answers as the table says.*
+*Figure 4. One door's order. Steps 1 to 10 are the gate runner's. Step 11 is the door's own, and it runs inside the
+transaction: the target row and its revision, the citations, then `overlordMayAct`. Every refusal comes before the
+first journal append, so no refusal can leave a trailing record (F1).*
 
-**Each door's act row** carries the kind, the target `request:<id>`, the revision it acted on, the summary (for drop,
-the reason's first 200 characters), and for the open door the decision checks. Act rows A owns the row, its natural key
-and the operation key. A retry with the same operation key returns the stored answer and writes nothing (index
-question 3).
+**Each door's act row** carries the kind, the target `request:<id>`, the revision it acted on, and the summary (for
+drop, the first 200 characters of the reason). For the open door it also carries the decision checks and `opens`. Act
+rows A owns the row, its natural key and the operation key. A retry with the same operation key returns the stored
+answer and writes nothing (index question 3).
+
+**The open door reads each candidate's goals** (F15). For each shortlisted programme, `goalsFor`
+(`server/src/coord/ledgersStore.ts#goalsFor`) gives the ratified goals version and its text. The door passes the
+programme slugs and versions to `programme.pick` as `candidates`, and the goals text as its quoted `goals` field, as
+the decision-model plan's row asks. It reads them only when that row is not `off`, so a disarmed row reads nothing.
 
 ## 9. I12, the sequence line and the revision
 
 This section gives the three facts the move writer keeps true in every transaction.
 
 - **The `request` row of `SEQUENCE_KIND_MAP`:** `request: { states: REQUEST_STATES, id: 'the request id, in decimal',
-  spec: '§10.4 "a request"' }`. A line is stamped at the insert and at every move whose state word changes. A self-loop
-  (`re-relay`, `counter`, `answer-recorded`) changes no state word, so it stamps nothing, and the census lists it with
-  that reason. The line's actor kind comes from one L0 map, `REQUEST_ACTOR_SEQUENCE_KIND`, which maps each request
-  actor to the sequence's actor kind.
+  spec: '§10.4 "a request"' }`.
+  - **When a line is stamped:** at the insert, and at every move whose state word changes. A self-loop (`re-relay`,
+    `counter`, `answer-recorded`) changes no state word, so it stamps nothing.
+  - **The census:** `applyRequestInsertInTx` and `applyRequestMoveInTx` are the stampers in `STAMPED_TABLES`. That a
+    self-loop stamps nothing is pinned by the store test, because the census lists writer functions, not moves.
+  - **The actor kind:** the line's actor kind comes from one L0 map, `REQUEST_ACTOR_SEQUENCE_KIND`, which maps each
+    request actor to the sequence's actor kind.
 - **The revision (RQ7):** the move writer adds one in the row's `UPDATE`, and the move row records the new value. The
-  row-revisions census gains `overlord_requests`, with `moveRequestInTx` as `raises` and every other writer as
-  `bookkeeping`.
+  row-revisions census gains `overlord_requests`, with `applyRequestMoveInTx` as `raises` and every other writer as
+  `bookkeeping`, the parent's clock stamp included.
 - **I12:** `i12FollowUpClock(lines, facts)` goes into `INVARIANT_MAP`'s I12 row, in place of its `waitsOn`. Its gatherer
   `requestClockFacts(db)` reads every open request's `id`, `state`, `followUpAt` and `parentRequestId`. The predicate
   is first match per open request:
@@ -603,24 +725,33 @@ This section gives the three facts the move writer keeps true in every transacti
 *Table 9. I12. A child depth beyond one is refused by the insert (RQ9), and the predicate still carries a visited set,
 so a planted cycle is a finding, never a loop.*
 
+**Why I12 holds between PR B and done tests** (ruled, fix round 1, F2):
+
+- **The insert** stamps the new request's own clock, an hour on (F6), and clears its parent's.
+- **When a move leaves a parent with no open child,** in a clocked state (`received` or `in-progress`), the move writer
+  stamps the parent's `followUpAt` an hour on, in the same transaction. This is a bookkeeping write, and it raises no
+  revision. Both of PR B's doors can end a child without its parent: a drop, or a `close-unowned` of a received child.
+- **Done tests' later moves** (`close-parent` and the move of a parent to `needs-you`) go through the same writer, so
+  the stamp never fights them: a parent they move out of a clocked state needs no clock.
+
 ## 10. Cross-plan seams
 
 This section names what this plan takes from other pieces, and what it hands them.
 
 | Piece | What this plan takes or hands | Direction |
 |---|---|---|
-| Private store B | `moveMessage`, `messageById`, `sha256Of`, the boot pass and its `CitationRead` port | takes; adds the measured adapter and the `spent` arm |
+| Private store B | `moveMessage`, `recordRead`, the boot pass and its `CitationRead` port | takes; adds `citedMessageFacts` with its ledger line, the measured adapter, the `spent` arm and the restore floor's input |
 | Sequence A, B | `stampSequenceInTx`, `SEQUENCE_KIND_MAP`, the stamp census; `INVARIANT_MAP`, its gatherer | takes; adds `request` and I12 |
 | Row revisions | The census of writers of revised tables | adds `overlord_requests`. Whichever lands second adds the row |
 | Gates A, B | `OVERLORD_DOORS`, `overlordGateRun`, `CallerIdentity` | takes; adds four rows |
 | Act catalogue A, B | The four kinds, their ceilings, `overlordMayAct` | takes; `escalate-request` is its row (RQ13) |
-| Act rows A | The act writer, the natural key, the operation key | takes |
-| Act journal A | The `open-request` record, appended through the act writer | takes |
-| Act journal B | The highest request id after a restore (RQ10) | hands it `nextRequestId`'s second argument |
+| Act rows A | `writeActInTx` with its `opens` field, the natural key, the operation key | takes; the open door inserts its row first and passes `opens` (RQ18) |
+| Act journal A | The `open-request` record, appended through the act writer after the request row (`open-request-after-its-row`) | takes |
+| Act journal B | The highest request id after a restore (RQ10), and the restore floor of messages to spend (F14) | hands it `nextRequestId`'s second argument and the boot pass's `restoreFloor` |
 | Decision model A | `gatherDecisions`, `decisionMarkOf` (RQ15) | takes |
-| Relay A | Calls `moveRequestInTx` with `route`, `re-relay` and `route-elsewhere`, and sets `owner`, `doneTest` and `expectedPaths` | hands |
+| Relay A | Calls the move writer (`planRequestMoveInTx`, then `applyRequestMoveInTx`) with `route`, `re-relay` and `route-elsewhere`, and sets `owner`, `doneTest` and `expectedPaths` | hands |
 | Request ids A | Adds the news writer, a bookkeeping writer of this store | hands |
-| Coordinator doors, done tests, operator's doors, follow-up | Call `moveRequestInTx` with their moves, and add their reason words | hand |
+| Coordinator doors, done tests, operator's doors, follow-up | Call the move writer with their moves, add their reason words, and add their file's row to the call-site census (F8) | hand |
 | Board W2 parts, home requests | Read through this store's readers | hand |
 | W1's board history (its history door) | `touched` becomes a verb its door also serves (RQ5) | adds |
 
@@ -634,12 +765,13 @@ This section lists the rules every task keeps and what a reviewer should check f
 
 - **One writer per fact.** `overlordRequestStore.ts` is the only file that writes the three tables, and
   `writers-map.test.ts` names each writer function. A later piece adds a writer there, never elsewhere.
+- **Nothing refuses after the journal record** (RQ18). Every check that can refuse runs inside the transaction and
+  before the act writer's append, and an apply step cannot refuse.
 - **Decide in L1, act in L4.** The handlers in `overlordRoutes.ts` read, call the deciders and call the writers. Every
   rule of §5 to §7 is in an L1 or L0 file.
 - **Rings by imports.** `shared/overlordRequests.ts` imports only `./` modules, and every exported literal union has a
-  `Record<X, true>` map (`rings/wire-totality.test.ts`). The deciders import no `node:*` module but `node:crypto`'s
-  hash, through the private store's `sha256Of`, which PR A exports from `server/src/operatorModel/messages.ts` (today a
-  module-local constant on private store A's branch), so no second hash is written.
+  `Record<X, true>` map (`rings/wire-totality.test.ts`). The deciders import no `node:*` module. The one rehash is
+  the private store's, inside `citedMessageFacts` (RQ19).
 - **No operator words in `coord.db`.** Message ids and hashes only. The summary, the news and the close note are the
   Overlord's or a coordinator's words, masked.
 - **No overloaded null.** A failed private store read is `unmeasured`, never `absent`. An unread `touched` is
@@ -650,10 +782,13 @@ This section lists the rules every task keeps and what a reviewer should check f
 **Review focus:**
 
 1. `REQUEST_TRANSITIONS` against Table 5.1b, edge by edge, and Figure 2 against the spec's Figure 3.
-2. The one-root index: two concurrent opens citing one message must give one request and one `said-not-operator`.
-3. The guards of Table 5: no Overlord move on a taken row, and no drop from `needs-you` before the operator's answer.
-4. The `spent` arm never unspends.
-5. The shortlist's fail-open property, and the `touched` reader's deadline.
+2. The order inside the transaction (RQ18): every refusal before the first journal append, and the race test's journal
+   count.
+3. The guards of Table 5, in their order: no Overlord move on a taken row, and no Overlord move on `needs-you` before
+   the operator's answer.
+4. The parent's clock when its last child ends (F2), and I12's test for it.
+5. The `spent` arm never unspends, and spends up to the restore floor only when one is given.
+6. The shortlist's fail-open property, and the one `touched` read's budget against the agent's one slot.
 
 ## 12. The PR split
 
@@ -661,7 +796,7 @@ This section gives the two pull requests, their files and their growth against t
 
 | PR | Tasks | Ships | Needs first |
 |---|---|---|---|
-| A | A1 to A4 | The three tables, `REQUEST_TRANSITIONS`, the deciders, the one insert and move writer, the `request` sequence kind, the boot pass's citation reader and `spent` arm, I12 | Private store B, sequence A and B |
+| A | A1 to A4 | The three tables, `REQUEST_TRANSITIONS`, the deciders, the insert and move writers as plan and apply, the `request` sequence kind, the call-site census, `citedMessageFacts`, the boot pass's citation reader, `spent` arm and restore floor, I12 | Private store B, sequence A and B |
 | B | B1 to B5 | The code shortlist and its reader, `touched` on the history op, the four doors, their `ccrc-api` and `DOOR_TOOLS` rows | PR A, gates B, act rows A, act journal A, act catalogue B, decision model A |
 
 *Table 11. The pull requests. Decision model A is added to PR B's needs (RQ15).*
@@ -707,7 +842,8 @@ Each task is red first, then green, then its mutation step where it adds a guard
 **Files:**
 - Create: `shared/overlordRequests.ts`
 - Create: `server/test/overlord-requests-transitions.test.ts`
-- Modify: `server/test/single-definition/time-ports.test.ts` (`TIME_PORT_FILES`: the new file)
+- No `TIME_PORT_FILES` row: `shared/overlord*.ts` is already in `TIME_PORT_FAMILIES`
+  (`server/test/single-definition/time-ports.test.ts`).
 
 **Interfaces:**
 
@@ -748,6 +884,7 @@ export const SHORTLIST_MAX: 6;
   - **Close apart:** `close` and `close-unverified` are separate rows with different targets.
   - **Fields:** every move to a terminal state lists `closeNote`, and only the three relay moves list `doneTest`.
   - **Reasons:** `ESCALATE_REASONS` is the three words of index question 7.
+  - **Withdraw:** `withdraw`'s `from` equals the derived `OPEN_REQUEST_STATES`, so a new open state cannot miss it.
 - [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/overlord-requests-transitions.test.ts`.
 - [ ] **Step 3: Implement** `shared/overlordRequests.ts`. Every list is derived from its key map, never kept by hand.
 - [ ] **Step 4: Run green**, then `rings/wire-totality`, `rings/shared-imports` and `single-definition/time-ports`, one
@@ -762,13 +899,14 @@ export const SHORTLIST_MAX: 6;
 - Create: `server/src/coord/overlordRequests.ts`
 - Create: `server/test/overlord-requests-policy.test.ts`, `server/test/requestCases.ts`, `server/test/sim/requestSets.ts`
 - Modify: `server/test/sim/mutation-floors.test.ts` (`MUTANT_SETS` spreads `REQUEST_MUTANT_SETS`),
-  `server/test/sim/mutation-floors.json`, `server/test/single-definition/time-ports.test.ts`
+  `server/test/sim/mutation-floors.json`. No `TIME_PORT_FILES` row: `server/src/coord/overlord*.ts` is in
+  `TIME_PORT_FAMILIES`.
 
 **Interfaces:**
 
 ```ts
 // server/src/coord/overlordRequests.ts (C5, L1)
-export type RequestMoveRefusal = 'wrong-actor' | 'not-from' | 'not-answered' | 'taken' | 'not-taken-from'
+export type RequestMoveRefusal = 'taken' | 'not-answered' | 'not-from' | 'wrong-actor' | 'not-taken-from'
   | 'not-acknowledged' | 'has-open-children' | 'field-not-allowed';
 export type RequestMoveCtx = { answered: boolean; takenFrom: RequestState | null; ownerAcknowledged: boolean;
   openChildren: number; fields: readonly RequestColumn[] };
@@ -776,55 +914,75 @@ export function nextRequestState(state: RequestState, move: RequestMove, actor: 
   { ok: true; to: RequestState } | { ok: false; why: RequestMoveRefusal };
 export function followUpAfterMove(m: { to: RequestState; openChildren: number; at: number;
   promiseAt: number | null }): number | null;
-export function answeredSinceNeedsYou(moves: readonly { move: RequestMove; toState: RequestState }[]): boolean;
+/** The parent's clock after a move of one of its children (F2): an hour on, or none. */
+export function parentClockAfterChildMove(p: { parentState: RequestState; openChildrenAfter: number; at: number }):
+  number | null;
+export function answeredSinceNeedsYou(moves: readonly { move: RequestMove; fromState: RequestState | null;
+  toState: RequestState }[]): boolean;
 export function closeUnownedVerdict(f: { state: RequestState; actKindsOnIt: readonly string[];
   openChildren: number }): 'allow' | 'has-acts' | 'has-open-children' | 'not-received';
 export function citationVerdict(c: { root: boolean; rootCites: ReadonlySet<number> | null; now: number;
-  rows: readonly { id: number; read: 'ok' | 'absent' | 'unmeasured'; state?: string; at?: number;
-  sha256?: string; rehash?: string }[] }): CitationAnswer;
+  ids: readonly number[];
+  facts: ReadonlyMap<number, { read: 'ok'; state: string; at: number; sha256: string; hashMatches: boolean }
+    | { read: 'absent' } | { read: 'unmeasured'; why: string }> }): CitationAnswer;
 export function nextRequestId(storeHighest: number | null, journalHighest: number | null): number;
 ```
 
 - [ ] **Step 1: Write the failing tests**, an exhaustive table per decider in `requestCases.ts`:
-  - `nextRequestState` over every state, move, actor and guard fact (the cube, as `ledgers-policy.test.ts` does for
-    items), with the refusal order of Table 5;
-  - `followUpAfterMove` over every target state, with and without a promise and an open child;
-  - `answeredSinceNeedsYou`: true only for an `answer-recorded` after the last move into `needs-you`;
-  - `closeUnownedVerdict`: Table 8's close rule;
-  - `citationVerdict`: every row of Table 6, in its order, with an `unmeasured` read never answered as absent;
-  - `nextRequestId`: both nulls, either null, and the larger of the two;
-  - **monotonicity:** a fact that is unknown or worse never turns a refusal into an allow.
+  - **`nextRequestState`:** every state, move, actor and guard fact (the cube, as `ledgers-policy.test.ts` does for
+    items). The order is Table 5's: an Overlord move on a taken row is `taken`, and on a `needs-you` row the operator
+    has not answered it is `not-answered`, before `from` and the actor are read (F5). So a close or an escalate on a
+    taken or unanswered row answers `operator-has-it` at the door, never `bad-transition`.
+  - **`followUpAfterMove`:** every target state, with and without a promise and an open child.
+  - **`parentClockAfterChildMove`:** an hour on for a `received` or `in-progress` parent left with no open child, and
+    none otherwise (F2).
+  - **`answeredSinceNeedsYou`:** true only for an `answer-recorded` after the last move into `needs-you`. "Into" means a
+    move whose `fromState` is not `needs-you`, so the `answer-recorded` self-loop never counts as an entry (F9).
+  - **`closeUnownedVerdict`:** the close rule of RQ12.
+  - **`citationVerdict`:** every row of Table 6, in its order. The bounds come before any read, and an `unmeasured`
+    read is never answered as absent.
+  - **`nextRequestId`:** both nulls, either null, and the larger of the two.
+  - **Monotonicity:** a fact that is unknown or worse never turns a refusal into an allow.
 - [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/overlord-requests-policy.test.ts`.
 - [ ] **Step 3: Implement.** Each decider is first match and total, and takes the time as an argument.
 - [ ] **Step 4: Run green.** Register each decider in `requestSets.ts` and `mutation-floors.json` at floor 1, then run
   `ccrc test -- ./node_modules/.bin/vitest run test/sim/mutation-floors.test.ts`. Every mutant dies.
 - [ ] **Step 5: Commit.**
 
-### Task A3: The migration, the one insert and the move writer (L3, PR A)
+### Task A3: The migration, the one insert and the move writer, each a plan and an apply (L3, PR A)
 
 **Files:**
-- Create: `server/src/coord/overlordRequestStore.ts`, `server/test/overlord-request-store.test.ts`
+- Create: `server/src/coord/overlordRequestStore.ts`, `server/test/overlord-request-store.test.ts`,
+  `server/test/single-definition/request-move-callers.test.ts`
 - Modify: `server/src/coord/schema.ts` (one migration), `server/test/coord-db.test.ts` (the version pins and the
   entry's comment line), `server/test/run-close-switch.test.ts` (three `DROP TABLE`s, and the replay count in its
   prose), `server/test/single-definition/writers-map.test.ts` (`TABLES` and the writers of the three tables),
   `shared/overlord-sequence.ts` (the `request` row), `server/test/sequence-stamp-census.test.ts` (`STAMPED_TABLES`),
-  `server/test/single-definition/row-revisions.test.ts` (the `overlord_requests` writers), `TIME_PORT_FILES`
+  `server/test/single-definition/row-revisions.test.ts` (the `overlord_requests` writers)
 
 **Interfaces:**
 
 ```ts
 // server/src/coord/overlordRequestStore.ts (C5, L3). The one owner of the three tables' SQL.
-export function insertRequestInTx(db: DatabaseSync, r: { id: number; origin: 'operator' | 'overlord';
-  summary: string; parentRequestId: number | null; consulted: readonly string[];
-  expectedPaths: readonly ExpectedPath[]; cites: readonly { messageId: number; sha256: string; root: boolean }[];
-  actor: string; actId: number | null; at: number }): { ok: true; row: RequestRow; seq: number }
-  | { ok: false; why: 'one-root-taken' | 'parent-not-open' | 'parent-is-child' | 'stamp-refused'; detail: string };
-export function moveRequestInTx(db: DatabaseSync, m: { id: number; move: RequestMove; actor: RequestActor;
+/** Read-only, inside the caller's tx(): everything that can refuse an insert (F1). */
+export function planRequestInsertInTx(db: DatabaseSync, r: { origin: 'operator' | 'overlord'; summary: string;
+  parentRequestId: number | null; consulted: readonly string[]; expectedPaths: readonly ExpectedPath[];
+  cites: readonly { messageId: number; sha256: string; root: boolean }[]; journalHighest: number | null;
+  actor: RequestActor; actorId: string; at: number }):
+  { ok: true; plan: RequestInsertPlan }
+  | { ok: false; why: 'root-taken' | 'parent-not-open' | 'parent-is-child'; detail: string };
+/** Applies a plan made in the same tx(). Writes the row, its citations and its `open` move (actId null), and stamps. */
+export function applyRequestInsertInTx(db: DatabaseSync, plan: RequestInsertPlan): { row: RequestRow; seq: number };
+/** Read-only, inside the caller's tx(): the row, its revision, nextRequestState and the fields (F1). */
+export function planRequestMoveInTx(db: DatabaseSync, m: { id: number; move: RequestMove; actor: RequestActor;
   actorId: string; at: number; expectRevision: number | null; reason: RequestMoveReason | null;
-  actId: number | null; promiseAt: number | null; set: Partial<Record<RequestColumn, unknown>> }):
-  { ok: true; row: RequestRow; move: RequestMoveRow; seq: number | null }
-  | { ok: false; why: 'not-found' | 'stale-revision' | RequestMoveRefusal | 'stamp-refused';
-      row: RequestRow | null; lastMove: RequestMoveRow | null };
+  promiseAt: number | null; set: Partial<Record<RequestColumn, unknown>> }):
+  { ok: true; plan: RequestMovePlan }
+  | { ok: false; why: 'not-found' | 'stale-revision' | RequestMoveRefusal; row: RequestRow | null;
+      lastMove: RequestMoveRow | null };
+/** Applies a plan made in the same tx(): the row, the move row with actId, the parent's clock (F2), and the stamp. */
+export function applyRequestMoveInTx(db: DatabaseSync, plan: RequestMovePlan, actId: number | null):
+  { row: RequestRow; move: RequestMoveRow; seq: number | null };
 export function requestById(db: DatabaseSync, id: number): RequestRow | 'absent';
 export function movesOf(db: DatabaseSync, id: number): readonly RequestMoveRow[];
 export function openRequests(db: DatabaseSync): readonly RequestRow[];
@@ -832,54 +990,92 @@ export function highestRequestId(db: DatabaseSync): number | null;
 export function citedMessagesForBoot(db: DatabaseSync): { cited: ReadonlySet<number>; rootCited: ReadonlySet<number> };
 ```
 
+Inside the module, one private `appendMove(db, row)` writes `overlord_request_moves` for both appliers (F7). The insert
+takes a `RequestActor` like the move, so `open` passes the actor check of its `REQUEST_TRANSITIONS` row and fills the
+move row's `actorKind` and the line's actor kind. An apply re-runs its plan's decider on the rows it reads, and throws
+if the answer differs. Inside the caller's transaction that throw rolls everything back. It is a programming error,
+never a refusal word.
+
 - [ ] **Step 1: Measure the slot**, then write the failing tests:
   `git fetch origin main && git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`.
-  - **Insert:** writes `received`, its cited messages and its `open` move row, and stamps one `request` line. A second
-    root request citing a root-cited message answers `one-root-taken` and writes nothing. A child of a child answers
-    `parent-is-child`. A child clears its parent's `followUpAt`.
-  - **Move:** each move goes through `nextRequestState`. A refusal writes nothing. A stale `expectRevision` answers
-    `stale-revision` with the row and its last move. A success raises `revision` by one and writes a move row. It sets
-    `followUpAt` by `followUpAfterMove`, sets `closedAt` on a terminal state, and stamps a line only when the state
-    word changes. A field not in `REQUEST_MOVE_FIELDS` answers `field-not-allowed`.
-  - **Outside a transaction,** both writers refuse, because `stampSequenceInTx` does. A refused stamp rolls the row
-    back.
-  - **The censuses** go red until the rows are added: writers-map, the stamp census (the self-loops listed as stamping
-    nothing, with their reason) and row revisions (`moveRequestInTx` raises, nothing else does).
+  - **Insert:** the plan refuses a root citation another root request holds (`root-taken`), a closed parent, and a
+    child of a child, and writes nothing. The apply writes `received` with its own `followUpAt` an hour on (F6), its
+    cited messages, and its `open` move row with `actId` null. It stamps one `request` line. A child clears its
+    parent's `followUpAt`.
+  - **Move:** each move goes through `nextRequestState`. The plan refuses and writes nothing. A stale `expectRevision`
+    answers `stale-revision` with the row and its last move. The apply raises `revision` by one and writes a move row
+    with the act id it was given. It sets `followUpAt` by `followUpAfterMove`, and `closedAt` on a terminal state. It
+    stamps a line only when the state word changes, so a self-loop stamps nothing (pinned here, because the stamp census lists writer functions). A field not in
+    `REQUEST_MOVE_FIELDS` answers `field-not-allowed`.
+  - **The parent's clock (F2):** dropping a child, or closing it unowned, when it is its parent's last open child,
+    stamps the parent's `followUpAt` an hour on in the same transaction. The parent's `revision` does not move.
+  - **Apply agrees with plan:** an apply given a plan whose row changed under it throws. The test builds that case by
+    hand, since a real transaction cannot see it.
+  - **The unique index backstop:** a planted second root citation, written past the plan, is refused by
+    `overlord_request_messages_one_root`.
+  - **Outside a transaction,** every function refuses, as `stampSequenceInTx` does.
+  - **The censuses** go red until the rows are added: writers-map, the stamp census (the two appliers) and row
+    revisions (`applyRequestMoveInTx` raises, nothing else does).
+  - **The call sites (F8):** `request-move-callers.test.ts` scans `server/src` for every call of `planRequestMoveInTx`
+    and `planRequestInsertInTx`, and holds each call's literal `actor` to its file's door group. `overlordRoutes.ts` may
+    pass only `'overlord'`, the coordinator doors only `'owner'`, the operator's doors only `'operator'`, and the lane
+    modules only `'server'`. An actor that is not a literal is red. Today the census has no caller and passes, and each
+    later piece adds its file's row.
 - [ ] **Step 2: Run red**, one file at a time: `overlord-request-store`, `coord-db`, `run-close-switch`,
-  `single-definition/writers-map`, `sequence-stamp-census`, `single-definition/row-revisions`.
-- [ ] **Step 3: Implement** the migration (compact, as entry 82 is, with no vocabulary in a CHECK) and the store.
+  `single-definition/writers-map`, `sequence-stamp-census`, `single-definition/row-revisions`,
+  `single-definition/request-move-callers`.
+- [ ] **Step 3: Implement** the migration (compact, as entry 82 is, with no CHECK on vocabulary or on `closeNote`, F10)
+  and the store.
 - [ ] **Step 4: Run green**, the same files, then `growth-check` (schema.ts within 40) and `typecheck-tests`.
-- [ ] **Step 5: Mutation.** Drop the one-root index from the migration: the concurrent-open test reds. Remove the
-  revision raise: the stale-revision test reds. Remove the stamp call: the stamp census reds. Restore each.
+- [ ] **Step 5: Mutation.** Drop the root check from the insert plan: the `root-taken` test reds before the index is
+  reached. Remove the revision raise: the stale-revision test reds. Remove the parent's clock stamp: the F2 test reds.
+  Remove the stamp call: the stamp census reds. Restore each.
 - [ ] **Step 6: Commit.**
 
-### Task A4: The boot pass's citation reader and `spent` arm, and I12 (PR A)
+### Task A4: The private store's citing reader, the boot pass's arms, and I12 (PR A)
 
 **Files:**
-- Modify: `server/src/operatorModel/bootPass.ts` (`CitationRead`'s measured arm gains `rootCited`),
-  `server/src/operatorModel/messages.ts` (`bootSettlement` gains `spend`, and `sha256Of` is exported for the open
-  door), `server/src/index.ts` (wire
-  `citedMessagesForBoot` as the port's adapter), `server/src/coord/invariants.ts` (I12's predicate),
-  `server/src/coord/invariantFacts.ts` (its gatherer), `server/test/sim/sequenceSets.ts` and `mutation-floors.json`
-- Create: `server/test/request-citations-boot.test.ts`, `server/test/invariant-i12.test.ts`
+- Modify:
+  - `shared/operatorMessages.ts`: `READ_DOOR_MAP` gains `open-request`;
+  - `server/src/operatorModel/store.ts`: `citedMessageFacts`, which rehashes and writes a read-ledger line (F11);
+  - `server/src/operatorModel/bootPass.ts`: `CitationRead`'s measured arm gains `rootCited` and `restoreFloor`;
+  - `server/src/operatorModel/messages.ts`: `bootSettlement` gains `spend`;
+  - `server/src/index.ts`: wires `citedMessagesForBoot` as the port's adapter, with `restoreFloor` null;
+  - `server/src/coord/invariants.ts` (I12's predicate), `server/src/coord/invariantFacts.ts` (its gatherer);
+  - `server/test/sim/sequenceSets.ts` and `mutation-floors.json`.
+- Create: `server/test/cited-message-facts.test.ts`, `server/test/request-citations-boot.test.ts`,
+  `server/test/invariant-i12.test.ts`
 
 - [ ] **Step 1: Write the failing tests.**
-  - **Boot:** a root-cited row in `settled` answers `spend`. A cited row in `delivered` settles as a `cite`. A `spent`
-    row with no root citation stays `spent`. A table not yet migrated answers `not-applicable`, and a read that throws
-    answers `unmeasured`, which changes nothing.
-  - **I12:** every row of Table 9, a parent whose open children hold, a parent with one child that fails, a planted
-    cycle (a finding, no loop), and monotonicity: an extra open child with a clock never removes a finding from
-    another request.
-- [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/request-citations-boot.test.ts`, then
-  `invariant-i12`, then `invariants` (the table's two-way check against Table 11.7a).
-- [ ] **Step 3: Implement.** The `spent` arm calls `moveMessage(id, 'spend', 'boot-pass', at)`, which private store's
-  actor map already allows.
-- [ ] **Step 4: Run green**, then `sim/mutation-floors`, `rings/totality`, `rings/outward-edges`, `anchors`, `citations`
-  and `typecheck-tests`.
-- [ ] **Step 5: Mutation.** Remove the `spend` arm: the boot test reds. Make the predicate accept a missing clock: I12's
-  table reds.
-- [ ] **Step 6: Commit and push once** (worker clause 20). Open PR A against `main`. Its body names RQ1 to RQ11, says
-  nothing is reachable, and gives the migration's measured slot.
+  - **`citedMessageFacts`:**
+    - it answers `hashMatches` true for a stored row and false for a planted text change;
+    - it answers `absent` for no row and for a `gone` one;
+    - it writes exactly one read-ledger line, under `open-request`, per call;
+    - its answer type has no field that carries text: a type-level test fails if one is added.
+  - **Boot:**
+    - a root-cited row in `settled` answers `spend`, and a cited row in `delivered` settles as a `cite`;
+    - a `spent` row with no root citation stays `spent`;
+    - with `restoreFloor` 40, rows up to 40 answer `spend` and row 41 does not;
+    - with `restoreFloor` null, nothing is spent by the floor;
+    - a table not yet migrated answers `not-applicable`, and a read that throws answers `unmeasured`, which changes
+      nothing.
+  - **I12:**
+    - every row of Table 9;
+    - a parent whose open children hold;
+    - a parent with one child that fails;
+    - a parent whose last child was dropped, or closed unowned: it holds, through the parent's restamped clock (F2);
+    - a planted cycle: a finding, and no loop;
+    - monotonicity: an extra open child with a clock never removes a finding from another request.
+- [ ] **Step 2: Run red**, one file at a time: `cited-message-facts`, `request-citations-boot`, `invariant-i12`, then
+  `invariants` (the table's two-way check against Table 11.7a).
+- [ ] **Step 3: Implement.** The `spent` arm calls `moveMessage(id, 'spend', 'boot-pass', at)`, which the private
+  store's actor map already allows.
+- [ ] **Step 4: Run green**, then `sim/mutation-floors`, `rings/totality`, `rings/outward-edges`,
+  `privacy-journal-census`, `anchors`, `citations` and `typecheck-tests`.
+- [ ] **Step 5: Mutation.** Remove the `spend` arm: the boot test reds. Drop the ledger line: its test reds. Make the
+  predicate accept a missing clock: I12's table reds.
+- [ ] **Step 6: Commit and push once** (worker clause 20). Open PR A against `main`. Its body names RQ1, RQ2, RQ6, RQ7,
+  RQ9 to RQ11, RQ18 and RQ19, says nothing is reachable, and gives the migration's measured slot.
 
 **PR A ends here.**
 
@@ -888,10 +1084,12 @@ export function citedMessagesForBoot(db: DatabaseSync): { cited: ReadonlySet<num
 **Files:**
 - Create: `server/src/coord/requestShortlist.ts`, `server/test/request-shortlist.test.ts`,
   `server/test/shortlistCases.ts`
-- Modify: `server/test/sim/requestSets.ts`, `mutation-floors.json`, `TIME_PORT_FILES`
+- Modify: `server/test/sim/requestSets.ts`, `mutation-floors.json`, and `TIME_PORT_FILES`, which gains
+  `server/src/coord/requestShortlist.ts` (outside the `overlord*` family)
 
-- [ ] **Step 1: Write the failing tests:** every row of Table 7, and the five properties of §7 (monotone, fail-open,
-  capped, no goals, deterministic) as fast-check properties over generated claims and hits.
+- [ ] **Step 1: Write the failing tests:** every row of Table 7, the directory rule of step 4 (a directory expected path
+  meets claims and never `touched`), and the five properties of §7 (monotone, fail-open, capped, no goals,
+  deterministic) as fast-check properties over generated claims and hits.
 - [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/request-shortlist.test.ts`.
 - [ ] **Step 3: Implement**, reusing `pathsOverlap` and `normalizeClaimPath`. No second matcher.
 - [ ] **Step 4: Run green**, then `sim/mutation-floors`.
@@ -902,47 +1100,70 @@ export function citedMessagesForBoot(db: DatabaseSync): { cited: ReadonlySet<num
 ### Task B2: `touched` on the history op, and the shortlist's reader (L3, PR B)
 
 **Files:**
-- Modify: `shared/overlordHistory.ts` (`HISTORY_VERB_MAP` gains `touched`), `ccd/history/overlord-read.mjs`
-  (`CLI_VERB` gains `touched: 'touched'`), `server/test/overlord-read.test.ts`
+- Modify:
+  - `shared/overlordHistory.ts`: `HISTORY_VERB_MAP` gains `touched`;
+  - `ccd/history/overlord-read.mjs`:
+    - `CLI_VERB` gains `touched: 'touched'`;
+    - `VERBS` gains a `touched` runner over `recall.mjs`'s touched read, taking up to eight paths with its budget and
+      keeping `candidatesCapped` (F4, F3);
+  - `server/test/overlord-read.test.ts`;
+  - `server/test/overlord-read-scope.test.ts`, which pins `overlord-read.mjs`'s import set and gains the touched
+    runner's import (F4);
+  - `TIME_PORT_FILES`, which gains `server/src/coord/requestShortlistRead.ts`.
 - Create: `server/src/coord/requestShortlistRead.ts`, `server/test/request-shortlist-read.test.ts`
 
-- [ ] **Step 1: Measure first:** that a `touched` row in the op's `rows` answer keeps its session's ccrc id. If it does
-  not, the reader maps nothing, and the plan's RQ5 goes back to the coordinator before Step 2.
-- [ ] **Step 2: Write the failing tests:**
-  - the op accepts `touched` and refuses a regex as before;
-  - the reader maps a ccrc id through `runs.sessionId`, then `runs.claimedBy`, and drops an unmapped one;
-  - it makes at most eight reads, and answers `partial` past the deadline and `unmeasured` when none answered;
-  - `claimsByProgramme` drops a claim with no run and an expired one.
-- [ ] **Step 3: Run red**, one file at a time, `request-shortlist-read`, then `overlord-read`.
-- [ ] **Step 4: Implement.** The deadline is a local of the call (L3, not a scheduler).
-- [ ] **Step 5: Run green**, then `rings/outward-edges` and the agent's own `overlord-history` tests from `agent/`:
-  `ccrc test -- ./node_modules/.bin/vitest run test/overlord-history-op.test.ts`.
-- [ ] **Step 6: Commit.**
+- [ ] **Step 1: Write the failing tests:**
+  - the op accepts `touched` with up to eight paths in one request, and refuses a regex as before;
+  - the runner stops between paths after `TOUCHED_OPEN_BUDGET_MS` and answers `partial` (`budget`), so the worker exits
+    and frees the slot;
+  - a capped read, and an answer whose `shown` is below its `total`, answer `partial` (`shown-below-total`);
+  - more than eight expected paths read the first eight in stated order and answer `partial` (`more-than-eight`);
+  - a `busy` op answer reads `unmeasured` (`busy`), and a wait past `TOUCHED_OPEN_WAIT_MS` reads `unmeasured`
+    (`deadline`), through a fake time port;
+  - a ccrc id maps through `runs.sessionId` and `runs.claimedBy`, an id in runs of two programmes counts toward both,
+    and an unmapped id is dropped;
+  - `claimsByProgramme` drops a claim with no run and an expired one;
+  - `liveProgrammes` keeps `active`, `paused` and `unknown`, and drops `done` and `abandoned`.
+- [ ] **Step 2: Run red**, one file at a time: `request-shortlist-read`, `overlord-read`, `overlord-read-scope`.
+- [ ] **Step 3: Implement.** The door's wait reads the time port, and its handle is a local of the call (L3, not a
+  scheduler).
+- [ ] **Step 4: Run green**, then `rings/outward-edges`, `single-definition/time-ports`, and the agent's own op tests
+  from `agent/`: `ccrc test -- ./node_modules/.bin/vitest run test/overlord-history-op.test.ts`.
+- [ ] **Step 5: Commit.**
 
 ### Task B3: The open door (L4, PR B)
 
 **Files:**
 - Modify: `server/src/coord/overlordRoutes.ts` (the handler), `server/src/coord/overlordDoors.ts` (the
-  `open-request` row), `server/src/index.ts` (its deps)
+  `open-request` row), `server/src/index.ts` (its deps), the call-site census (`overlordRoutes.ts` passes `'overlord'`)
 - Create: `server/test/overlord-request-open.test.ts`
 
-- [ ] **Step 1: Write the failing tests**, with the gate stubbed to pass and with doubles for the private store, the
-  agent and the decision model:
-  - a root request citing two settled messages opens, spends both after the commit, and answers the shortlist and the
-    marks;
-  - every row of Table 6 answers its word, and an unreadable private store answers `unmeasured`, never
-    `said-not-operator`;
-  - two opens racing on one message give one request and one `said-not-operator` (`spent`);
-  - a failed `moveMessage` after the commit still answers the request, and is logged;
-  - a body over a bound answers `too-large`, and a body that names `fromId` is refused by the client, not the door;
-  - with every decision row `off`, the open door makes no model call;
-  - an open request with no citation is `origin: overlord`.
+- [ ] **Step 1: Write the failing tests**, with the gate stubbed to pass, and doubles for the private store, the agent,
+  the decision model and the act journal port. The journal double counts its appends.
+  - **The happy path:** a root request citing two settled messages opens, spends both after the commit, and answers
+    the shortlist and the marks.
+  - **The citations:** every row of Table 6 answers its word. An unreadable private store answers `unmeasured`, never
+    `said-not-operator`.
+  - **The race (F1):** two opens citing one message give one request and one `said-not-operator` (`spent`). The
+    losing open is refused by `planRequestInsertInTx`, before any journal append: the journal double counts exactly
+    one `act-settle` and one `act-open-request`, and no fence is raised.
+  - **The order:** the request row is inserted before the act writer runs. The `open` move row carries `actId` null,
+    and the act row's `opens` equals the request's id. A test reads the link back through the act, as the ruling asks.
+  - **After the commit:** a failed `moveMessage` still answers the request, and is logged.
+  - **The body:** a body over a bound answers `too-large`. An expected path that `normalizeClaimPath` refuses, or one
+    holding `*`, `?` or `[`, answers `bad-request` (F12). A body that names `fromId` is refused by the client, not the
+    door.
+  - **The decision model:** with every decision row `off`, the open door makes no model call and reads no goals. With
+    `programme.pick` in shadow, it reads each candidate's goals through `goalsFor` (F15).
+  - **Its own request:** an open request with no citation is `origin: overlord`.
 - [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/overlord-request-open.test.ts`.
-- [ ] **Step 3: Implement** in the order of Figure 3. The gate call is the handler's first statement after the body
-  parse, as the gates census requires.
-- [ ] **Step 4: Run green**, then `overlord-doors-census`, `rings/fastify-l4` and `secret-mask`.
-- [ ] **Step 5: Mutation.** Move the private store read inside the transaction: the "slow reads before the
-  transaction" test reds. Fold `unmeasured` into absent: its test reds.
+- [ ] **Step 3: Implement** in the order of Figure 3 and §6. The gate call is the handler's first statement after the
+  body parse, as the gates census requires.
+- [ ] **Step 4: Run green**, then `overlord-doors-census`, `rings/fastify-l4`, `secret-mask` and
+  `single-definition/request-move-callers`.
+- [ ] **Step 5: Mutation.** Move the insert plan after the act writer: the race test's journal count reds. Move the
+  private store read inside the transaction: the "slow reads before the transaction" test reds. Fold `unmeasured`
+  into absent: its test reds.
 - [ ] **Step 6: Commit.**
 
 ### Task B4: The drop, close and escalate doors (L4, PR B)
@@ -951,23 +1172,28 @@ export function citedMessagesForBoot(db: DatabaseSync): { cited: ReadonlySet<num
 - Modify: `server/src/coord/overlordRoutes.ts` (three handlers), `server/src/coord/overlordDoors.ts` (three rows)
 - Create: `server/test/overlord-request-moves.test.ts`
 
-- [ ] **Step 1: Write the failing tests.**
-  - **Drop:** from `received` and `declined` it moves and writes the reason, masked. From `needs-you` before the
+- [ ] **Step 1: Write the failing tests**, with the act journal port's double counting appends:
+  - **Drop:** from `received` and `declined` it moves, and writes the reason, masked. From `needs-you` before the
     operator's answer it is `operator-has-it`, and after it the drop moves. From `routed` it is `bad-transition`.
   - **Close:** from `received` with no other act and no open child it moves to `done`. With a planted act of another
     kind on it, or an open child, it is `bad-transition`. From `in-progress` it is `bad-transition` (RQ12).
   - **Escalate:** from `received` and `declined` it moves to `needs-you` with its reason, writes an act row and sends
     no mail. An unknown reason is `bad-request`.
-  - **All three:** a stale revision is `operator-has-it` with the row and its last move. A taken row is
-    `operator-has-it`. An unknown id is `not-found`. Every success writes one act row, one move row, and one line when
-    the state word changes.
+  - **All three:**
+    - a stale revision is `operator-has-it`, with the row and its last move;
+    - a taken row, and an unanswered `needs-you` row, are `operator-has-it`, never `bad-transition` (F5);
+    - an unknown id is `not-found`;
+    - every refusal leaves the journal double's count at zero (F1);
+    - every success writes one act row, then one move row carrying that act's id, and one line when the state word
+      changes.
+  - **A child ended:** dropping or closing the last open child of a parent restamps the parent's clock (F2).
 - [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/overlord-request-moves.test.ts`.
 - [ ] **Step 3: Implement.** If act catalogue A landed without `escalate-request` (RQ13), add its row first (class
   none, reversible, refuse, allow, allow, the `request` ceiling group), with its three tests' rows.
 - [ ] **Step 4: Run green**, then `overlord-doors-census`, and the act catalogue's three tests (its single definition,
   its D-8126 class map and `overlord-act-compensators`).
 - [ ] **Step 5: Mutation.** Drop the `answered` guard: the drop-before-answer test reds. Skip the revision compare: the
-  stale test reds.
+  stale test reds. Move the plan after the act writer: the zero-append test reds.
 - [ ] **Step 6: Commit.**
 
 ### Task B5: The client rows, the skill's door tables and the censuses (PR B)
@@ -1013,6 +1239,17 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
   `answer-recorded`, so the drop and route-elsewhere guards can read it.
 - **`request-routes-file-with-its-first-route`:** the index has PR B create `requestRoutes.ts`. Its first route's piece
   creates it (RQ14).
+- **`decide-before-the-append`:** §7.6 appends each record "before the row" and says nothing of refusals. Every request
+  writer is a read-only plan and an apply, and every refusal comes before the first append (RQ18, ruled).
+- **`open-row-links-through-opens`:** §5.1's "every move is a row" would give the `open` move its act. The `open` move
+  row carries no act id, and the act's `opens` is the link, because the request row is inserted before its act
+  (RQ18, ruled).
+- **`parent-clock-restamped`:** §5.4 gives a parent no clock of its own. A parent left with no open child, before done
+  tests can move it, gets its clock back from the move writer, so I12 holds (F2, ruled).
+- **`one-touched-read-per-open`:** §5.3 matches every expected path against `touched`. One op call reads the first eight,
+  under a budget sized to the agent's one history slot (RQ5, ruled).
+- **`citing-reader-in-the-private-store`:** §9.4's citing doors read the message rows. They read facts with no text
+  through `citedMessageFacts`, which rehashes and leaves a ledger line (RQ19, ruled).
 
 ## What the index should change
 
@@ -1029,13 +1266,25 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
   ceiling group, 6 and 30 (RQ13, ruled).
 - **The architecture spec's path table:** no row is needed for `coord/**` or a `shared/*.ts` sibling. The index's "the
   new `shared/*.ts` siblings among them" can drop that clause (measured: the table has no `shared/` rows).
-- **Table 11.5b's spec-fix list** gains the starting values of RQ16.
+- **Table 11.5b's spec-fix list** gains the starting values of RQ16, and the budget of one `touched` read (4 s in the
+  runner, 5 s at the door).
+- **The act journal row and its question 4:** one order for the open door, reconciled with RQ18. The plan checks
+  everything inside the transaction, then inserts the request row, then the act writer appends with `opens`.
+- **The `server/src/coord/routes.ts` bullet:** drop "one registration line for `requestRoutes.ts` (request record B)",
+  following RQ14.
+- **A named owner for spending every message after a confirmed restore** (F14): request record A builds the boot pass's
+  arm with a `restoreFloor` input, and act journal B supplies the floor from Confirm the restore.
+- **Lane R's file list** also gains `ccd/history/overlord-read.mjs`'s `VERBS` map, `server/test/overlord-read-scope.test.ts`
+  (F4), and the private store's `citedMessageFacts` with its read door `open-request` (RQ19).
+- **Table W2's request record row:** F2's window is closed in PR A, because the move writer restamps a parent's clock,
+  so the row needs no note that a parent goes without a clock until done tests ships.
 
 ## States W3 may read
 
 - **`overlord_requests` and its two child tables,** `REQUEST_TRANSITIONS`, the move reasons and the fields each move
   may set. W3 adds reason words for the items it raises, and changes no move.
-- **`moveRequestInTx`,** the one writer every later move goes through. W5's start door calls it with `route` and adds
+- **The move writer** (`planRequestMoveInTx`, then `applyRequestMoveInTx`), the one writer every later move goes
+  through. W5's start door calls it with `route` and adds
   its own act kind.
 - **`citationVerdict` and the cited messages,** which W3's answer and brief doors reuse for `said-not-operator`.
 - **`codeShortlist`,** which W5's start door reads for `split-overlaps`.
@@ -1047,16 +1296,21 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
 - The index's ruling on the request record row, with F5, F6, Q2, Q5 as amended, Q7, Q13, Q27, Q28 and I12, built as
   stated.
 - RQ13: the escalate door's act kind is `escalate-request`, in the `request` ceiling group (the coordinator, run 2263).
+- Fix round 1 (review 2273), every finding folded, with the coordinator's rulings:
+  - F1 is RQ18;
+  - F2 is RQ6's parent clock;
+  - F3 is RQ5;
+  - F11 is RQ19;
+  - F4 to F10, F12 to F15 and the nits are folded where the report places them.
 - One table of moves, keyed by move, in the shape of `ITEM_TRANSITIONS`.
 
 **Waiting on the coordinator** (at this plan's review):
-- RQ1 to RQ17 but RQ13, each with its recommendation.
-- RQ5: building the `touched` reader in PR B rather than deferring it.
+- RQ1 to RQ17 but RQ13, each with its recommendation. RQ5, RQ18 and RQ19 are built as ruled in fix round 1.
 
 **Waiting on the operator:** nothing.
 
 **Later:**
 - The follow-up piece's `followUpDue` and the re-time, through this store.
 - W4's wipe, which moves every open request that cites only wiped messages to `needs-you` in the same step (§5.1),
-  through `moveRequestInTx` with a reason word of its own.
+  through the move writer with a reason word of its own.
 - W3's items on `needs-you`, and W5's start door.
