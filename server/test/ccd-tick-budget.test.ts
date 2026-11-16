@@ -143,6 +143,13 @@ import {
  *  bash 5.3): the narrow tick no longer returns at its top, it asks `_session_hard_blocked` first, which re-measures
  *  the pane (`_pane_measurable`, one `list-panes` and one `awk`) and reads the stale-press stamp, the cached `tscan`
  *  verdict and the transcript. Every other fixture is on a measurable pane and does not move. narrow 51/17 -> 57/19.
+ *
+ *  RAISED BY THE ACCOUNT ORGANIZATION TIE-BREAK (account organization plan, Task C1, slug `org-tie-break-only`; Linux
+ *  bash 5.3) FOR THE TWO LEAVING FIXTURES ONLY: `_swap_target`'s candidate loop asks the current account's label
+ *  (`_org_cur`, one `$(_acct_org …)`, a shell function, so no exec) once per call, and only at the first EQUAL score
+ *  in a bracket. Both leaving fixtures rank `claude` and `claude-d` at 30, so they tie; the label is unset, so the
+ *  answer is today's and nothing more is read. No other fixture's steady tick reaches a tie. leaving 113/43 -> 114/43 ·
+ *  fable-leaving 121/47 -> 122/47.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 90, execs: 33 },
@@ -152,8 +159,8 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'hard-blocked': { forks: 127, execs: 37 },
   cooldown: { forks: 65, execs: 24 },
   fable: { forks: 92, execs: 34 },
-  leaving: { forks: 113, execs: 43 },
-  'fable-leaving': { forks: 121, execs: 47 },
+  leaving: { forks: 114, execs: 43 },
+  'fable-leaving': { forks: 122, execs: 47 },
 };
 
 /** The `fable` fixture's steady tick for a session whose `poolset` exists (see its case), measured: 101/34 against `fable`'s 92/34. The pool rule's own set reads cost 6 of the 9
