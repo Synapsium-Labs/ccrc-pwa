@@ -31,6 +31,7 @@ Each is small and is recorded so the ledger and PR B read the code, not the plan
 | `decision-state-hash-of-fields` | `stateHash` is "SHA-256 of the canonical state sent" | The hash is of the row's fields before the encoder draws opaque ids. The state sent carries fresh opaque ids each call, so hashing it would make every key new and no record would ever be reused |
 | `decision-reserve-takes-no-kind` | `reserveDecisionCalls(db, rows, day, kind, calls)` | No `kind`: `reserved` is one column whatever the kind. `settleDecisionCalls` takes the kind and counts the attempts there |
 | `decision-boot-release-through-settle` | The boot step sets `reserved` to 0 for today and counts it as `maintain` | `releaseDecisionReservations` settles every day's stale reservation as maintenance through `settleDecisionCalls`, so `decision_days` keeps its two writers. Not wired at boot until PR B |
+| `decision-model-words-declared` | (not in the plan) | `mail-routes.test.ts` scans every quoted kebab word in `server/src/coord` and refuses one no vocabulary declares. The decision model's words are declared by lists: L0 gains `DECISION_MALFORMED_WHY` and `DECISION_QUESTION_TYPES`, L1 gains `DECISION_EGRESS_WORDS` and `DECISION_RECORDED_EGRESS`, and one guard, `decisionModel.ts#isDecisionModelWord`, derived from those lists and L0's others, admits them. `'content-type'`, a header name, joins the scan's `NOT_CODES` |
 | `decision-wire-not-re-read` | "The builder re-reads the vendor's own reference at build time" | Not re-read: the plan names no address for the reference, and the build reaches no network. The codec and the recorded fixture (`server/test/fixtures/decision-model/`) speak question 2's shape as the plan records it. PR B, or whoever sets the first host, checks the field names against the reference before a row goes to shadow |
 
 ## 2. What the plan left open, and how it is built
@@ -44,9 +45,9 @@ Each is small and is recorded so the ledger and PR B read the code, not the plan
 - **A swapped pair.** A both-order yes-or-no row puts its first two fields under opaque labels, and its two questions name
   the labels in swapped order before the catalogue's instruction ("The request is under x… The readback is under x…").
 - **The canary strings.** `DECISION_CANARY_OVERRIDES` holds five neutral override strings. PR B's canary uses them.
-- **The migration slot.** 84 by position (the coordinator's word, mail 21993): portfolio B (#2904) took 83, and this
-  branch merged `main` once to take the next slot, keeping both sides. Other open pull requests also hold 84; whoever
-  lands second renumbers at landing, on the coordinator's word.
+- **The migration slot.** 85 by position. Portfolio B (#2904) took 83, and this branch first merged `main` to take 84 (the
+  coordinator's word, mail 21993). Responses B (#2914) then landed 84, and this branch merged `main` a second time to take 85,
+  keeping both sides (the coordinator's word, mail 22094).
 
 ## 3. Measured
 
