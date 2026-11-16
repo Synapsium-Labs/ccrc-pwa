@@ -371,6 +371,25 @@ describe('the header and a banner name the version (refinement (q))', () => {
     expect(screen.queryByRole('link', { name: DOCS_HEAD_TEXT.openCommitted })).toBeNull();
   });
 
+  it.each([['the full head', 1280], ['the phone panel', 412]] as const)(
+    'View on GitHub on a version page carries the may-differ caution (%s)', async (_what, width) => {
+      atWidth(width);
+      // The default listing serves origin's side, equal to itself: without `at` GitHub's note is null.
+      const note = (): string | null => document.querySelector('.docs-action-note')?.textContent?.replace(/^≠/, '') ?? null;
+      open('/docs/demo/specs/a.md?ref=ws/a', versionLoaders());
+      expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+      await settle();
+      expect(document.querySelector('a.docs-action[href^="https://github.com/"]')).not.toBeNull();
+      expect(note()).toBeNull();
+      cleanup();
+      open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, versionLoaders());
+      expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+      await settle();
+      expect(document.querySelector('a.docs-action[href^="https://github.com/"]')).not.toBeNull();
+      expect(note()).toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+    },
+  );
+
   it('a version page\'s draft badge is not drawn', async () => {
     open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, drafted());
     expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();

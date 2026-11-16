@@ -540,12 +540,15 @@ function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'fil
 
 /** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
  *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
+ *  `onVersion`: a version page (rich-docs G6) shows the bytes at a commit and GitHub shows the branch, which may differ,
+ *  so the note stands there too.
  *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub". There the note is a
  *  marker (`≠`) that takes no room from the crumbs (fix round 1, F1): its words are its `title`, a screen reader's
  *  text inside it, and the link's accessible description. Under a coarse pointer, which has no hover to show a
  *  `title`, the row's note draws its words instead (review 1697 F5; Task C16, D-8139). */
 function GithubAction(p: {
-  readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
+  readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly onVersion: boolean;
+  readonly row?: boolean;
 }): ReactNode {
   const noteId = useId();
   const coarse = useMediaQuery(COARSE_POINTER_QUERY);
@@ -556,7 +559,7 @@ function GithubAction(p: {
     const off = fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] });
     return <span className="docs-action-off" title={row ? off : undefined}>{off}</span>;
   }
-  const noted = link.note === 'may-differ' || p.showsDraft;
+  const noted = link.note === 'may-differ' || p.showsDraft || p.onVersion;
   return (
     <>
       <a
@@ -677,11 +680,11 @@ function ShareAction(p: {
 function Actions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
   const { page, tree, file } = p;
   const row = p.form === 'row';
-  const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
+  const { target, showsDraft, onVersion, share, exported, committedHref } = useHeadActions(p);
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
-      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} row={row} />}
+      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} row={row} />}
       {share.s !== 'absent' && (
         <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row={row} />
       )}
@@ -716,6 +719,8 @@ interface ActionInputs {
 interface HeadActions {
   readonly target: GithubTarget | null;
   readonly showsDraft: boolean;
+  /** The page is a version page: View on GitHub carries its may-differ caution there (rich-docs G6). */
+  readonly onVersion: boolean;
   readonly share: ShareState;
   readonly exported: ExportState;
   readonly committedHref: string | null;
@@ -725,6 +730,7 @@ function useHeadActions(p: ActionInputs): HeadActions {
   const { page, tree, file } = p;
   const target = githubTargetFor(page, tree);
   const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
+  const onVersion = page.kind === 'path' && page.at !== null;
   const share = shareStateFor(page, tree, file, p.leafImage);
   const settled = useStoreSettled(p.pageStore);
   useAssetsVersion(p.exportAssets);
@@ -737,7 +743,7 @@ function useHeadActions(p: ActionInputs): HeadActions {
       committedHref = docsPageUrl(docsLocation(page, to));
     }
   }
-  return { target, showsDraft, share, exported, committedHref };
+  return { target, showsDraft, onVersion, share, exported, committedHref };
 }
 
 /** The Docs header. `tree` null has one meaning: the visit's tree slot is not `ok` (loading, failed, or the page names
@@ -1094,7 +1100,7 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
   const [open, setOpen] = useState(false);
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const { target, showsDraft, share, exported, committedHref } = useHeadActions({
+  const { target, showsDraft, onVersion, share, exported, committedHref } = useHeadActions({
     page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
     exportAssets: p.exportAssets, onPlainView: p.onPlainView,
   });
@@ -1141,7 +1147,7 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
         <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
         {(target !== null || committedHref !== null) && (
           <div className="docs-actions">
-            {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
+            {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
             {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
           </div>
         )}
