@@ -583,7 +583,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | M8.19 | Copy hygiene | Text with ESC, a bidi control or a zero-width character is never passed straight to `writeText`. The sheet shows each one as a marker, with the warning. Clean text is written directly. | Call `writeText` on any text |
 | M8.20 | Mermaid gate | A doc over the fence count or total cap gets no Mermaid inlined and shows its figures as source. A fence over the per-fence cap shows as source. | Inline Mermaid for every fence; skip a cap |
 | M8.21 | Render in the worker | The library's `render()` is called only through `docsRunner`. A render over budget terminates the worker and mounts no frame. | Call `render()` on the main thread; skip the budget |
-| M8.22 | `version` | `{sha}` opens the page at `at=<sha>`. `only` lands in `history.state` and never in the URL. The remount seeds that `only`, and the new frame's first `changes` asks for it. No `sha` drops `at=`. A non-hex value is refused. `navigate` never produces an `at=` URL. | Put `only` in the URL; accept short hex; drop `only` from the seed |
+| M8.22 | `version` | `{sha}` opens the page at `at=<sha>`. `only` lands in `history.state` and never in the URL. The remount seeds that `only`, and the new frame's first `changes` asks for it. No `sha` drops `at=`. A non-hex value is refused. A frame `navigate` carries `at` only by inheriting the page's (G6: a version page's in-document doc links keep the version); of the frame's ops, only `version` changes it (amended 2026-11-16; W5b-2). | Put `only` in the URL; accept short hex; drop `only` from the seed |
 
 ### 7.2 Real-browser rows (the `browser (pwa)` leg)
 

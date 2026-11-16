@@ -667,7 +667,7 @@ overlay          = mode === 'ref' && admitDraft(e, d)        // mode: 'default' 
 | `typechange` | the committed bytes | a note; the draft is never read |
 | `fp:null`, or `kind` `unreadable`, `symlink`, `directory`, `special`, `hardlink`, `foreign-owner`, `other-device` | the committed row (none for a new file) | withheld marker: `too-large`, `unreadable` or `not-a-file` |
 
-- **Open committed version.** It is offered iff the row opens the draft and `committed.kind` is `file` or `exec`. It navigates to the same leaf with `view=committed`, which opens `CommittedPin(ref.commit, ref.served, section, path)` from this visit's tree. The commit itself is never in the URL (§3.1).
+- **Open committed version.** It is offered iff the row opens the draft and `committed.kind` is `file` or `exec`, on a page that is not a version page; a version page (rich-docs G6) is committed already and offers none (amended 2026-11-16; W5b-2). It navigates to the same leaf with `view=committed`, which opens `CommittedPin(ref.commit, ref.served, section, path)` from this visit's tree. The commit itself is never in the URL (§3.1).
 - **One badge function.** Directory rows and leaf headers both call `entryView`, which closes the old disagreement between leaf and directory badges.
 - **Doors.** A session's "Docs on <branch>" link names the branch its worktree holds now (`FleetSession.branch`), never an assumed `ws/<slug>` (§4.8).
 
@@ -1839,7 +1839,7 @@ A leaf whose listed size exceeds `DOCS_CLASS_CAP[contentClass(path)]` (§6.1) sh
 | A version page (`at=`) | info | "Showing the version at {short}, not the latest on {served}." · **Back to the latest** (amended 2026-11-16; W5b-2) |
 | On a version page, the rows about the latest's drafts (the default and base hints, leaf withheld, `deleted` / `typechange`, `conflicted`, draft assets) | — | not shown: a version is one commit (amended 2026-11-16; W5b-2) |
 
-**Actions.** View on GitHub (3.11; opened with `openExternal` on tap). **Open committed version**, shown iff `entryView(...).offersCommitted`, navigates to the same leaf with `view=committed` (URL state, so Back returns to the draft and a reload keeps the choice; the commit itself is never in the URL, it is resolved from this visit's tree).
+**Actions.** View on GitHub (3.11; opened with `openExternal` on tap). **Open committed version**, shown iff `entryView(...).offersCommitted` and the page is not a version page (rich-docs G6; amended 2026-11-16; W5b-2), navigates to the same leaf with `view=committed` (URL state, so Back returns to the draft and a reload keeps the choice; the commit itself is never in the URL, it is resolved from this visit's tree).
 
 **Share and Export** (amended 2026-10-13):
 - **Share** sits after View on GitHub and before Open committed version, on project, section, directory and leaf pages. It is never on the index, and never in `frame=full`, which has no header. On a phone's leaf (§4.4's Layout) Share and Export are icons on the row, their words the icons' accessible names and a line in Page details, and the two links are in Page details; on the one bar all four are in the panel the title opens, in this order and with their words (amended 2026-11-10; the phone header, D-7955).
