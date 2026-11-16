@@ -3403,7 +3403,7 @@ on both platforms that the reader still says "never" while a writer holds the FI
 iterations. The shim, the window, `macos.yml` and the gate are unchanged. The sign-in helper's pump reads with the same
 `read -t` and is booked as Task C28 (ask 356). Evidence, runs and the C28 hand-off are in `c27.md`.
 
-- **D-8344** — `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
+- **D-8344** - `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
 
 **Acceptance.** The darwin case is green in a `macos.yml` dispatch at the PR's tip, and its repeat runs are recorded in
 `c27.md`. The control reds when the reader is made to answer "eof" whatever happens. **Rollback.** A plain revert.
@@ -3429,7 +3429,7 @@ hang is inferred from its matching symptoms. The probe now hands the run its inp
 pins that. The hook, the bounds, `spawnGroup.ts`, `macos.yml` and the gate are unchanged. Evidence and runs are in
 `c29.md`.
 
-- **D-8354** — `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
+- **D-8354** - `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
 
 **Acceptance.** Both files are green in a `macos.yml` dispatch at the PR's tip, with the repeat runs recorded in `c29.md`.
 A lease or grammar mutation of the hook reds a grammar row. The cost cases red on a super-linear program, and the new
@@ -3500,7 +3500,7 @@ descriptor as the child's stdin. The group, the timeout, the group kill, the str
 The fixed helper had 0 hangs in 30,000 runs on macOS. Three cases in `proc-leak.test.ts` pin the route. The nine
 callers' inputs measured 1,989 bytes at the largest. Evidence and runs are in `c30.md`.
 
-- **D-8381** — `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
+- **D-8381** - `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
 
 **Acceptance.** The PR's required checks and a `macos.yml` dispatch at its tip are green. The new cases red when the
 input goes back through `spawnSync`'s `input`, when the directory outlives the child's start, and when the caller's
@@ -3584,7 +3584,7 @@ coreutils takes that arm, inferred). Each spawn now hands its stdin over on fd 5
 puts it back before the mint runs; `_auth_timeout` and its two pinned copies are unchanged. Three cases pin it, red
 without the fix. Departures by slug in `c28.md`.
 
-- **D-8345** — `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
+- **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
   whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
   measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
   read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
@@ -3651,7 +3651,7 @@ before and after and the brief's one misquoted line ending are in `c25.md`.
 **Acceptance.** `docs-compact-head.browser.test.ts` passes in full at the PR's tip in both skins, and the four ring cases are
 red on the fix with the mutant in place. **Rollback.** A plain revert.
 
-### Task C33: this plan's 112 hyphen entries are written so the ledger reads them, and a guard keeps that form out (D-8656) — now
+### Task C33: this plan's hyphen entries are written so the ledger reads them, and a guard keeps that form out (D-8656) — now
 
 Placed after C25's section, before the acceptance matrix. Found by review 1938 F7; the operator made it a goal of this
 programme. No product behaviour changes.
@@ -3661,23 +3661,29 @@ colon follows the bold number. This plan wrote 112 of its entries as `- **D-N** 
 did. The deviation-refs cross-tree scan and the server's reconcile sweep could not see those numbers, so none of them
 could land and a second definition of one would not have been caught.
 
-**What was done.** The 112 entries now use the em dash, `- **D-N** — `, and nothing else on those lines changed.
-`DEFINITION`'s grammar is unchanged. Before the conversion every number was measured: the allocator issued all 112, and
-no other programme's plan defines any of them. Four of them, D-8344, D-8345, D-8354 and D-8381, were also defined in
-this programme's own task notes (`c27.md` to `c30.md`), so after the conversion each would have had two definitions. On
-the coordinator's ruling, each note's line was reworded into a citation, with only its opening changed, and the plan's
-entry stays the one definition. A new describe in `deviation-refs.test.ts` fails on any `- **D-N**` line at column 0
-that `DEFINITION` does not read, outside fenced blocks. Lines other plans hold today stay as `UNREAD_BASELINE`: 175
-lines in 14 plans, which may only shrink. It was red first on this plan's 112 entries. With one entry put back in the
-hyphen form, it reds naming that entry alone. The measurements, the baseline and the mutation runs are in `c33.md`.
+**What was done.** Before the conversion every number was measured: the allocator issued all 112, and no other
+programme's plan defines any of them. 108 of the entries now use the em dash, `- **D-N** — `, and nothing else on those
+lines changed. `DEFINITION`'s grammar is unchanged. The other four, D-8344, D-8345, D-8354 and D-8381, were also defined
+in this programme's own task notes (`c27.md` to `c30.md`). On the coordinator's ruling, each note's line was reworded
+into a citation, with only its opening changed. The four plan lines keep the hyphen form for now. On `origin/main` the
+notes still define those numbers, so converting the plan lines in this PR would put one definition on each side of the
+cross-tree scan, red until the merge and in the merge queue too. Task C33b, which the coordinator opens after this PR
+merges, converts the four under D-8656. Until then the sweep reads none of those four numbers.
+
+A new describe in `deviation-refs.test.ts` fails on any `- **D-N**` line at column 0 that `DEFINITION` does not read,
+outside fenced blocks. `UNREAD_BASELINE` lists the lines plans hold today, and it may only shrink: 175 lines in 14
+plans, plus the four that C33b converts. It was red first on this plan's 112 entries. With one converted entry put back
+in the hyphen form, it reds naming that entry alone. The measurements, the baseline and the mutation runs are in
+`c33.md`.
 
 - **D-8656** — `hyphen-entries-unread`: Task C33, issued on 2026-11-16. This plan's 112 hyphen entries were invisible to
-  the ledger. They now use the em dash, and a guard reds on any new definition-shaped line the ledger cannot read. Four
-  task-note lines that defined the same numbers became citations. Departures are named by slug in `c33.md`.
+  the ledger. 108 now use the em dash, and C33b converts the last four after this PR merges. A guard reds on any new
+  definition-shaped line the ledger cannot read. Four task-note lines that defined the same numbers became citations.
+  Departures are named by slug in `c33.md`.
 
-**Acceptance.** `deviation-refs.test.ts` passes at the PR's tip, with each of the 112 numbers defined once across the
-two trees. The guard reds with one hyphen entry put back. **Rollback.** A plain revert. The guard and the conversion
-revert together, because the guard is red on the hyphen form.
+**Acceptance.** `deviation-refs.test.ts` passes at the PR's tip. Each of the 108 converted numbers is defined once
+across the two trees. The guard reds with one converted entry put back. **Rollback.** A plain revert. The guard and the
+conversion revert together, because the guard is red on the hyphen form.
 
 ## Acceptance (the matrix, per PR)
 

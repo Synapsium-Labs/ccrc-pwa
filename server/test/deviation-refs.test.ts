@@ -668,8 +668,9 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
 // any other way, `- **D-N** - slug` (the hyphen form) or a backtick slug straight
 // after the bold number, is invisible to the cross-tree scan above AND to the
 // server's reconcile sweep, so its number never lands and a second definition of
-// it is never caught. The desktop-polish plan held 112 hyphen entries until Task
-// C33 converted them to the em-dash form; DEFINITION's grammar stays as it is.
+// it is never caught. The desktop-polish plan held 112 hyphen entries; Task C33
+// converted 108 of them to the em-dash form, and its follow-up C33b converts the
+// last four (see UNREAD_BASELINE). DEFINITION's grammar stays as it is.
 //
 // THE SHAPE is a bullet whose bold closes right after the number, at column 0:
 // `- **D-N**`. It is narrower than `DEFINED`'s prefix on purpose: `- **D-149
@@ -710,10 +711,10 @@ function unreadDefinitionShapes(
   return out;
 }
 
-/** The unreadable lines other programmes' plans hold, measured on origin/main at
- *  649ac3f13 by Task C33 (docs/superpowers/plans/2026-10-22-desktop-polish/c33.md):
- *  175 lines in 14 plans. 170 are a backtick slug straight after the bold number;
- *  the other five, and the two desktop-polish lines, are prose that opens with
+/** The unreadable lines plans hold, measured on origin/main at 649ac3f13 by Task
+ *  C33 (docs/superpowers/plans/2026-10-22-desktop-polish/c33.md): 175 lines in 14
+ *  plans, plus the four hyphen entries C33 leaves for C33b. Of the 175, 170 are a
+ *  backtick slug straight after the bold number, and five are prose that opens with
  *  the bold number (`- **D-N** is the rule below`, `- **D-N** stays unused`).
  *  Bare numbers, not `D-` refs, so the floor scan reads nothing here.
  *  MAY ONLY SHRINK: a plan that converts a line removes its number here, and a
@@ -731,7 +732,11 @@ const UNREAD_BASELINE: ReadonlyMap<string, readonly number[]> = new Map<string, 
   ['2026-10-08-carry-link-via-mount.md', [4500, 4501]],
   ['2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md', [4480, 4481, 4482, 4483, 4484, 4485, 4486, 4487, 4488, 4489, 4490, 4491, 4492, 4493, 4494]],
   ['2026-10-20-ci-shards-nested-leak.md', [6112]],
-  ['2026-10-22-desktop-polish.md', [7153, 7253]],
+  // 7153 and 7253 are prose. 8344, 8345, 8354 and 8381 are hyphen entries that C33 left
+  // in place: on origin/main their task notes (c27.md to c30.md) still define them, so
+  // converting them here reads as one definition each side of the cross-tree scan. The
+  // follow-up C33b converts the four and removes them from this row once C33 has merged.
+  ['2026-10-22-desktop-polish.md', [7153, 7253, 8344, 8345, 8354, 8381]],
   ['2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md', [6605]],
   ['2026-10-26-orphan-census-truncation.md', [7867]],
 ]);
