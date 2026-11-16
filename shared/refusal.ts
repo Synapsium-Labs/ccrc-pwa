@@ -233,6 +233,14 @@ export const TIMER_REFUSALS = {
   'timer-not-found': 404,
 } as const;
 export type TimerRefusal = keyof typeof TIMER_REFUSALS;
+/** The renewal hand-offs' words (Overlord W1a, plan `w1a-renewal-handoffs.md` Tasks 1 and 2; spec §3.3.11 "Before the message
+ *  record exists"), each with its one status, spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). CHOSEN, not measured: 409
+ *  for each, a state of the world. `renewing`: the console's prompt route, while the session is between conversations (its
+ *  live generation's `state` is `clearing` or `carded`), and the console keeps the draft. `renew-not-long-lived`: the Renew now
+ *  door, for a session with no live generation of a long-lived role. `renew-pending`: the same door, while a request of the
+ *  session's waits for the generations lane. */
+export const HANDOFF_REFUSALS = { renewing: 409, 'renew-not-long-lived': 409, 'renew-pending': 409 } as const;
+export type HandoffRefusal = keyof typeof HANDOFF_REFUSALS;
 /** The Overlord's W1 refusal words (Overlord W1, the vocabulary piece; spec §11.6 and Table 11.6), grouped by door, each
  *  with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). No W1 door sends
  *  one yet: each later W1 piece ships its door and reads its word from here. Each status is CHOSEN, not measured, by this
@@ -298,6 +306,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | QuestionDoorRefusal
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
   | DispatchAbandonRefusal
+  // The renewal hand-offs (Overlord W1a): the prompt route's `renewing` and the Renew now door's two words.
+  | HandoffRefusal
   // The run-close switch door (D-8077, Task 26): its two words of its own, a lane held by a pause and a registry that would not list.
   | RunCloseRefusal
   // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
@@ -538,6 +548,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...TIMER_REFUSALS,
   // The Overlord's W1 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`.
   ...OVERLORD_REFUSALS,
+  ...HANDOFF_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,

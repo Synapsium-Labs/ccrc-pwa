@@ -91,6 +91,19 @@ export const SOFT_BUDGET = { count: 3, windowMs: 21_600_000 } as const;
 /** Table 11.5b, observed time: a break (R19), no operator message for this long, or no visible place for this long. */
 export const BREAK_NO_MESSAGE_MS = 1_200_000;
 export const BREAK_PLACE_HIDDEN_MS = 300_000;
+/** Table 11.1e, the mark `operator-at-programme` (W1a): a coordinator's operator activity lasts this long, observed, after the
+ *  operator's newest prompt into any session of its programme; older, it reads as no activity (C50, the hand-offs piece). */
+export const OPERATOR_MARK_MS = 1_800_000;
+/** Table 11.1d (W1a), the Setting "Renew when I'm away" / "Renew on schedule" (R19): when soft renewals happen. The default is
+ *  when the operator is away. Read back through `isRenewalMode`, never cast. */
+export const RENEWAL_MODES = ['when-away', 'on-schedule'] as const;
+export type RenewalMode = (typeof RENEWAL_MODES)[number];
+export const RENEWAL_MODE_DEFAULT: RenewalMode = 'when-away';
+export function isRenewalMode(v: unknown): v is RenewalMode {
+  return typeof v === 'string' && (RENEWAL_MODES as readonly string[]).includes(v);
+}
+/** `GET`/`POST /api/coord/renewal-mode`'s answer: the stored mode (null when it does not read), the default and the choices. */
+export interface RenewalModeView { mode: RenewalMode | null; default: RenewalMode; choices: readonly RenewalMode[] }
 /** Table 3.3.11b: the hard cap, or half the window, whichever is lower. */
 export const HARD_CAP_TOKENS = 250_000;
 /** Table 3.3.11b: the soft ceiling, as a fraction of the fitted ceiling. */

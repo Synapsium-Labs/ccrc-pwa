@@ -3370,6 +3370,33 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
   CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
   `,
+  // ── 83: user_version 82 -> 83 ─────────────────────────────────────────────
+  // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
+  // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
+  // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`). `operator_marks`: the
+  // `operator-at-programme` mark, its `at` written only by the console's prompt route; `operator_mark_quiet`: the mark's
+  // observed quiet, written only by the generations lane, keyed on the `at` it was kept for (the coordinator's ruling F5 on
+  // review 1902: a row of the lane's own, so the route and the lane never write one row, and a `quiet` kept for an older `at`
+  // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
+  // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; seeded with the spec's default.
+  // NEW TABLES AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 83` takes rule 3,
+  // never names them, and boots. Sibling W1 pieces add migrations too (responses B and portfolio B each hold 83 on their
+  // branches), so the coordinator renumbers this entry at landing. RE-MEASURE the slot before the PR and before merge (it
+  // must print 82 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_renew_requests (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, actor TEXT NOT NULL, at INTEGER NOT NULL);
+  CREATE INDEX continuity_renew_requests_by_session ON continuity_renew_requests(sessionId, id);
+  CREATE TABLE operator_marks (programme TEXT PRIMARY KEY, at INTEGER NOT NULL);
+  CREATE TABLE operator_mark_quiet (programme TEXT PRIMARY KEY, at INTEGER NOT NULL, quiet TEXT NOT NULL);
+  CREATE TABLE renewal_mode_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    mode      TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO renewal_mode_settings (id, mode, updatedAt) VALUES (1, 'when-away', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

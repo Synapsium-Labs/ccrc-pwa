@@ -149,6 +149,8 @@ import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, 
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
 import { compactRefusal } from '../continuity/compactOwner.js';
+import { renewalModeOf } from '../continuity/renewNow.js';
+import { RENEWAL_MODES, RENEWAL_MODE_DEFAULT, isRenewalMode, type RenewalModeView } from '../../../shared/continuity.js';
 import {
   PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
 } from '../../../shared/plainAutoMemory.js';
@@ -3151,6 +3153,30 @@ export function registerCoordRoutes(
         'record-only', { degraded: 'plain auto memory written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...plainMemoryView(deps.coord) });
+  });
+
+  /** `GET`/`POST /api/coord/renewal-mode` — Settings › Automation › "When soft renewals happen" (Overlord W1a, the renewal
+   *  hand-offs, Task 4; spec §3.3.11 R19, Table 11.1d): `when-away` (the default) or `on-schedule`. The roll-idle door's shape:
+   *  session-gated when sign-in is armed, open dark; it moves no session while the `continuity` row is shadow. The one writer
+   *  is `CoordStore.setRenewalMode`; a change is a record-only feed row naming the actor. */
+  const renewalModeView = (coord: NonNullable<typeof deps.coord>): RenewalModeView =>
+    ({ mode: renewalModeOf(coord.renewalModeSetting()), default: RENEWAL_MODE_DEFAULT, choices: RENEWAL_MODES });
+  app.get('/api/coord/renewal-mode', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...renewalModeView(deps.coord) });
+  });
+  app.post('/api/coord/renewal-mode', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { mode?: unknown } | null | undefined;
+    const mode = body !== null && typeof body === 'object' ? body.mode : undefined;
+    if (!isRenewalMode(mode)) return refuseRoute(reply, 'bad-request', { detail: `mode must be one of ${RENEWAL_MODES.join(', ')}` });
+    const before = renewalModeOf(deps.coord.setRenewalMode(mode, Date.now()).before);
+    if (before !== mode && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'renewal mode changed', body: `when soft renewals happen: ${before ?? 'unreadable'} -> ${mode}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'renewal mode written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...renewalModeView(deps.coord) });
   });
 
   /**

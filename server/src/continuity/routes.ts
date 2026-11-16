@@ -28,7 +28,8 @@ import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
-import { effectiveGeneration, type TimerRow } from './continuityStore.js';
+import { RENEW_REQUESTS_CURSOR, effectiveGeneration, type TimerRow } from './continuityStore.js';
+import { renewDoorVerdict, type RenewDoorFacts } from './renewNow.js';
 import { noteKeyReader } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
@@ -63,6 +64,8 @@ export interface ContinuityRouteDeps {
   cardMemoMax?: number;
   /** The continuity row's gate (`laneArmGate`), unless a test opens it to drive a live walk, as the generations lane's. */
   continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null;
+  /** Who the operator's doors record as the actor: the signed-in device, or `flag-off` while sign-in is dark. Absent: `flag-off`. */
+  operatorActor?: (req: FastifyRequest) => string;
 }
 
 /** The identity pair's grammar, the linking read's and the Linear proxy's: `SESSION_ID_RE`'s, so an id the timer doors
@@ -745,6 +748,33 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const cut = cancelOf(coord, timerId, 'operator-cancel', 'operator', deps.wall());
     if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
     return reply.code(200).send({ ok: true, id: timerId });
+  });
+
+  /**
+   * `POST /api/sessions/:id/renew`: the operator's Renew now (Table 11.1e, W1a; the hand-offs piece, Task 1). Session-gated
+   * like the timer doors above, in `CONTINUITY_SESSION_DOORS`. It records a request (`continuity_renew_requests`, this door its
+   * one writer) and decides nothing about the renewal: the generations lane reads the request after its own cursor and makes
+   * the session's live generation due `operator` (hard), so every check the lane makes still applies, and in shadow it records
+   * the walk and renews nothing. Refused `renew-not-long-lived` (409) for a session with no live generation of a long-lived
+   * role, `renew-pending` (409) while a request of its waits for the lane, `unmeasured` (502) when a row could not be read.
+   * `200 { ok, id }`.
+   */
+  app.post('/api/sessions/:id/renew', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!IDENTITY_RE.test(id)) return refuseRoute(reply, 'bad-request', { detail: 'the path names a session id' });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const gens = coord.liveGenerations();
+    const live: RenewDoorFacts['live'] = !gens.ok ? 'unmeasured' : (gens.rows.filter((g) => g.sessionId === id).at(-1) ?? null);
+    const cursor = coord.generationsCursor(RENEW_REQUESTS_CURSOR);
+    const after = cursor.ok ? coord.renewRequestsAfter(cursor.lastStartId, 1, id) : null;
+    const verdict = renewDoorVerdict({ live, pending: after === null || !after.ok ? 'unmeasured' : after.rows.length > 0 });
+    if (verdict !== 'ok') {
+      return refuseRoute(reply, verdict, verdict === 'unmeasured' ? { detail: 'the generations or the requests could not be read' } : {});
+    }
+    const w = coord.insertRenewRequest({ sessionId: id, actor: deps.operatorActor?.(req) ?? 'flag-off', at: deps.wall() });
+    if (!w.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_renew_requests could not be written' });
+    return reply.code(200).send({ ok: true, id: w.id });
   });
 
   // THE PROBE DOOR (spec §3.3.5 C41, §3.3.9 C52; the probes piece, Task 4). Two box-token lanes, each an `auth/gate.ts` EXEMPT

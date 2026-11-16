@@ -48,7 +48,7 @@ import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
-import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
+import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -5413,7 +5413,7 @@ export class CoordStore {
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
   stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
   clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
-  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
+  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[], c: CursorAdvance | null = null): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind, c); }
   advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
   setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
   generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
@@ -5443,6 +5443,15 @@ export class CoordStore {
   handoverOf(generationId: number): HandoverRead { return handoverOf(this.db, generationId); }
   softRenewalsOf(identity: string, term: number): ReturnType<typeof softRenewalsOf> { return softRenewalsOf(this.db, identity, term); }
   recordSoftRenewal(g: { id: number; identity: string; term: number }, observedMs: number): { ok: boolean } { return recordSoftRenewal(this.db, g, observedMs); }
+  /** Overlord §3.3.9 C50, §3.3.11 (the hand-offs piece, `continuityStore.ts`): the Renew now door's request and the lane's read
+   *  of it, the prompt route's mark and the lane's quiet of it, and the Setting "when soft renewals happen". */
+  insertRenewRequest(r: { sessionId: string; actor: string; at: number }): ReturnType<typeof timers.insertRenewRequest> { return timers.insertRenewRequest(this.db, r); }
+  renewRequestsAfter(afterId: number, limit: number, sessionId?: string): timers.RenewRequestsRead { return timers.renewRequestsAfter(this.db, afterId, limit, sessionId); }
+  putOperatorMark(programme: string, at: number): { ok: boolean } { return timers.putOperatorMark(this.db, programme, at); }
+  operatorMarks(): timers.OperatorMarksRead { return timers.operatorMarks(this.db); }
+  advanceMarkQuiet(programme: string, readAt: number, quiet: Observed): { changed: boolean } { return timers.advanceMarkQuiet(this.db, programme, readAt, quiet); }
+  renewalModeSetting(): timers.RenewalModeRead { return timers.renewalModeSetting(this.db); }
+  setRenewalMode(mode: RenewalMode, at: number): ReturnType<typeof timers.setRenewalMode> { return timers.setRenewalMode(this.db, mode, at); }
   /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
   putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
   checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }
