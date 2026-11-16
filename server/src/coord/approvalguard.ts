@@ -369,7 +369,9 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     { why: 'tmux', re: new RegExp(`${WB}tmux(?=$|[\\s;&|)'"])`) },
     { why: 'a registry path', re: /\/\.(?:cc-sessions|cc-limits|ccrc)(?![\w.-])/ },
     { why: 'reboot or shutdown', re: new RegExp(`${WB}(?:reboot|shutdown|poweroff|halt)(?=$|[\\s;&|)'"])`) },
-    { why: 'ccrc update or rollback', re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*(?:update|rollback)(?![\\w-])`) },
+    // `rollout` joined (pool set B2, fix round 1): it forwards `--below-cap` and `--force --downgrade` to each box. An accident
+    // guard, like every row here: a script file or another interpreter runs past it (CLAUDE.md's residuals).
+    { why: 'ccrc update, rollback or rollout', re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*(?:update|rollback|rollout)(?![\\w-])`) },
     // D-6202 (spec §3.1): the account-management verbs are forbidden on every session's prompt, so no approval can
     // rule them; the hook's `fmatch` holds the same three rows (`ACCTV` is its copy of `ACCOUNT_DENY_SUBS`). Never a swap verb (the operator's Q8 ruling).
     ...ACCOUNT_DENY_SUBS.map((v) => ({

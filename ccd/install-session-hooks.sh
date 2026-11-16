@@ -189,7 +189,7 @@ _child_deny_json() {
   for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps ws-lease-mark delegation-adopt roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
-  for v in update rollback; do
+  for v in update rollback rollout; do
     for h in "${heads_ccrc[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   for p in "${claudes[@]}"; do

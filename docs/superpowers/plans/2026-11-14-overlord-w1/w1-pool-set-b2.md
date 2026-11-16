@@ -161,3 +161,79 @@ floor 1. A planted survivor (L2 made a no-op) was reported `survived`, so the ru
 | Task 10: the in-process latch dropped | `pool-set-loss-lane`: 1 failed (the failed archive) |
 | Task 10: `hasNotice` not read | `pool-set-loss-lane`: 1 failed (the restart) |
 | Task 10: the unreadable route fields dropped | `pool-set-loss-lane`: 1 failed (the unreadable set) |
+
+## Fix round 1 (review 2203, the coordinator's rulings)
+
+- **`below-cap-refuses-a-session`** (F1). `ccrc update`, `rollback` and `rollout` refuse `--below-cap` when `CLAUDECODE`
+  is set: exit 2, nothing changed, and the sentence says it is the operator's flag. The refusal sits in the one argument
+  check (`_below_cap_arg`), so all three verbs share it. It is an accident guard: `env -u CLAUDECODE` defeats it. The
+  harness already empties `CLAUDECODE` (`server/test/ccdWsHelpers.ts#containedAuthBase`), so a suite run from inside a
+  session behaves as CI does. The session cases set it through the run's own env (update, rollback) or the harness's
+  `CCRC_TEST_CLAUDECODE` (rollout).
+- **`rollout-joins-the-session-guards`** (F1). `rollout` joins the `update|rollback` rows at every session guard site:
+  the classifier's `FORBIDDEN_PATTERNS` (`server/src/coord/approvalguard.ts`), the hook's `fmatch` and `xmatch` arms
+  (`ccd/session-hook.sh`), `childDenyRules` (`shared/api.ts`) and its bash twin (`ccd/install-session-hooks.sh`). The
+  row's reason is now `ccrc update, rollback or rollout`. Before this a session could also run `rollout --force
+  --downgrade` (the refute pass's pre-existing hole); the same rows close it. They are accident guards, like every row
+  there, and CLAUDE.md's residuals apply (a script file, `bash -c` with an assembled string, another interpreter).
+  `ccd swap` and every must-allow entry stay open. CLAUDE.md gains one sentence after "`ccrc rollback` is the typed way
+  back".
+- **`loss-episode-in-the-key`** (F2). A loss that clears and recurs is a new loss, even on the same build with the same
+  sessions. An episode opens on the first raising tick after a quiet one. The next quiet MEASURED tick (caps read, and no
+  standing fact needing a lost word) closes it with a record-only notice keyed `pool-set-cleared:e<n>`: the feed shows
+  "The fleet box honours the capability floor again", and nothing is pushed. The current episode is the first `n` with
+  no archived clear. The episode's first push is keyed `pool-set-lost:e<n>`, which marks it open in the archive; a later
+  loss in the same episode (a new build or a new set) is keyed by its facts and the episode. Unmeasured caps neither
+  raise nor clear. The keys are composed in `poolrule.ts#poolSetLossKey` and `poolrule.ts#poolSetClearKey`.
+- **`restart-folds-into-the-episode`** (F2). A restart inside an open episode sends nothing: it reads the episode's first
+  push from the archive and adopts the facts it sees, so a set or build that changed while the server was down is folded
+  into the standing loss. A restart while a loss stands, followed by a clear, closes that episode, so a recurrence pushes.
+- **`rollout-refusal-says-clear-or-move`** (F3). The rollout refusal for a box that does not list `below-cap` now says
+  "move them without --below-cap, or clear the standing fact there if that move is refused". A B1 box has the floor but
+  not the word, and the gate cannot tell the two apart.
+- **`below-cap-words-read-on-the-rollout-machine`** (F4, no code change). Rollout checks the flag's words against the
+  table of the machine that runs it, and fills `needs=unmeasured` from that same table. A word that table has and a box's
+  ccrc lacks passes the preflight. That box then exits 2 on its own argument check, after an earlier box moved, and the
+  rc 2 arm says so (a usage error, nothing changed, no backup). So `one-rollout-gate`'s "refused before any box moves"
+  holds only while every box carries the same table. No skew exists today (one row). The first will be the sandbox
+  piece's `launch-surface-v1` reaching the operator's machine before the boxes.
+- **`dangling-poolset-link-pushes-nothing`** (F5, an accepted residual of D-2516, no code change). The floor counts a
+  dangling `<id>.poolset` link as standing (`_cap_floor_standing`, `-e || -L`). The server's registry read sees it as
+  absent, not unreadable, so the push does not fire. Plan N11(b)'s "a dangling link is counted" holds for the floor only.
+  It is reachable only by hand (no ccd verb writes a link into the registry), and the floor still refuses. A
+  registry-level case in `pool-set-loss-lane.test.ts` pins today's behaviour.
+- **`latch-after-send`** (F6). The lane records what it pushed after `notify`, so a throw before the send leaves the next
+  tick to retry, as the catch's sentence says.
+- **`site-30-own-line`** (F7). Push site #30's row is on a line of its own, so the diff only adds lines there.
+
+### Fix round 1: tests, growth and mutations
+
+| Suite | Result |
+|---|---|
+| `pool-set-loss-lane` | 18 passed (6 new) |
+| `pool-set-loss`, `push-outbox-characterization` | 7, 131 |
+| `ccrc-update-cap-floor`, `ccrc-rollout` | 45 (1 new), 48 (1 new) |
+| `approvalguard` (the corpus, 3 new must-deny rows) | 1003 |
+| `session-hook-approval-deny` | 331; its 43 KB timing case timed out once under load and passed alone |
+| `session-hook-approval-wait`, `session-hook-account-deny`, `account-deny` (the must-allow fixture) | 168, 139, 13 |
+| `install-session-hooks`, `ccd-spawn-child-settings` | 37, 18 |
+| `ccrc-install-role`, `ccrc-doctor-cap-floor`, `ccrc-box-build-caps`, `update-watchdog-revert`, `ccrc-settings-census` | 39, 15, 16, 16, 22 |
+| `lane-schedule`, `watcher-quiet-census`, `pool-set-route-wire`, `rings/*` (12 files) | 64, 4, 3, 132 |
+| `growth-check` (`GROWTH_CHECK=1`) | 95 |
+| `sim/mutation-floors` (`poolSetLoss`) | green; the two `pwa/src/face/mood.ts` sets fail here only because this worktree has no `ui/node_modules` (`Cannot find package '@ccrc/ui'`) |
+| `single-definition/*` (34 files), `deviation-refs` | each green but one CPU-heavy case that passed earlier on this branch and timed out at 20 s in this box's test slice (`advance-switches`' pin scan, the two-tree ledger scan); CI's run arbitrates them |
+| `tsc` (server, its tests project) | clean |
+
+Growth against the merge-base: `ccd/ccrc` +29 (+1 this round), `server/src/watch.ts` +3, `session-hook.sh`,
+`shared/api.ts`, `approvalguard.ts` and `install-session-hooks.sh` 0. No waiver.
+
+| Mutation (by hand, restored from a saved copy, compared byte for byte) | Result |
+|---|---|
+| F1: the classifier row loses `rollout` | `approvalguard`: 3 failed |
+| F1: the hook's `fmatch` loses `rollout` | `session-hook-approval-deny`: 2 failed |
+| F1: the hook's `xmatch` loses `rollout` | `session-hook-approval-deny`: 2 failed |
+| F1: `childDenyRules` loses `rollout` | `ccd-spawn-child-settings`: 2 failed |
+| F1: the bash twin loses `rollout` | `install-session-hooks`: 4 failed |
+| F1: the session refusal dropped | `ccrc-update-cap-floor`: 1 failed; `ccrc-rollout`: 1 failed |
+| F2: a quiet tick never closes the episode | `pool-set-loss-lane`: 4 failed |
+| F2: a restart re-pushes inside the episode | `pool-set-loss-lane`: 2 failed |

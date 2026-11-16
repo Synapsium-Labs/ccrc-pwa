@@ -1074,7 +1074,8 @@ const SITES: Site[] = [
     sent: () => [RELEASE], sentVisible: () => [RELEASE] },
   { n: '29', name: 'POST /api/notify push:true (notifyPushOnly)', drive: (e) => notifySite(e),
     sent: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }],
-    sentVisible: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }] },  { n: '30', name: 'PoolSetLossLane.check (coord, push)', drive: lossSite, sent: () => [POOL_SET_LOST], sentVisible: () => [POOL_SET_LOST] },
+    sentVisible: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }] },
+  { n: '30', name: 'PoolSetLossLane.check (coord, push)', drive: lossSite, sent: () => [POOL_SET_LOST], sentVisible: () => [POOL_SET_LOST] },
 ];
 
 /** The source rows a site leaves, by their columns that carry no clock: asks and items. */

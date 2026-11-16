@@ -13234,7 +13234,7 @@ const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
 /** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
- *  (`roll` and the operator's `claude …` switches among them), then `ccrc update` and `ccrc rollback`, then Claude
+ *  (`roll` and the operator's `claude …` switches among them), then `ccrc update`, `rollback` and `rollout`, then Claude
  *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
  *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
  *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
@@ -13242,7 +13242,7 @@ export function childDenyRules(upstreamId: string | null): readonly string[] {
   const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
   return [
     ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
-    ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+    ...['update', 'rollback', 'rollout'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
     ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
   ];
 }

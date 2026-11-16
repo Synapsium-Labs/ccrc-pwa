@@ -287,3 +287,13 @@ export function poolSetLoss(rows: readonly CapFloorRow[], caps: readonly string[
   const key = lost.map((l) => `${l.word}=${l.sessions.join(',')}`).join(';');
   return { raise: true, lost, dedupeKey: `pool-set-lost:${build ?? 'unmeasured'}:${key}` };
 }
+
+/** The loss EPISODE's keys (fix round 1, F2, slug `loss-episode-in-the-key`): a loss that clears and recurs is a new loss,
+ *  even on the same build with the same sessions. Episode `n`'s clear is archived under `poolSetClearKey(n)`, so the
+ *  current episode is the first `n` without one (probed at most `LOSS_EPISODE_PROBE_MAX` deep, the feed's retention: a
+ *  clear past it was pruned). An episode's FIRST push is keyed by the episode alone, which marks it open across a restart;
+ *  a later loss within it (a new build or a new set) by its facts, the `poolSetLoss` key, and the episode. */
+export const LOSS_EPISODE_PROBE_MAX = 2000;
+export const poolSetClearKey = (episode: number): string => `pool-set-cleared:e${episode}`;
+export const poolSetLossKey = (episode: number, facts: string | null): string =>
+  facts === null ? `pool-set-lost:e${episode}` : `${facts}:e${episode}`;

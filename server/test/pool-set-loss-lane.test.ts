@@ -3,16 +3,19 @@
 // Once per loss: the same facts on the next tick send nothing, a failed archive included; a restart reads the archived key.
 // The push double records what reaches the push service; nothing leaves the test.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadConfig } from '../src/config.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { localIO } from '../src/io.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { CAP_FLOOR_FACTS, PoolSetLossLane, type PoolSetLossLaneDeps } from '../src/poolSetLossLane.js';
-import type { SessionRecord } from '../src/registry.js';
+import { readSessionRecord, type SessionRecord } from '../src/registry.js';
 import type { PushPayload } from '../src/push.js';
 import type { RouteField } from '../../shared/api.js';
+import { seedRoster } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
@@ -42,7 +45,7 @@ describe('the push when a placing box loses pool-set while a set stands (Task 10
     expect(s.sent[0]).toMatchObject({ sessionId: '', tag: 'pool-set-lost', url: '/settings', title: 'The fleet box lost pool-set' });
     expect(s.sent[0]!.body).toContain('a poolset stands for lane-a-overlord');
     expect(s.sent[0]!.body).not.toContain('lane-b-project-a');
-    expect(s.coord.hasNotice('coord', '', `pool-set-lost:${'a'.repeat(40)}:pool-set=lane-a-overlord`)).toBe(true);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-lost:e0'), 'the episode\'s first push is keyed by the episode').toBe(true);
   });
 
   it('the next tick with the same facts pushes nothing; a new build pushes again', async () => {
@@ -80,7 +83,7 @@ describe('the push when a placing box loses pool-set while a set stands (Task 10
     s.lane.check([rec('lane-a-overlord', {}, ['poolset'])]);
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0]!.body).toContain('(unreadable for lane-a-overlord)');
-    expect(s.coord.hasNotice('coord', '', 'pool-set-lost:unmeasured:pool-set=lane-a-overlord')).toBe(true);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-lost:e0')).toBe(true);
   });
 
   it('a restart reads the archived key and pushes nothing', async () => {
@@ -115,6 +118,87 @@ describe('the push when a placing box loses pool-set while a set stands (Task 10
     s.lane.check(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((x) => rec(`lane-${x}-overlord`, { poolset: 'pool-a' })));
     expect(s.sent[0]!.body).toContain('lane-e-overlord and 2 more');
     expect(s.sent[0]!.body).not.toContain('lane-f-overlord');
+  });
+
+  it('a loss that clears and recurs on the same build with the same sessions pushes again; the clear is archived, never pushed (F2)', async () => {
+    const s = await setup([]);
+    const lost = [rec('lane-a-overlord', { poolset: 'pool-a' })];
+    const quiet = [rec('lane-a-overlord', {})];
+    s.lane.check(lost);
+    s.lane.check(quiet);
+    s.lane.check(quiet);
+    expect(s.sent).toHaveLength(1);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-cleared:e0')).toBe(true);
+    s.lane.check(lost);
+    s.lane.check(lost);
+    expect(s.sent).toHaveLength(2);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-lost:e1')).toBe(true);
+  });
+
+  it('caps the box regains clear the loss too, and unmeasured caps neither raise nor clear', async () => {
+    const s = await setup([]);
+    const lost = [rec('lane-a-overlord', { poolset: 'pool-a' })];
+    s.lane.check(lost);
+    (s.deps.fleetState as { ccdVerbs: string[] | null }).ccdVerbs = null;
+    s.lane.check(lost);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-cleared:e0'), 'unmeasured is no clear').toBe(false);
+    (s.deps.fleetState as { ccdVerbs: string[] | null }).ccdVerbs = ['pool-set'];
+    s.lane.check(lost);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-cleared:e0')).toBe(true);
+    (s.deps.fleetState as { ccdVerbs: string[] | null }).ccdVerbs = [];
+    s.lane.check(lost);
+    expect(s.sent).toHaveLength(2);
+  });
+
+  it('a restart in the middle of a recurred loss pushes nothing (F2: the episode is read from the archive)', async () => {
+    const s = await setup([]);
+    const lost = [rec('lane-a-overlord', { poolset: 'pool-a' })];
+    s.lane.check(lost);
+    s.lane.check([]);
+    s.lane.check(lost);
+    expect(s.sent).toHaveLength(2);
+    const restarted = new PoolSetLossLane(() => s.deps);
+    restarted.check(lost);
+    restarted.check(lost);
+    expect(s.sent).toHaveLength(2);
+  });
+
+  it('a restart while the loss stands, then a clear and a recurrence, pushes the recurrence', async () => {
+    const s = await setup([]);
+    const lost = [rec('lane-a-overlord', { poolset: 'pool-a' })];
+    s.lane.check(lost);
+    const restarted = new PoolSetLossLane(() => s.deps);
+    restarted.check([]);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-cleared:e0'), 'the restarted lane reads the open episode and closes it').toBe(true);
+    const again = new PoolSetLossLane(() => s.deps);
+    again.check(lost);
+    expect(s.sent).toHaveLength(2);
+  });
+
+  it('a quiet first tick with no loss ever archives no clear', async () => {
+    const s = await setup([]);
+    s.lane.check([rec('lane-a-overlord', {})]);
+    expect(s.coord.hasNotice('coord', '', 'pool-set-cleared:e0')).toBe(false);
+    expect(s.sent).toEqual([]);
+  });
+
+  it('F5, an accepted residual (D-2516): a DANGLING <id>.poolset link reads absent through the registry, so the push does not fire (the floor still refuses)', async () => {
+    const home = mkTmp('ccrc-pool-set-loss-reg-');
+    seedRoster(home);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const id = 'claude-overlord';
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'overlord', workdir: `/w/${id}`, uuid: `u-${id}`, started: '1' })) {
+      writeFileSync(path.join(reg, `${id}.${k}`), v);
+    }
+    symlinkSync(path.join(reg, 'nowhere'), path.join(reg, `${id}.poolset`));
+    const r = await readSessionRecord(localIO, loadConfig({ CCRC_HOME: home }), id);
+    if (r.kind !== 'found') throw new Error(`fixture row not found: ${r.kind}`);
+    expect(r.record.route?.fields ?? {}).not.toHaveProperty('poolset');
+    expect(r.record.route?.unreadable ?? []).not.toContain('poolset');
+    const s = await setup([]);
+    s.lane.check([r.record]);
+    expect(s.sent, 'today\'s behaviour, pinned: a later fix that counts the link turns this red on purpose').toEqual([]);
   });
 
   it('the table: a second row on a copy is honoured by the push with no code change', async () => {

@@ -829,7 +829,7 @@ describe('ccrc rollout --below-cap (pool set B2, Task 9): only to boxes that lis
     plantHost(home, SERVER, { role: 'server', version: 'v1.0.0', caps: 'verify,node-id,floor,update-json' });
     const r = run(home, ['--below-cap', 'pool-set']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
-    expect(r.stderr).toContain("rollout: --below-cap needs a ccrc that lists below-cap in its caps, and these boxes' do not: server — their ccrc has no capability floor, so move them without --below-cap first; nothing was touched");
+    expect(r.stderr).toContain("rollout: --below-cap needs a ccrc that lists below-cap in its caps, and these boxes' do not: server — move them without --below-cap, or clear the standing fact there if that move is refused; nothing was touched");
     expect(updates(home)).toEqual([]);
     // Without the flag nothing is gated: the older box moves as it always did.
     expect(run(home).code).toBe(0);
@@ -888,6 +888,15 @@ describe('ccrc rollout --below-cap (pool set B2, Task 9): only to boxes that lis
     expect(r.code).toBe(2);
     expect(r.stderr).toContain('rollout: --check and --below-cap are exclusive');
     expect(sshCalls(home)).toEqual([]);
+  });
+
+  it('a Claude Code session (CLAUDECODE set) is refused the flag at exit 2 before any ssh: the operator\'s flag (fix round 1, F1)', () => {
+    const home = bcFleet('ccrc-rollout-bc-session-');
+    const r = run(home, ['--below-cap', 'pool-set'], { CCRC_TEST_CLAUDECODE: '1' }); // the harness's knob (ccdWsHelpers.ts#containedAuthBase)
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain("--below-cap is the operator's flag, typed in their own shell: a Claude Code session never passes the capability floor; nothing was changed");
+    expect(sshCalls(home)).toEqual([]);
+    expect(updates(home)).toEqual([]);
   });
 });
 

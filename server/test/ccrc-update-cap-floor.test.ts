@@ -520,6 +520,19 @@ describe('the override, --below-cap <word> (pool set B2, Task 9): passes its row
     expect(c.stderr).toContain('update: --check and --below-cap are exclusive');
   });
 
+  it('a Claude Code session (CLAUDECODE set) is refused the flag on update and rollback: exit 2, the operator\'s flag, nothing changed (fix round 1, F1)', () => {
+    const home = movingBox('ccrc-capfloor-bc-session-', ['ws-add']);
+    plantSet(home);
+    const before = snapshot(home);
+    for (const r of [runUpdate(home, ['--below-cap', 'pool-set'], { CLAUDECODE: '1' }),
+      rollbackRun(home, ['--to', 'v1.0.0', '--below-cap', 'pool-set'], { CLAUDECODE: '1' })]) {
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("--below-cap is the operator's flag, typed in their own shell: a Claude Code session never passes the capability floor; nothing was changed");
+      expect(snapshot(home)).toEqual(before);
+    }
+    expect(runUpdate(home, [], { CLAUDECODE: '1' }).stderr, 'without the flag a session meets the floor itself').toContain(`${OVERRIDE}${REMEDY}`);
+  });
+
   itLinux('a detached update carries the flag, last in the fixed order, to its child (forwarding 1)', () => {
     const home = movingBox('ccrc-capfloor-bc-detach-', ['ws-add']);
     plantSet(home);
