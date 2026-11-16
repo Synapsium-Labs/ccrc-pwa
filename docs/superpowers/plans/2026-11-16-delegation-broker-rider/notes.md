@@ -32,7 +32,7 @@ direct-entry refusal is unchanged.
 | File | Rows | On `main` before the change |
 |---|---|---|
 | `server/test/ccd-ws-lease-mark-reach.test.ts` | the shared table gains the `entry` class (8 shapes: `ws-rm`, `ws-reap`, `ws-gc`, `ws-gc --fast`, `ws-archive`, `ws-restore`, `roll --to 1.2.3`, `claude mem`): the launcher starts each under `-p` with its argv exact; a new case asserts the body does NOT refuse an unprivileged start of them; the `both` class keeps its refusal pin. Case variants (ASCII and non-ASCII: `ws-archİve`, `wſ-rm`, `RoŁl`, `Clåude`) with `BASHOPTS=nocasematch` start under `-p`; controls (`ws-rmx`, `ws-r`, `caps ws-rm`, `rolls`, `claude-x`, …) stay ordinary | 9 red: the 8 launcher rows and the case-variant row |
-| `server/test/ccd-forbidden-verbs-entry.test.ts` (new) | the REAL body behind the rendered launcher, `BASHOPTS=nocasematch` and `LC_ALL=C.UTF-8`: 10 variants (`WS-RM demo-x`, `Ws-Rm --reason r demo-x`, `WS-REAP --expect … --session demo-x`, `WS-GC`, `Ws-Gc --prune`, `WS-ARCHIVE --session demo-x`, `ws-archİve --session demo-x`, `WS-RESTORE --session demo-x`, `ROLL --to 1.2.3`, `Claude mem`) each exit 1 with the dispatcher's unknown-verb usage and leave every file under the fixture HOME unchanged; the exact spellings still reach their own verbs; `ws-gc` and `ws-gc --fast` still list under `-p` | 8 red: each `ws-*` variant reached its verb (`ws-archİve` too: Bash folds U+0130 in `case` as in `[[`). The `roll` and `claude` rows were green on `main`, since there is no verb to reach (D-8667); their launcher rows above are their red |
+| `server/test/ccd-forbidden-verbs-entry.test.ts` (new; reworked in fix round 1, below) | the REAL body behind the rendered launcher, `BASHOPTS=nocasematch` and `LC_ALL=C.UTF-8`: 10 variants (`WS-RM demo-x`, `Ws-Rm --reason r demo-x`, `WS-REAP --expect … --session demo-x`, `WS-GC`, `Ws-Gc --prune`, `WS-ARCHIVE --session demo-x`, `ws-archİve --session demo-x`, `WS-RESTORE --session demo-x`, `ROLL --to 1.2.3`, `Claude mem`) each exit 1 with the dispatcher's unknown-verb usage and leave every file under the fixture HOME unchanged; the exact spellings still reach their own verbs; `ws-gc` and `ws-gc --fast` still list under `-p` | 8 red: each `ws-*` variant reached its verb (`ws-archİve` too: Bash folds U+0130 in `case` as in `[[`). The `roll` and `claude` rows were green on `main`, since there is no verb to reach (D-8667); their launcher rows above are their red |
 | `agent/test/ccd-entry-exec.test.ts` | the agent's real `exec` op: `ws-archive --session`, `ws-restore --session` and `ws-reap --expect … --session` start under `-p`. `ws-rm` and `ws-gc` are ungrantable and `roll` and `claude` have no grant, so their rows are the server suite's | red at `ws-archive` |
 
 `single-definition/switches-history.test.ts` pins the existing tuple's line byte for byte; it stays green because the
@@ -55,6 +55,52 @@ restored from git after each run):
 
 The same seven deletions and the deletion of the group's check in `is_protected`, run in memory by the coordinator
 skill's `mutation-run.py` against `is_protected` directly: 8 of 8 killed.
+
+## Fix round 1 (review 2313, at 9dd9a1e9c)
+
+The coordinator's rulings: F1 fixed here; A1, A2, A3, A4 and A7 fixed; A5 and A6 no change (README's two edits are the
+consented text; A6 predates this branch), carried in the ledger; A8 no action.
+
+### F1: the census of FORBIDDEN_CCD_VERBS against the entry
+
+`server/test/single-definition/ask-digest.test.ts` (the approval guard's area: `FORBIDDEN_CCD_VERBS` lives in
+`server/src/coord/approvalguard.ts`) gains one block, appended. It derives each head from `FORBIDDEN_CCD_VERBS` (the
+first word, so `ws-gc --prune` is `ws-gc`), loads `ccd/ccd-entry.py` as a Python module and asks its own `is_protected`
+(both tuples) about each head, bare, upper-cased and with a tail word: no third hand-kept list. Its controls run the same
+classifier on an extended list and on the source with each head deleted from whichever tuple names it.
+
+Mutation rows, each run against the real files and restored from git after it:
+
+| Mutation | Census row |
+|---|---|
+| `ws-rm` deleted from `PROTECTED_START_ONLY` | red |
+| `keep-awake` deleted from the first tuple | red |
+| the `PROTECTED_START_ONLY` check deleted from `is_protected` | red |
+| `ws-title` added to `FORBIDDEN_CCD_VERBS` (an unprotected verb) | red |
+
+The block's own controls repeat the deletion for every one of the 16 heads, and the addition for an invented verb.
+
+### A1–A4, A7: the real-body rows
+
+- A1: `ccd-forbidden-verbs-entry.test.ts`'s header now says the `roll` and `claude` real-body rows cannot go red until the
+  body has those verbs (D-8667), and that the launcher rows in `ccd-ws-lease-mark-reach.test.ts` are their pin.
+- A2: the `ws-gc` listing row's title says only what it checks: exit 0 and its own output (the `-p` start is the launcher
+  rows' pin).
+- A3: the `ws-archİve` row first asks this box's Bash whether it folds U+0130 into `ws-archive` under the forced locale.
+  Where it does not, the row is skipped, and its title names the reason. Measured: with the locale forced to a name that
+  does not exist, the row reports skipped with that reason, never passed.
+- A4: the fixture now plants what the variants name: a live workspace (through `ws-add`), an archived one, and one whose
+  directory was removed by hand. Every variant row compares every file under HOME, before its exit status and output.
+  Against `main`'s entry, five rows went red on that comparison, so only those five claim it in their titles:
+  `WS-RM` and `Ws-Rm --reason r` tore the live workspace down (36 paths), `WS-REAP` refused but wrote its lock and a
+  lifecycle journal row, `Ws-Gc --prune` reclaimed the hand-removed workspace (16 paths), and `WS-RESTORE` removed the
+  archived one's stamps (6 paths). The others claim only the unknown verb: `WS-GC` without `--prune` writes nothing even
+  when it runs; `WS-ARCHIVE` and `ws-archİve` stop at `status-unknown` in a fixture HOME, because the session probe needs
+  a user service bus that the harness withholds on purpose, so they changed nothing on `main` either; and `ROLL` and
+  `Claude` reach no verb on `main` (D-8667). All nine variants and the U+0130 row went red on `main` (on the fixture or on
+  the unknown-verb line), except `ROLL` and `Claude`.
+- A7: the `entry` class's body half in `ccd-ws-lease-mark-reach.test.ts` runs the real body through `spawnSyncGroup`, as
+  the sibling file does.
 
 ## T4. README
 

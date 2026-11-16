@@ -15,6 +15,7 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD, ghContainedEnv, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 let h: PrHarness;
 let de: DirectEntry;
@@ -37,6 +38,17 @@ const run = (file: string, args: readonly string[], env: Record<string, string> 
   const r = spawnSync(file, [...args], {
     cwd: h.home, encoding: 'utf8', timeout: 120_000,
     env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, ...env },
+      { systemd: true, tmux: true }),
+  });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+};
+/** `ccd/ccd` by an unprivileged explicit bash, the REAL body running in a process group of its own, so a timeout ends
+ *  whatever it started too (#896; review 2313 A7): the `entry` class's body half runs the verbs themselves. */
+const bashGroup = (args: readonly string[]): Ran => {
+  const bin = path.join(h.home, '.local', 'bin');
+  const r = spawnSyncGroup('bash', [CCD, ...args], {
+    cwd: h.home, encoding: 'utf8', timeout: 120_000,
+    env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, PATH: `${bin}:${process.env['PATH'] ?? ''}` },
       { systemd: true, tmux: true }),
   });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -99,7 +111,7 @@ describe('the launcher protects every shape; the body refuses the `both` class o
     const entryOnly = SHAPES.filter(([, , c]) => c === 'entry').map(([, a]) => a);
     expect(entryOnly.length, 'the class is populated').toBe(8);
     for (const argv of entryOnly) {
-      const b = bash([], argv);
+      const b = bashGroup(argv);
       expect(b.code, `${argv.join(' ')}: ${b.stderr.slice(0, 300)}`).not.toBe(125);
       expect(b.stderr, argv.join(' ')).not.toContain('refused (entry-');
     }

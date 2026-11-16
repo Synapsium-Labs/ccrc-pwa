@@ -3,18 +3,28 @@
 // each with any tail — under `bash -p`, so a case variant a caller reaches through an inherited `nocasematch` (exported in
 // BASHOPTS) folds into none of them: `-p` drops the option and the body's dispatcher compares exactly. This file runs the
 // REAL body behind the rendered launcher; `ccd-ws-lease-mark-reach.test.ts` holds the table that runs the shapes against both
-// halves (these verbs are its `entry` class: the body does not refuse them when started another way).
+// halves (these verbs are its `entry` class: the body does not refuse them when started another way), and its launcher rows
+// are what pins the `-p` start of each verb.
 //
-// FIXTURE HOME ONLY: the launcher is a fixture install under the harness HOME, and no argv here reaches a removal. A case
-// variant is refused as an unknown verb (the dispatcher's usage line) before any verb runs, and the exact spellings run here
-// only as a usage refusal or the read-only `ws-gc` listing. `roll` and `claude` are no verb of the body yet (D-8667): their
-// exact spelling reaches the dispatcher's usage line too, and their rows guard the spelling ahead of the verbs.
+// FIXTURE HOME ONLY: the launcher is a fixture install under the harness HOME, with a contained `tmux` and `systemctl`
+// stubbed in the harness's own stub directory. The fixture plants the workspaces the variants name (review 2313 A4): a
+// live one, an archived one, and one whose directory was removed by hand. Every variant row compares every file under
+// HOME before and after, FIRST, and five rows claim it in their titles because on `main` they changed the fixture (measured,
+// recorded in the plan's notes): `ws-rm` (twice) tore the live workspace down, `ws-reap` refused but wrote its lock and a
+// lifecycle journal row, `ws-gc --prune` reclaimed the hand-removed one, and `ws-restore` removed the archived one's stamps. The other rows
+// claim only the unknown verb, each for a reason: `ws-gc` without `--prune` writes nothing even when it runs, `ws-archive`
+// stops at `status-unknown` in a fixture HOME (its session probe needs a user service bus, which the harness withholds on
+// purpose), and `roll` and `claude` are no verb at all.
+//
+// `roll` and `claude` are no verb of the body yet (D-8667): their real-body rows here pass with either spelling, so they
+// cannot go red until the body has those verbs. Their pin is the launcher rows in `ccd-ws-lease-mark-reach.test.ts`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { ghContainedEnv, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
+import { WS_ADD, ghContainedEnv, installDirectEntry, stubContainedTool, type DirectEntry } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 
@@ -50,6 +60,12 @@ const direct = (args: readonly string[], env: Record<string, string> = {}): Ran 
 const UNKNOWN_VERB = 'usage: ccd {start|';
 /** An inherited `nocasematch`, in a UTF-8 locale, where Bash folds beyond ASCII (U+0130 to `i`). */
 const FOLDING = { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' };
+const DOTTED = 'ws-archİve';
+
+/** Whether this box's Bash, under FOLDING's locale, folds `DOTTED` into `ws-archive` at all: where the locale is missing
+ *  (or folds nothing), the non-ASCII row cannot test the fold, so it is skipped with that reason, never passed. */
+const BASH_FOLDS_DOTTED = spawnSync('bash', ['-c', 'shopt -s nocasematch; case "$1" in ws-archive) exit 0 ;; esac; exit 1', '_', DOTTED],
+  { env: { PATH: process.env['PATH'] ?? '', LC_ALL: FOLDING.LC_ALL }, encoding: 'utf8' }).status === 0;
 
 /** Every entry under HOME by its relative path: a file by its bytes' digest, a link by its target, a directory as such. */
 const snapshot = (): Map<string, string> => {
@@ -67,32 +83,71 @@ const snapshot = (): Map<string, string> => {
   return out;
 };
 
-/** A case variant of each verb, each with a tail the verb would act on. `ws-archİve` carries the non-ASCII fold. */
-const VARIANTS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['ws-rm', ['WS-RM', 'demo-x']],
-  ['ws-rm', ['Ws-Rm', '--reason', 'r', 'demo-x']],
-  ['ws-reap', ['WS-REAP', '--expect', 'a'.repeat(64), '--session', 'demo-x']],
-  ['ws-gc', ['WS-GC']],
-  ['ws-gc', ['Ws-Gc', '--prune']],
-  ['ws-archive', ['WS-ARCHIVE', '--session', 'demo-x']],
-  ['ws-archive', ['ws-archİve', '--session', 'demo-x']],
-  ['ws-restore', ['WS-RESTORE', '--session', 'demo-x']],
-  ['roll', ['ROLL', '--to', '1.2.3']],
-  ['claude', ['Claude', 'mem']],
+const LIVE = 'demo-still-river';   // ws-add's id for project demo, slug still-river
+const ARCHIVED = 'demo-dry-creek';
+const GONE = 'demo-quiet-mesa';
+
+/** The workspaces the variants name, planted in the fixture HOME: a live worktree with its registry row, an archived one,
+ *  and one whose directory was removed by hand (stale git metadata and a dead registry row, `ws-gc --prune`'s two arms). */
+const plant = (): void => {
+  const main = h.makeRepo('demo');
+  h.git(main, 'commit', '--allow-empty', '-m', 'base');
+  // The live one through ws-add itself, so its row carries everything ws-archive reads (its wrapper among them).
+  h.sh(`${WS_ADD} CCD_WS_SLUG=still-river cmd_ws_add demo`);
+  for (const [id, slug] of [[ARCHIVED, 'dry-creek'], [GONE, 'quiet-mesa']] as const) {
+    const wt = path.join(h.home, 'worktrees', 'demo', slug);
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    h.git(main, 'worktree', 'add', '-b', `ws/${slug}`, wt);
+    h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo; _reg_set ${id} workspace ${slug}
+      _reg_set ${id} branch ws/${slug}; _reg_set ${id} workdir ${wt}`);
+  }
+  h.sh(`_reg_set ${ARCHIVED} archived 1787000000; _reg_set ${ARCHIVED} archivedreason merged:#42`);
+  fs.rmSync(path.join(h.home, 'worktrees', 'demo', 'quiet-mesa'), { recursive: true, force: true });
+  // A service manager that reports every unit inactive and a tmux with no session, so a variant that reached its verb
+  // on `main` could act on its workspace; here no variant reaches one.
+  stubContainedTool(h.home, 'systemctl', '#!/bin/sh\ncase "$*" in *is-active*) echo inactive; exit 3 ;; esac\nexit 0\n');
+  stubContainedTool(h.home, 'tmux', '#!/bin/sh\ncase "$1" in has-session|list-panes) exit 1 ;; esac\nexit 0\n');
+};
+
+/** A case variant of each verb, with the tail it would act on, and whether its row claims the fixture comparison: true only
+ *  where the variant changed the planted fixture on `main` (see the header). */
+const VARIANTS: ReadonlyArray<readonly [verb: string, argv: readonly string[], claimsFixture: boolean]> = [
+  ['ws-rm', ['WS-RM', LIVE], true],
+  ['ws-rm', ['Ws-Rm', '--reason', 'r', LIVE], true],
+  ['ws-reap', ['WS-REAP', '--expect', 'a'.repeat(64), '--session', ARCHIVED], true],
+  ['ws-gc', ['WS-GC'], false],
+  ['ws-gc', ['Ws-Gc', '--prune'], true],
+  ['ws-archive', ['WS-ARCHIVE', '--session', LIVE], false],
+  ['ws-restore', ['WS-RESTORE', '--session', ARCHIVED], true],
+  ['roll', ['ROLL', '--to', '1.2.3'], false],
+  ['claude', ['Claude', 'mem'], false],
 ];
 
+/** One variant's run: the fixture is compared FIRST, so a variant that acted on its workspace reds on that, before the
+ *  exit status or the unknown-verb line is read. */
+const refusedUnknown = (argv: readonly string[]): void => {
+  de = installDirectEntry(h.home);
+  plant();
+  expect(direct(['version']).code, 'CONTROL: the body runs through the launcher').toBe(0);
+  const before = snapshot();
+  const r = direct(argv, FOLDING);
+  const after = snapshot();
+  const changed = [...new Set([...before.keys(), ...after.keys()])].filter((k) => before.get(k) !== after.get(k)).sort();
+  expect(changed, `${argv.join(' ')} changed the fixture: ${r.stderr.slice(0, 200)}`).toEqual([]);
+  expect(r.code, `${argv.join(' ')}: ${r.stderr.slice(0, 300)}`).toBe(1);
+  expect(r.stderr, `${argv.join(' ')} reached a verb`).toContain(UNKNOWN_VERB);
+};
+
 describe('the forbidden verbs through the installed direct entry, on the real body (D-8666)', () => {
-  for (const [verb, argv] of VARIANTS) {
-    it(`${argv.join(' ')} under an inherited nocasematch reaches no verb (${verb}) and changes nothing in the fixture`, () => {
-      de = installDirectEntry(h.home);
-      expect(direct(['version']).code, 'CONTROL: the body runs through the launcher').toBe(0);
-      const before = snapshot();
-      const r = direct(argv, FOLDING);
-      expect(r.code, `${argv.join(' ')}: ${r.stderr.slice(0, 300)}`).toBe(1);
-      expect(r.stderr, `${argv.join(' ')} reached a verb`).toContain(UNKNOWN_VERB);
-      expect(snapshot(), `${argv.join(' ')} changed the fixture`).toEqual(before);
-    }, 60_000);
+  for (const [verb, argv, claimsFixture] of VARIANTS) {
+    const what = claimsFixture ? ', and leaves the planted fixture as it was' : '';
+    it(`${argv.join(' ')} under an inherited nocasematch reaches no verb (${verb})${what}`, () => refusedUnknown(argv), 60_000);
   }
+
+  it.skipIf(!BASH_FOLDS_DOTTED)(
+    `${DOTTED} --session ${LIVE} (U+0130) under an inherited nocasematch reaches no verb (ws-archive)`
+      + (BASH_FOLDS_DOTTED ? '' : ` — SKIPPED: this box's Bash does not fold U+0130 under LC_ALL=${FOLDING.LC_ALL} (the locale is missing or folds nothing)`),
+    () => refusedUnknown([DOTTED, '--session', LIVE]), 60_000);
 
   it('the exact spellings still reach their verbs through the launcher', () => {
     de = installDirectEntry(h.home);
@@ -107,7 +162,7 @@ describe('the forbidden verbs through the installed direct entry, on the real bo
     for (const verb of ['roll', 'claude']) expect(direct([verb]).stderr, verb).toContain(UNKNOWN_VERB);
   }, 60_000);
 
-  it('ws-gc without --prune still lists through the launcher, under -p', () => {
+  it('ws-gc without --prune still lists through the launcher (exit 0, its own output)', () => {
     de = installDirectEntry(h.home);
     for (const argv of [['ws-gc'], ['ws-gc', '--fast']]) {
       const r = direct(argv);
