@@ -32,7 +32,7 @@ function image(tree: DocsTreeOk, f: FakeLoaders, assets: ExportAssets, url = '/d
   const ui = (t: DocsTreeOk) => {
     const urls = new WeakMap<HastElement, DetachedUrls>([[node, { attrs: { src }, imageIndex: 0 }]]);
     const ctx: DocLinkContextValue = {
-      project: 'demo', pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree: t,
+      project: 'demo', pageRef: page.ref, pageAt: null, view: page.view, section: page.section, path: page.path, tree: t,
       pageSource: pinFor(t, page)?.kind === 'draft' ? 'draft' : 'committed', urls, onFragment: vi.fn(),
     };
     return (

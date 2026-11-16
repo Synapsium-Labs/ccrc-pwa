@@ -248,7 +248,7 @@ export function DocsLeaf(p: {
   }, [cls, pendingFragment, setFragment]);
   const pin = pinFor(tree, page);
   const link = useMemo<LinkBase>(() => ({
-    project: page.project, pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
+    project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
     pageSource: pin?.kind === 'draft' ? 'draft' : 'committed', onFragment: visit.setFragment,
   }), [page, tree, pin?.kind, visit.setFragment]);
   const entry = tree.entries.find((e) => e.section === page.section && e.path === page.path);

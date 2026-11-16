@@ -65,7 +65,7 @@ const refused = (why: DocImageRefusal, action: Extract<ImagePlan, { kind: 'refus
 /** The page the image sits on, as the leaf location `imagePinFor` reads (its project, ref and view). */
 function leafOf(ctx: DocLinkContextValue): Leaf {
   const loc = docsLocation({ kind: 'project', project: ctx.project, ref: ctx.pageRef },
-    { kind: 'path', section: ctx.section, path: ctx.path, dirSlash: false, view: ctx.view });
+    { kind: 'path', section: ctx.section, path: ctx.path, dirSlash: false, view: ctx.view, at: ctx.pageAt });
   if (loc.kind !== 'path') throw new Error('DocImage: a path target built a page that is not a leaf');
   return loc;
 }
@@ -120,7 +120,8 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
   if (!ip.ok) return refused(ip.why);
-  const size = ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;
+  // Refinement (n): on a version page the listing's size is the tip's, not the version's, so ccd's class cap answers.
+  const size = ctx.pageAt !== null ? undefined : ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;
   const cap = DOCS_CLASS_CAP[cls];
   if (typeof size === 'number' && size > cap) return refused('too-large', null, { size: kib(size), cap: kib(cap) });
   return {

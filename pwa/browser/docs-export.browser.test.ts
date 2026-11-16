@@ -77,7 +77,7 @@ async function production(b: string): Promise<string> {
   const page = pageAt('/docs/demo/specs/a.md');
   if (page.kind !== 'path') throw new Error('fixture');
   const link: Omit<DocLinkContextValue, 'urls'> = {
-    project: 'demo', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree, pageSource: 'committed', onFragment: () => {},
+    project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree, pageSource: 'committed', onFragment: () => {},
   };
   const pin = { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'a.md' } as const;
   const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: 0, readAt: 0, plainView: true });

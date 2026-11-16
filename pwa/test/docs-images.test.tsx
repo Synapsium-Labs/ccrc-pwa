@@ -123,7 +123,7 @@ function docUi(src: string | HastRoot, o: DocOpts = {}) {
   const d = detachUrls(typeof src === 'string' ? treeOf(src) : src);
   const assets = o.assets ?? fakeAssets();
   const ctx: DocLinkContextValue = {
-    project: page.project, pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
+    project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
     pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
   };
   const page$ = (
@@ -248,6 +248,51 @@ describe('imagePinFor: the one pin rule (spec 4.11; M4.U2, row 66)', () => {
   });
 });
 
+describe('a version page reads its images at the version (refinement (n))', () => {
+  const SHA = 'c'.repeat(40);
+  const VERSION_URL = `/docs/demo/specs/a.md?ref=main&at=${SHA}`;
+  const VERSION = leafAt(VERSION_URL);
+
+  it('an image on a version page is pinned at the version', async () => {
+    const t = withImage();
+    expect(imagePinFor(t.entries[1], t, VERSION)).toEqual({
+      ok: true, pin: committedPin('i.png', SHA), draft: false, uncommittedNotShown: false });
+    const { container, assets } = renderDoc('![i](i.png)', { tree: t, url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(assets.raster.mock.calls[0]?.slice(0, 2)).toEqual(['demo', committedPin('i.png', SHA)]);
+  });
+
+  it('it is never marked uncommittedNotShown', async () => {
+    const t = withImage({ draft: draftOf('modified', { fp: FP_2 }) });
+    expect(imagePinFor(t.entries[1], t, VERSION)).toMatchObject({ ok: true, uncommittedNotShown: false, draft: false });
+    expect(imagePinFor(t.entries[1], t, leafAt('/docs/demo/specs/a.md?ref=main')))
+      .toMatchObject({ ok: true, uncommittedNotShown: true });
+    const { container, assets } = renderDoc('![i](i.png)', { tree: t, url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(chips(container)).toEqual([]);
+    expect(assets.onDraftAsset).not.toHaveBeenCalled();
+  });
+
+  it("on a version page an image whose listed size is over its class cap still requests, and ccd's class cap answers", async () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const tree = withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } });
+    const { container, assets } = renderDoc('![i](i.png)', { tree, url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(assets.raster).toHaveBeenCalledTimes(1);
+    expect(assets.raster.mock.calls[0]?.slice(0, 2)).toEqual(['demo', committedPin('i.png', SHA)]);
+    expect(container.querySelector('span.doc-img-refused')).toBeNull();
+  });
+
+  it('on a version page an image the served listing does not hold is absent, with no request', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md')] });
+    const { container, assets } = renderDoc('![i](i.png)', { tree, url: VERSION_URL });
+    await act(async () => {});
+    expect(container.querySelector('span.doc-img-refused')?.textContent).toBe(refusedText('absent'));
+    expect(assets.raster).not.toHaveBeenCalled();
+    expect(assets.file).not.toHaveBeenCalled();
+  });
+});
+
 describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', () => {
   const CASES: readonly (readonly [string, string, DocImageRefusal])[] = [
     ['a root-relative API path', '/api/example/x', 'root-relative'],
@@ -339,7 +384,7 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     cleanup();
     const page = leafAt('/docs/demo/specs/a.md');
     const ctx: DocLinkContextValue = {
-      project: 'demo', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree: withImage(),
+      project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: withImage(),
       pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
     };
     const noAssets = render(

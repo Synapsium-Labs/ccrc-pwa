@@ -112,18 +112,28 @@ export type DocsPageTarget =
   | { kind: 'default-view'; project: string }
   | { kind: 'same-page'; project: string; ref: DocsRefSpec | null }
   | { kind: 'section'; section: DocSectionSlug }
-  | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed' };
+  | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed';
+      /** Absent: the page's own version (a leaf page's `at`, else the latest); `null`: the latest; a sha: that version. */
+      at?: string | null }
+  /** This leaf at the version `at`, or at the latest for `null` (rich-docs spec G6): Back to the latest, and W8b's
+   *  `version` op. Keeps the page's project, ref and frame; `view` is `effective` (a version is committed bytes). */
+  | { kind: 'version'; at: string | null };
 
 /** THE one builder of a page location a Docs view links to (refinement (q)): it keeps `page`'s project and ref and
  *  applies `to`; a `path` target's `frame` is `inline` (W6 owns `full`), while a `same-page` target keeps the page's
  *  own frame, view and everything else. Every page URL a view writes is
  *  `docsPageUrl(docsLocation(page, to))`; no view builds a `DocsPageLocation` literal. The index names no project, so
- *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. */
+ *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. A `path` target
+ *  inherits a leaf page's `at` unless it names one; `version` sets or clears it. */
 export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPageLocation {
   if (to.kind === 'index') return { kind: 'index' };
   if (to.kind === 'default-view') return { kind: 'project', project: to.project, ref: null };
   if (page.kind === 'index') throw new Error(`docsLocation: the index names no project for a ${to.kind} target`);
   if (to.kind === 'same-page') return { ...page, project: to.project, ref: to.ref };
+  if (to.kind === 'version') {
+    if (page.kind !== 'path') throw new Error(`docsLocation: a version target needs a leaf page, not a ${page.kind}`);
+    return { ...page, at: page.dirSlash ? null : to.at, view: 'effective' };
+  }
   const { project, ref } = page;
   switch (to.kind) {
     case 'project':
@@ -133,7 +143,8 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
     case 'path':
       return {
         kind: 'path', project, section: to.section, path: to.path, dirSlash: to.dirSlash, ref,
-        at: null,
+        // Refinement (o): a leaf's version follows its links, as a GitHub blob URL's commit does; a directory has none.
+        at: to.dirSlash ? null : to.at !== undefined ? to.at : page.kind === 'path' ? page.at : null,
         view: to.view ?? 'effective', frame: 'inline',
       };
   }
@@ -165,7 +176,7 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
         return { kind: 'fragment', fragment: r.fragment };
       }
       const here: DocsPageLocation = { kind: 'project', project: ctx.project, ref: ctx.pageRef };
-      const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false }));
+      const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false, at: ctx.pageAt }));
       return { kind: 'in-app', href, fragment: r.fragment };
     }
     case 'fragment':
@@ -198,8 +209,9 @@ export type ImagePin =
  *  planner). `e` is the tree entry at the image's resolved path; `undefined` means there is none. The page is a DRAFT
  *  page exactly when its own leaf opens a draft (`pinFor` answers a `DraftPin`); every other page is committed (the
  *  default view, `view=committed`, a ref-view leaf that opens committed, and a page whose leaf is not in the tree).
- *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)`, else `absent`; in a ref
- *    view an image whose draft `admitDraft` admits is marked `uncommittedNotShown`. A draft is never resolved.
+ *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)` (at `page.at` on a version
+ *    page), else `absent`; in a ref view an image whose draft `admitDraft` admits is marked `uncommittedNotShown` (never
+ *    on a version page). A draft is never resolved.
  *  - draft page (an admitted holder at the served commit): no draft on the image gives the committed side under the
  *    same condition; a deleted draft is `deleted-in-worktree`; a draft `entryView` opens gives
  *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`. */
@@ -211,12 +223,13 @@ export function imagePinFor(
   const committed = (uncommittedNotShown: boolean): ImagePin => {
     const kind = e.committed?.kind;
     if (kind !== 'file' && kind !== 'exec') return { ok: false, why: 'absent' };
+    // Refinement (n): a version page's images are read at its version (rich-docs spec G6), never at the tip.
     const pin: DocPin = {
-      kind: 'committed', commit: tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
+      kind: 'committed', commit: page.at ?? tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
     };
     return { ok: true, pin, draft: false, uncommittedNotShown };
   };
-  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.ref !== null && admitDraft(e, drafts));
+  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.at === null && page.ref !== null && admitDraft(e, drafts));
   const draft = e.draft;
   if (draft === null) return committed(false);
   if (entryView(e, drafts, 'ref').badge === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
