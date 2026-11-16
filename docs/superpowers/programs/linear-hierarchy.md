@@ -69,8 +69,13 @@ They decide every question the plan leaves open.
   re-checked at wave 5's dispatch: if the Work card has not landed by then, the two coordinators agree who builds the
   section before either does. The Work card's WM0/WM1 and this programme's wave 4 both change `planStore.ts`,
   `planRoutes.ts`, `planPolicy.ts` and `ccd/ccrc-api`. Whichever lands second takes the next migration slot and merges
-  the other's store changes. If the operator rules that a phase becomes a label on each referenced issue (their item
-  356), that label is an owned field of the sync and the drift rules, built in a later wave of this programme.
+  the other's store changes.
+- **2026-11-16 — a phase becomes a label on each issue it references, written by the sync (the operator's ruling on
+  desktop-polish item 356, relayed by its coordinator).** The label is an owned field of the plan sync and of the
+  drift rules (design §5.3, §6, §7.2). A ticket may be referenced by more than one phase, so an issue may carry more
+  than one phase label. The phases come from the Work card's tables (`plan_phases`, `plan_phase_refs`, spec on #2913),
+  which are not built yet. So this is scope for a later wave of this programme, planned once those tables land; the
+  same rulings call a stage a phase, not a wave, on the console (items 354, 355).
 
 ## Carried constraints
 
