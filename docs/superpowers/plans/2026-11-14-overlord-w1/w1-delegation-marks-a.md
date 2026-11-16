@@ -57,7 +57,7 @@ Nothing changes at merge but the boxes. No W1 code reads a mark beyond the waiti
 
 ## Growth
 
-Measured against `origin/main` with `GROWTH_CHECK=1`: `server/src/coord/schema.ts` +25, `server/src/coord/store.ts` +3,
+Measured against `origin/main` with `GROWTH_CHECK=1`: `server/src/coord/schema.ts` +26, `server/src/coord/store.ts` +3,
 `pwa/src/lib/api.ts` +6, `server/src/server.ts` 0, `shared/api.ts` 0. No waiver.
 
 ## Red checks
