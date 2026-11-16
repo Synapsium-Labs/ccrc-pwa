@@ -102,6 +102,12 @@ ledger. A departure is named by a slug; no D-number is invented.
   detached unit. `ccrc-install-role.test.ts` pins eleven words on Linux, nine on Darwin, and the word's machinery.
 - **`guards-proved-by-mutation`.** The tests in this PR were written beside the code, not run red first; each guard's
   red is measured by mutation instead (below), every mutant restored from a saved copy and compared byte for byte.
+- **`b2-cases-hold-any-table`.** The sandbox piece adds a floor row beside this PR (its PR A2). B2's cases read the
+  table's words from `ccd/ccrc` where a row count matters (an unlistable registry, rollout's `unmeasured`), match the
+  usage sentence by its prefix, and use a fictional demo row (`tablefact|table-word-v1`; `acctorder` on the server), so
+  that row lands without editing them. Measured with its exact row added to copies of `ccd/ccrc` and the lane: every B2
+  case stays green; only B1's TABLE describe reds on its "unpatched ignores a profiledigest entry" case, which the
+  sandbox piece rewrites under my grant (and it adds its twin row to `CAP_FLOOR_FACTS`).
 - **`remedy-rewrite-comment`.** The comment above `CAP_FLOOR_ROWS` now says the override exists and that the designation
   piece rewrites the `poolset` remedy when its Settings doors land.
 
