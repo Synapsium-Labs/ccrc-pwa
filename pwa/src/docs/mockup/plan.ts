@@ -8,11 +8,13 @@ import {
   DOCS_CLASS_CAP, contentClass, docsApi, resolveDocRef,
   type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk,
 } from '../../../../shared/docs';
-import { imagePinFor } from '../docsLinks';
+import { imagePinFor, pageOpensDraft } from '../docsLinks';
 import {
   MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ASSETS, MOCKUP_MAX_CSS_DEPTH, mockupMimeRow,
 } from './policy';
-import type { MockupAssetPlan, MockupAssetRow, MockupContext, MockupRef, MockupRefVerdict, MockupSize } from './ports';
+import type {
+  MockupAssetPlan, MockupAssetRow, MockupContext, MockupPlanBasis, MockupRef, MockupRefVerdict, MockupSize,
+} from './ports';
 
 type Leaf = Extract<DocsPageLocation, { kind: 'path' }>;
 
@@ -73,73 +75,61 @@ type Derived =
   | { readonly final: MockupRefVerdict }
   | { readonly pin: DocPin; readonly mime: string; readonly size: MockupSize };
 
-interface Held { readonly verdict: MockupRefVerdict; readonly size: MockupSize }
-
-/** Steps 1-5 of the plan's decision for one reference: depth, `resolveDocRef`, kind fit, the pin rule, the size basis.
- *  A function of the reference and the context alone, so an already-admitted row's pin is re-derived from its own ref. */
-function deriveFor(ctx: MockupContext): (ref: MockupRef) => Derived {
-  let index: Map<string, DocsEntry> | null = null;
-  // Checked up front, so a mismatched context throws whatever its references are, not only when one needs a pin.
+/** The context's derivation, built ONCE per plan (fix round 1, F1): the page (checked against the context's own pin up
+ *  front, so a mismatched context throws whatever its references are), whether it opens a draft, and the listing
+ *  indexed once. An extension carries it, so no reference ever searches the whole listing. */
+function basisFor(ctx: MockupContext): MockupPlanBasis {
   const page = mockupPage(ctx);
-  const entryAt = (section: string, path: string): DocsEntry | undefined => {
-    if (index === null) {
-      index = new Map();
-      for (const e of ctx.tree.entries) {
-        const key = `${e.section}\u0000${e.path}`;
-        if (!index.has(key)) index.set(key, e);
-      }
-    }
-    return index.get(`${section}\u0000${path}`);
-  };
-  return (ref) => {
-    if (ref.depth > MOCKUP_MAX_CSS_DEPTH) return { final: { v: 'unsupported', why: 'css-depth' } };
-    const slash = ref.basePath.indexOf('/');
-    const from = { section: ref.basePath.slice(0, slash) as DocSectionSlug, path: ref.basePath.slice(slash + 1) };
-    const r = resolveDocRef(from, ref.raw);
-    switch (r.kind) {
-      case 'fragment':
-        return { final: { v: 'kept', why: 'fragment' } };
-      case 'self-contained':
-        return { final: { v: 'kept', why: 'self-contained' } };
-      case 'external':
-        return { final: r.origin === null ? { v: 'refused', why: 'scheme' } : { v: 'external', origin: r.origin, via: 'src' } };
-      case 'repo':
-        return { final: { v: 'refused', why: 'repo' } };
-      case 'refused':
-        return { final: { v: 'refused', why: r.why } };
-      case 'doc':
-        break;
-    }
-    const row = mockupMimeRow(r.path);
-    if (row === null || !row.kinds.includes(ref.kind)) return { final: { v: 'unsupported', why: 'kind' } };
-    const e = entryAt(r.section, r.path);
-    const ip = imagePinFor(e, ctx.tree, page);
-    if (!ip.ok) {
-      return { final: { v: 'missing', why: ip.why === 'absent' ? 'absent-at-commit' : ip.why } };
-    }
-    return { pin: ip.pin, mime: row.mime, size: mockupSizeBasis(e, ctx.tree, ip.pin, contentClass(r.path)) };
-  };
+  const index = new Map<string, DocsEntry>();
+  for (const e of ctx.tree.entries) {
+    const key = `${e.section}\u0000${e.path}`;
+    if (!index.has(key)) index.set(key, e);
+  }
+  return { page, pageDraft: pageOpensDraft(ctx.tree, page), index };
 }
 
-/** THE decision, shared by both entry points: `prior` rows stay as they are and in order, `refs` are decided in the
- *  given order against what `prior` admitted (its distinct pins, their count and `plan.reservedBytes`). */
-function decide(
-  context: MockupContext, prior: readonly MockupAssetRow[], reservedBytes: number, refs: readonly MockupRef[],
-): MockupAssetPlan {
-  const derive = deriveFor(context);
-  const admitted = new Map<string, Held>();
-  for (const row of prior) {
-    if (row.size === null) continue;
-    const d = derive(row.ref);
-    if (!('pin' in d)) continue;
-    const id = docsApi.file(context.project, d.pin);
-    if (!admitted.has(id)) admitted.set(id, { verdict: row.verdict, size: row.size });
+/** Steps 1-5 of the plan's decision for one reference: depth, `resolveDocRef`, kind fit, the pin rule, the size basis.
+ *  A function of the reference, the context and its basis alone. Each reference is derived exactly once, when it is
+ *  first decided; a prior row is never derived again (F1). */
+function derive(ctx: MockupContext, basis: MockupPlanBasis, ref: MockupRef): Derived {
+  if (ref.depth > MOCKUP_MAX_CSS_DEPTH) return { final: { v: 'unsupported', why: 'css-depth' } };
+  const slash = ref.basePath.indexOf('/');
+  const from = { section: ref.basePath.slice(0, slash) as DocSectionSlug, path: ref.basePath.slice(slash + 1) };
+  const r = resolveDocRef(from, ref.raw);
+  switch (r.kind) {
+    case 'fragment':
+      return { final: { v: 'kept', why: 'fragment' } };
+    case 'self-contained':
+      return { final: { v: 'kept', why: 'self-contained' } };
+    case 'external':
+      return { final: r.origin === null ? { v: 'refused', why: 'scheme' } : { v: 'external', origin: r.origin, via: 'src' } };
+    case 'repo':
+      return { final: { v: 'refused', why: 'repo' } };
+    case 'refused':
+      return { final: { v: 'refused', why: r.why } };
+    case 'doc':
+      break;
   }
-  const rows: MockupAssetRow[] = [...prior];
-  let count = admitted.size;
-  let reserved = reservedBytes;
+  const row = mockupMimeRow(r.path);
+  if (row === null || !row.kinds.includes(ref.kind)) return { final: { v: 'unsupported', why: 'kind' } };
+  const e = basis.index.get(`${r.section}\u0000${r.path}`);
+  const ip = imagePinFor(e, ctx.tree, basis.page, basis.pageDraft);
+  if (!ip.ok) {
+    return { final: { v: 'missing', why: ip.why === 'absent' ? 'absent-at-commit' : ip.why } };
+  }
+  return { pin: ip.pin, mime: row.mime, size: mockupSizeBasis(e, ctx.tree, ip.pin, contentClass(r.path)) };
+}
+
+/** THE decision, shared by both entry points: `plan`'s rows stay as they are and in order, `refs` are decided in the
+ *  given order against what it admitted (`plan.admitted`, its count, and `plan.reservedBytes`). Linear in `refs`: the
+ *  admitted map is copied (at most `MOCKUP_MAX_ASSETS` entries), never rebuilt from the rows. */
+function decide(plan: MockupAssetPlan, refs: readonly MockupRef[]): MockupAssetPlan {
+  const { context, basis } = plan;
+  const admitted = new Map(plan.admitted);
+  const rows: MockupAssetRow[] = [...plan.rows];
+  let reserved = plan.reservedBytes;
   for (const ref of refs) {
-    const d = derive(ref);
+    const d = derive(context, basis, ref);
     if ('final' in d) {
       rows.push({ ref, verdict: d.final, size: null });
       continue;
@@ -150,39 +140,40 @@ function decide(
       continue;
     }
     const id = docsApi.file(context.project, d.pin);
-    const held = admitted.get(id);
-    if (held !== undefined) {
+    const at = admitted.get(id);
+    if (at !== undefined) {
       // The same bytes, reserved once; an inline duplicate keeps its own reference's kind (a module beside a classic
-      // script of the same file still loads as a module), which the kind check above already admitted.
+      // script of the same file still loads as a module), which the kind check above already admitted. The admitting
+      // row is read as it stands now (a failed one gives its duplicates its failure).
+      const held = rows[at]!;
       const verdict = held.verdict.v === 'inline' ? { ...held.verdict, kind: ref.kind } : held.verdict;
       rows.push({ ref, verdict, size: held.size });
       continue;
     }
-    if (count + 1 > MOCKUP_MAX_ASSETS || reserved + d.size.bytes > MOCKUP_MAX_ASSET_BYTES) {
+    if (admitted.size + 1 > MOCKUP_MAX_ASSETS || reserved + d.size.bytes > MOCKUP_MAX_ASSET_BYTES) {
       rows.push({ ref, verdict: { v: 'skipped', why: 'over-budget' }, size: null });
       continue;
     }
     const verdict: MockupRefVerdict = {
       v: 'inline', pin: d.pin, kind: ref.kind, mime: d.mime, size: d.size.bytes, draft: d.pin.kind === 'draft',
     };
-    admitted.set(id, { verdict, size: d.size });
-    count += 1;
+    admitted.set(id, rows.length);
     reserved += d.size.bytes;
     rows.push({ ref, verdict, size: d.size });
   }
-  return { context, rows, reservedBytes: reserved };
+  return { context, basis, admitted, rows, reservedBytes: reserved };
 }
 
 /** The plan of one attempt's first references (the page's own), decided from `ctx` alone. Throws
  *  `MockupContextMismatch` when the context's own pin is not the one the pin rule gives its page in its tree. */
 export function planMockupAssets(refs: readonly MockupRef[], ctx: MockupContext): MockupAssetPlan {
-  return decide(ctx, [], 0, refs);
+  return decide({ context: ctx, basis: basisFor(ctx), admitted: new Map(), rows: [], reservedBytes: 0 }, refs);
 }
 
 /** The same attempt's plan with newly discovered references (a stylesheet's) appended, decided by the same rules
  *  against the prior rows' admitted pins, their count and `plan.reservedBytes`. It keeps the plan's own context
- *  object, every prior row as it stands (a failed one included, its reservation kept), and starts no second plan. Throws
- *  `MockupContextMismatch` as `planMockupAssets` does. */
+ *  object and basis, every prior row as it stands (a failed one included, its reservation kept), and starts no second
+ *  plan; only `refs` are derived. */
 export function extendMockupAssetPlan(plan: MockupAssetPlan, refs: readonly MockupRef[]): MockupAssetPlan {
-  return decide(plan.context, plan.rows, plan.reservedBytes, refs);
+  return decide(plan, refs);
 }

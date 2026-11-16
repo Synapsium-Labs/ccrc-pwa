@@ -3,7 +3,7 @@
 // captured context; the loader (`load.ts`) reads admitted pins through `MockupAssetReader`, which the consumer declares
 // here and the screen's adapter implements over the existing Docs loaders and per-screen queue. No transport adapter
 // receives admission authority: it reads the pins it is given and nothing else.
-import type { DocPin, DocSectionSlug, DocsTreeOk } from '../../../../shared/docs';
+import type { DocPin, DocSectionSlug, DocsEntry, DocsPageLocation, DocsTreeOk } from '../../../../shared/docs';
 import type { MockupAssetKind } from './policy';
 
 /** Where a reference was written: the section and path of the page (depth 0) or of the stylesheet that holds it, as
@@ -63,10 +63,24 @@ export interface MockupAssetRow {
   readonly size: MockupSize | null;
 }
 
+/** What the planner derives from a context ONCE per plan and carries across extensions, so that an extension decides
+ *  only its new references (fix round 1, F1): the page location the pin rule reads, whether that page opens a draft,
+ *  and the listing indexed by `<section>\u0000<path>` (the first entry of each). */
+export interface MockupPlanBasis {
+  readonly page: DocsPageLocation & { kind: 'path' };
+  readonly pageDraft: boolean;
+  readonly index: ReadonlyMap<string, DocsEntry>;
+}
+
 /** One attempt's plan. `reservedBytes` sums each admitted pin's reservation ONCE and never shrinks within the attempt:
- *  a smaller reply, a failed read and a duplicate return nothing to it. */
+ *  a smaller reply, a failed read and a duplicate return nothing to it. `basis` is the context's derivation, built by
+ *  `planMockupAssets` and carried unchanged; `admitted` maps each admitted pin's file id to the index in `rows` of the
+ *  row that admitted it (at most `MOCKUP_MAX_ASSETS` entries). A caller that rewrites rows keeps both and every row's
+ *  index (`{ ...plan, rows }`). */
 export interface MockupAssetPlan {
   readonly context: MockupContext;
+  readonly basis: MockupPlanBasis;
+  readonly admitted: ReadonlyMap<string, number>;
   readonly rows: readonly MockupAssetRow[];
   readonly reservedBytes: number;
 }

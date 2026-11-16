@@ -380,7 +380,7 @@ export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReade
       });
       over = true;
       signal.removeEventListener('abort', onAbort);
-      resolve({ plan: { context: current.context, rows, reservedBytes: current.reservedBytes }, actualBytes, assets });
+      resolve({ plan: { ...current, rows }, actualBytes, assets });
     };
 
     const start = (unit: Unit): void => {
@@ -458,7 +458,7 @@ function withVerdicts(plan: MockupAssetPlan, skipped: ReadonlySet<string>, tooDe
     if (skipped.has(row.ref.key)) return { ...row, verdict: { v: 'skipped', why: 'over-budget' } };
     return tooDeep.has(row.ref.key) ? { ...row, verdict: { v: 'unsupported', why: 'css-depth' } } : row;
   });
-  return { context: plan.context, rows, reservedBytes: plan.reservedBytes };
+  return { ...plan, rows };
 }
 
 /** The page's bytes for the frame (base 5.6.2 step 6): `metaFor(csp)`, then the click guard, then the doctype, then
