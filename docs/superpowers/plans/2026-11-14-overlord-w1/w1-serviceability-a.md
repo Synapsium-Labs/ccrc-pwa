@@ -39,6 +39,10 @@ plan, by slug, for the coordinator to fold into the ledger. No number is minted 
   `shared/serviceability.ts` exports `ASKINGS`, derived from a `Record<Asking, true>` map.
 - **`api-ts-twentieth-import`.** `shared/api.ts` imports `RosterFactsWire` from `./rosterFacts.js` on its own line, so
   `peers-claims-l0.test.ts`'s import pin counts twenty lines.
+- **`pool-set-fixtures-record-continuity`.** `ccd-pool-a3.test.ts`'s session has a pool set, so it is a set-side asker,
+  and F8 holds it to a continuity record on every lane: with none recorded, `_swap_target` found no lane for it. Its
+  fixture lanes now record one, so its cases still measure the pool rule alone. Pool set B and the designation should
+  expect the same: a set-side session needs recorded lanes to be placed anywhere.
 - **`departures-note-path`.** The brief names this file `w1-serviceability-a.md`; the plan's Global Constraints name
   `w1-serviceability/departures.md`. The brief's name is used.
 
