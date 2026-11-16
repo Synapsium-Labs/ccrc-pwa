@@ -36,4 +36,5 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/update/routes.ts': { reason: "the update control plane's HTTP routes", since: '2026-10-20' },
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '2026-11-04' },
   'server/src/face/routes.ts': { reason: "the character choice's two HTTP routes (the face plan, Task 6)", since: '2026-11-13' },
+  'server/src/responses/routes.ts': { reason: 'the receipts door, POST /api/responses/receipts (Overlord W1 responses A)', since: '2026-11-16' },
 };
