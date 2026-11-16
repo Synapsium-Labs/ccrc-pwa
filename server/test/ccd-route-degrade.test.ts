@@ -297,3 +297,29 @@ describe('_spawn_start on a lane with no continuity record, for a set-side sessi
     expect(unmet()).toHaveLength(0);
   });
 });
+
+// THE HOLD-DOWN'S CHARACTERIZATION (Overlord W1 ccd arms, Task 4 Step 1; the index's question 9). On `main` before the
+// hold-down, a standing stamp one second old on a lane that serves the intended class again is restored at the very next
+// settle, whatever the route's `profile`; `_route_stale_degrade_clear` restores at once on a new intended class. The
+// hold-down (`ccd/lib/long-lived.sh`, region `holddown`) changes the first for a long-lived profile only.
+describe('the settle restores a fresh stamp at once, for every profile (the hold-down\'s characterization)', () => {
+  const restored = (id: string): void => {
+    const [p] = spawnBoth(id);
+    expect(p).toContain('--model fable ');
+    expect(h.reg(id, 'degraded')).toBeNull();
+    const rows = eventsOf(h.home, 'route');
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]!['detail'])).toBe('degraded: opus -> ∅');
+  };
+  it.each([['coordinator'], ['plain'], [null]])('profile %s: a one-second degraded=opus on a lane serving fable composes --model fable, clears the stamp, one restore row', (profile) => {
+    seed('myid'); h.sh(`_reg_set myid class fable; _reg_set myid degraded opus${profile ? `; _reg_set myid profile ${profile}` : ''}`);
+    sweep({ claude: 0.1 });
+    restored('myid');
+  });
+  it('profile coordinator: a new intended class clears a one-second stamp at once (_route_stale_degrade_clear)', () => {
+    seed('myid'); h.sh('_reg_set myid class haiku; _reg_set myid degraded opus; _reg_set myid profile coordinator');
+    h.sh('_route_stale_degrade_clear myid haiku');
+    expect(h.reg('myid', 'degraded')).toBeNull();
+    expect(String(eventsOf(h.home, 'route')[0]!['detail'])).toBe('degraded: opus -> ∅');
+  });
+});
