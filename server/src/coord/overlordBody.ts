@@ -205,6 +205,7 @@ export function stopCreatedOf(deps: StopCreatedDeps): (id: string) => Promise<St
       const identity = deps.identityOf(read.record);
       if (identity === null || deps.pairRefused(id, read.record, identity)) return { ok: false, detail: 'the registry row is unmeasurable' };
       const res = await deps.runCcd(deps.argvFor(id, read.record, identity));
+      if (res.ran === false) return { ok: false, detail: detailOf('stop', res) };
       return res.ok ? { ok: true, absent: false } : { ok: false, detail: detailOf('stop', res) };
     } catch (e) {
       return { ok: false, detail: `the stop did not answer: ${messageOf(e)}` };

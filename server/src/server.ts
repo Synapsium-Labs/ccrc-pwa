@@ -2276,7 +2276,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
     gate: accountGate, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    clock: deps.time.clock, entropy: deps.time.entropy, dec: pwaDec,
+    // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
+    clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({
       runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
       generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
@@ -2968,12 +2969,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const v = poolVerdict(deps.cfg.roster, wrapper, pool, edges);
     if (v.ok) return null;
-    if (v.reason === 'pool-mismatch') {
-      // A set mismatch (C46) names the set's spelling where a project's names its tag; `accountPool` is null for an untagged account.
-      if (v.side === 'set') return refuseRoute(reply, 'pool-mismatch', { accountPool: 'pool' in v.account ? v.account.pool : null, set: v.set });
-      return reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool });
-    }
-    return reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
+    // A set mismatch (C46) names the set's spelling where a project's names its tag; `accountPool` is null for an untagged account.
+    return v.reason === 'pool-mismatch'
+      ? reply.code(409).send({ ok: false, error: 'pool-mismatch', ...(v.side === 'set'
+        ? { accountPool: 'pool' in v.account ? v.account.pool : null, set: v.set }
+        : { accountPool: v.accountPool, projectPool: v.projectPool }) })
+      : reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
   };
 
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */

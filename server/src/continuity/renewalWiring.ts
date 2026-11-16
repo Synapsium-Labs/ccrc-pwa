@@ -19,7 +19,8 @@ import type { PlannedAct } from './generationsLane.js';
 import { runRenewalActs, type ActsResult } from './renewalActs.js';
 import { drainVerdict, type DrainRead } from './renewalDrain.js';
 
-const SEND_OPTS = { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true } as const;
+// `onDraft: 'stash'` is written at each call: `lane-draft-never-blocks.test.ts` reads the policy off the call itself.
+const SEND_OPTS = { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true } as const;
 
 export interface RenewalWiring {
   readonly canRenew: boolean;
@@ -39,8 +40,8 @@ export function renewalHostOf(
     runCcd: deps.runCcd, fleetState: deps.fleetState,
     // One `sendPrompt` per row the port can name (`RenewalPrompt` has two), each typed by reference to the list.
     send: (id, key) => (key === 'overlord-first-prompt'
-      ? sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['overlord-first-prompt'].text, SEND_OPTS)
-      : sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text, SEND_OPTS)),
+      ? sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['overlord-first-prompt'].text, { onDraft: 'stash', ...SEND_OPTS })
+      : sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text, { onDraft: 'stash', ...SEND_OPTS })),
     usage: (id) => readUsageMeasured(deps.io, deps.cfg.registryDir, id, Math.floor(now() / 1000)),
     startsOf: (id, limit) => coord.startsOf(id, limit),
     log: (line) => console.warn(line),
