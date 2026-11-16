@@ -170,10 +170,13 @@ export function launchRowCases(m: LaunchProfileModule): Record<string, SuiteCase
       expect(row.surfaceSettings.hooks.PreToolUse?.[0]?.matcher).toBe('*');
       expect(row.remoteControl).toBe('off');
     },
-    'a row with no surface keeps the five keys W1a ships': () => {
+    'a row with no surface keeps the five keys W1a ships, and longLived (Overlord W1 ccd arms, Task 4)': () => {
       for (const role of FLEET_ROLE_NAMES.filter((r) => r !== 'overlord')) {
-        expect(Object.keys(m.launchRowOf(role)), role).toStrictEqual(['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings']);
+        expect(Object.keys(m.launchRowOf(role)), role).toStrictEqual(['autoMemory', 'compactText', 'compactionSettings', 'env', 'longLived', 'settings']);
       }
+    },
+    'every row carries the longLived column of FLEET_ROLES, a boolean, which ccd reads (slug long-lived-is-projected)': () => {
+      for (const role of FLEET_ROLE_NAMES) expect(m.launchRowOf(role)['longLived'], role).toBe(FLEET_ROLES[role].longLived);
     },
   };
 }

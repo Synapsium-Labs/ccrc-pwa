@@ -42,28 +42,41 @@ function seedLane(home: string, lane: string, registry: unknown | null, catalogu
 describe('laneClassModels (D-8406)', () => {
   it('names each class by its registry model and that model\'s catalogue label', () => {
     expect(laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE))).toEqual({
-      haiku: { model: 'gpt-6-luna', label: 'GPT-6 Luna' },
-      sonnet: { model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
-      opus: { model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' },
-      fable: { model: 'gpt-6-astra', label: 'GPT-6-Astra' },
+      haiku: { model: 'gpt-6-luna', label: 'GPT-6 Luna', efforts: [] },
+      sonnet: { model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', efforts: [] },
+      opus: { model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: [] },
+      fable: { model: 'gpt-6-astra', label: 'GPT-6-Astra', efforts: [] },
     });
   });
 
   it('a model advance in the registry moves the label with it, with no code change', () => {
     const advanced = { ...REGISTRY, classes: { ...REGISTRY.classes, opus: 'gpt-6.2-sol' } };
     expect(laneClassModels(parseRegistry(advanced), parseCatalogue(CATALOGUE)).opus)
-      .toEqual({ model: 'gpt-6.2-sol', label: 'GPT-6.2-Sol' });
+      .toEqual({ model: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', efforts: [] });
   });
 
   it('no catalogue, or no row for the model, is a null label; a null slot is a null model', () => {
     const noFable = { ...REGISTRY, classes: { ...REGISTRY.classes, fable: null } };
     const out = laneClassModels(parseRegistry(noFable), null);
-    expect(out.fable).toEqual({ model: null, label: null });
-    expect(out.opus).toEqual({ model: 'gpt-6.1-sol', label: null });
+    expect(out.fable).toEqual({ model: null, label: null, efforts: null });
+    expect(out.opus).toEqual({ model: 'gpt-6.1-sol', label: null, efforts: null });
     const thin = parseCatalogue({ ...CATALOGUE, models: [{ id: 'gpt-6-luna' }] });
     // A row with no label carries its id as the label (`parseCatalogue`); a model with no row has none.
-    expect(laneClassModels(parseRegistry(REGISTRY), thin).haiku).toEqual({ model: 'gpt-6-luna', label: 'gpt-6-luna' });
-    expect(laneClassModels(parseRegistry(REGISTRY), thin).sonnet).toEqual({ model: 'gpt-6.1-terra', label: null });
+    expect(laneClassModels(parseRegistry(REGISTRY), thin).haiku).toEqual({ model: 'gpt-6-luna', label: 'gpt-6-luna', efforts: [] });
+    expect(laneClassModels(parseRegistry(REGISTRY), thin).sonnet).toEqual({ model: 'gpt-6.1-terra', label: null, efforts: null });
+  });
+});
+
+describe('laneClassModels carries the catalogue\'s effort levels (D-8686)', () => {
+  it('a row that lists levels carries them; a classed model with no row carries null', () => {
+    const levels = ['low', 'medium', 'high', 'xhigh'];
+    const catalogue = parseCatalogue({
+      ...CATALOGUE, models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: levels }, { id: 'gpt-6-luna', label: 'GPT-6 Luna' }],
+    });
+    const out = laneClassModels(parseRegistry(REGISTRY), catalogue);
+    expect(out.opus.efforts).toEqual(levels);
+    expect(out.haiku.efforts).toEqual([]); // a row that lists none
+    expect(out.sonnet.efforts).toBeNull(); // no row for its model
   });
 });
 
@@ -111,7 +124,7 @@ describe('readLaneModels (D-8406)', () => {
     const r = await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt');
     expect(r.kind).toBe('read');
     if (r.kind !== 'read') return;
-    expect(r.classes.opus).toEqual({ model: 'gpt-6.1-sol', label: null });
+    expect(r.classes.opus).toEqual({ model: 'gpt-6.1-sol', label: null, efforts: null });
   });
 
   it('a fleet that refuses the read (an agent from before the grant) is unreadable', async () => {

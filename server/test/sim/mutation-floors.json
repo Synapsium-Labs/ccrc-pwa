@@ -136,5 +136,7 @@
   "server/src/coord/overlaps.ts#pairMoves": 1,
   "server/src/coord/overlaps.ts#relayConflictVerdict": 1,
   "server/src/coord/overlaps.ts#pairBlocks": 1,
-  "server/src/coord/overlaps.ts#blockingPairs": 1
+  "server/src/coord/overlaps.ts#blockingPairs": 1,
+  "shared/private-names.mjs#hashEntry": 1,
+  "shared/private-names.mjs#privateNameHits": 1
 }
