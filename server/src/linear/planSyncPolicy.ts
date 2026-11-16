@@ -246,8 +246,23 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
   }
   for (const e of placed) places.set(e.id, placeOf(e.project));
 
-  // ── 1. initiatives: one per workspace the epics sit in
-  const wsIds = [...new Set([...places.values()].flatMap((p) => (p.ok ? [p.workspaceId] : [])))];
+  // ── 1. initiatives: one per workspace the programme sits in (F2, Review Focus 3: a team key moved to another workspace
+  // moves nothing and creates nothing). Its workspaces are where its initiative is bound already, and where an epic is
+  // placed that is unbound or bound in that same workspace; an epic bound elsewhere places nothing (its binding fails
+  // `workspace-mismatch` below). An old workspace's initiative keeps being updated, and is closed at the programme's end.
+  const epicBindingWs = (e: EpicRow): string[] => s.bindings.flatMap((b) => (b.localKind === 'epic' && b.localId === e.id ? [b.workspaceId] : []));
+  const anchoredIn = (e: EpicRow, wsId: string): boolean => { const at = epicBindingWs(e); return at.length === 0 || at.includes(wsId); };
+  const wsIds = [...new Set([
+    ...placed.flatMap((e) => { const p = places.get(e.id)!; return p.ok && anchoredIn(e, p.workspaceId) ? [p.workspaceId] : []; }),
+    ...s.bindings.flatMap((b) => (b.localKind === 'programme' && b.localId === s.program.rowid ? [b.workspaceId] : [])),
+  ])];
+  /** The project facts that speak for a workspace's initiative (its setting, its text check): those of the epics placed
+   *  there or bound there; for an initiative bound where no epic is any more, every epic's. */
+  const factsIn = (wsId: string): Fact[] => {
+    const of = (keep: (e: EpicRow) => boolean): Fact[] => placed.flatMap((e) => { const f = factOf(e.project); return keep(e) && f !== undefined ? [f] : []; });
+    const here = of((e) => { const p = places.get(e.id)!; return (p.ok && p.workspaceId === wsId) || epicBindingWs(e).includes(wsId); });
+    return here.length > 0 ? here : of(() => true);
+  };
   const anyEpicState = (st: string): boolean => s.plan.epics.some((e) => e.state === st);
   const initiativeStatus: LinearInitiativeStatus = s.program.end !== null
     ? (s.program.end.outcome === 'done' ? INITIATIVE.completed : INITIATIVE.canceled)
@@ -257,8 +272,10 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
    *  when it binds again), and no new link is made to it. */
   const initiativeIdOf = new Map<string, { id: string; live: boolean }>();
   for (const wsId of wsIds) {
-    const ws = s.workspaces.find((w) => w.workspaceId === wsId)!;
-    const facts = [...places.values()].flatMap((p) => (p.ok && p.workspaceId === wsId ? [p.fact] : []));
+    // A workspace the snapshot does not describe (no slot serves it now) cannot be written: nothing is decided for it.
+    const ws = s.workspaces.find((w) => w.workspaceId === wsId);
+    if (ws === undefined) continue;
+    const facts = factsIn(wsId);
     const b = bindingOf('programme', s.program.rowid, wsId);
     if ((b?.state === 'bound' || b?.state === 'failed') && b.linearId !== null) initiativeIdOf.set(wsId, { id: b.linearId, live: b.state === 'bound' });
     const local: Local = { kind: 'programme', id: s.program.rowid };

@@ -301,6 +301,31 @@ describe('the team-key rule (Review Focus 3)', () => {
     expect(steps).toEqual([expect.objectContaining({ kind: 'skip', why: 'ticket-workspace-mismatch', bindingId: tb.id, workspaceId: 'ws-old' })]);
   });
 
+  it("F2: the epic's project key moved to another workspace creates nothing there; the old workspace's initiative is still updated and closed", () => {
+    const s = settle(snap({ cps: [cp()], tickets: [tk()] }));
+    s.workspaces.push({ workspaceId: 'ws-b', initiatives: 'on', directory, teams: [{ id: U(2), key: 'BBB' }] });
+    s.projects[0] = { ...s.projects[0]!, teamKey: 'BBB', workspaceId: 'ws-b' };
+    const { steps } = planSyncSteps(s);
+    expect(steps.filter((x) => x.kind === 'create')).toEqual([]);
+    expect(steps).toEqual([expect.objectContaining({ kind: 'skip', why: 'workspace-mismatch', bindingId: bindingOf(s, 'epic').id, workspaceId: WSID })]);
+    s.program.title = 'Renamed programme';
+    expect(stepOf(planSyncSteps(s).steps, 'initiativeUpdate')).toMatchObject({ workspaceId: WSID, input: { name: 'Renamed programme' } });
+    s.program.end = { outcome: 'done', why: null, at: Date.parse('2026-11-20T09:00:00Z') };
+    const closed = planSyncSteps(s).steps;
+    expect(stepOf(closed, 'initiativeUpdate')).toMatchObject({ workspaceId: WSID, input: { status: 'Completed' } });
+    expect(closed.filter((x) => x.kind === 'create')).toEqual([]);
+  });
+
+  it('F2: an unbound epic placed in another workspace still has its initiative created there', () => {
+    const s = settle(snap());
+    s.workspaces.push({ workspaceId: 'ws-b', initiatives: 'on', directory, teams: [{ id: U(2), key: 'BBB' }] });
+    s.projects.push({ project: 'proj-c', teamKey: 'BBB', workspaceId: 'ws-b', mode: 'private', initiatives: 'on' });
+    s.plan.epics.push({ ...epic({ id: 2, key: 'e2', project: 'proj-c', title: 'Epic two' }), checkpoints: [], tickets: [] });
+    const { steps } = planSyncSteps(s);
+    expect(steps.filter((x) => x.kind === 'create').map((x) => [x.kind === 'create' ? x.op : '', x.workspaceId]))
+      .toEqual([['initiativeCreate', 'ws-b'], ['projectCreate', 'ws-b']]);
+  });
+
   it('an epic binding in another workspace than its project now resolves to: that binding fails and nothing under it is sent', () => {
     const s = settle(snap({ cps: [cp()], tickets: [tk()] }));
     const eb = bindingOf(s, 'epic');
@@ -553,6 +578,23 @@ describe('the pass: moves and closes', () => {
     expect(r.asks.slice(from).filter((a) => a.op.endsWith('Create') || a.op.endsWith('Update'))).toEqual([]);
     expect(r.plan.bindingsOf(SLUG).some((b) => b.workspaceId === WS.b.id)).toBe(false);          // no binding made in the new workspace
     expect(mails(r).filter((m) => m.subject.includes('ticket-workspace-mismatch'))).toHaveLength(1);
+  });
+
+  it("F2: the epic's project re-keyed into another workspace: no create there, the epic fails workspace-mismatch, the old initiative closes at the end", async () => {
+    const r = await rig({ slotB: true });
+    await tick(r);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'BBB' WHERE project = 'project-a'").run();
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(r.asks.slice(from).filter((a) => a.op.endsWith('Create'))).toEqual([]);
+    const eb = r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'epic')!;
+    expect(eb).toMatchObject({ state: 'failed', failedWord: 'workspace-mismatch', workspaceId: WS.a.id });
+    expect(r.plan.bindingsOf(SLUG).some((b) => b.workspaceId === WS.b.id)).toBe(false);
+    const ended = r.asks.length;
+    r.plan.closePlan(SLUG, 'done', null, r.t.now);
+    await tick(r);
+    expect(r.asks.slice(ended).filter((a) => a.op.endsWith('Create'))).toEqual([]);
+    expect(r.asks.slice(ended).find((a) => a.op === 'initiativeUpdate')).toMatchObject({ workspaceId: WS.a.id, input: { status: 'Completed' } });
   });
 
   it('a ticket re-projected inside the workspace moves teams, and the identifier is refreshed from the answer', async () => {

@@ -397,7 +397,10 @@ export class PlanSync {
     });
     const waiting: string[] = [];
     const workspaces: SyncSnapshot['workspaces'] = [];
-    for (const workspaceId of new Set(projects.flatMap((p) => (p.workspaceId === null ? [] : [p.workspaceId])))) {
+    // The workspaces the projects resolve to, and those the programme's initiative is bound in (F2: an old workspace's
+    // initiative is still updated and closed after a team key moved away).
+    const initiativeWs = bindings.flatMap((b) => (b.localKind === 'programme' && b.localId === rowid ? [b.workspaceId] : []));
+    for (const workspaceId of new Set([...projects.flatMap((p) => (p.workspaceId === null ? [] : [p.workspaceId])), ...initiativeWs])) {
       const slot = slots.get(workspaceId);
       if (slot === undefined) continue;
       const directory = this.deps.directory.get(slot.ref, slot.digest);
