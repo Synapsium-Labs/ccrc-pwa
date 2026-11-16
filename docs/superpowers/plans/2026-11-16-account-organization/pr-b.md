@@ -103,5 +103,5 @@ measures them. The B1, F3 and F6 tests were run red first.
 
 ## Growth
 
-Net code lines against `main`: `ccd/ccrc` +7, the account script +5 (1878 against its cap of 1879),
+Net code lines against `main`: `ccd/ccrc` +8, the account script +5 (1878 against its cap of 1879),
 `pwa/src/lib/api.ts` +1. Every other changed file is unlisted. `growth-check` runs green armed.
