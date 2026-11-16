@@ -414,7 +414,9 @@ in flight.
     `failPending`, `stopDone` and a pending-only retire append nothing. Every append checks `appendInTx`'s answer and
     writes no row on `{ ok: false }`.
   - The route record's `poolset`, `acctorder` and `class` have two writers, the designation's doors and the renewal
-    lane (Table 11.1a, pool set's docstring on `ROUTE_WRITABLE_FIELDS`). The create's `profile` and `profiledigest`
+    lane (Table 11.1a, pool set's docstring on `ROUTE_WRITABLE_FIELDS`). The renewal lane's write is this plan's
+    Task 10: a write-set step before each `renew` of the Overlord, on the renewal act's acting side, through the
+    body adapter's `writeSet` (the renewal readings plan's question 9, ruled in its fix round 1, F9). The create's `profile` and `profiledigest`
     are the recorded second writer (sandbox ruling G2). The body's two markers are `ccd keep-awake`'s.
   - Decide in L1, act in L4. The routes file reads facts, calls a verdict, and acts on it. It holds no `if` over a
     refusal word. `overlordDesignation.ts` imports L0 and `server/src/poolrule.ts` only: no `fs`, no Fastify, no
@@ -460,8 +462,8 @@ in flight.
 - **What the doors trust, and the accepted residuals.** Identity on the fleet is attribution. The doors are the
   operator's cookie doors behind the step-up, so no session can designate. A session's shell cannot write the set
   through ccd (`cmd_route`'s `CLAUDECODE` refusal), but any same-user process outside a session can, or can touch the
-  markers, as C46 and C4 say. The server writes the record again at each renewal and change (the renewal lane's arm,
-  not this piece's). Accepted as accident guards in shared-user mode.
+  markers, as C46 and C4 say. The server writes the record again at each renewal (Task 10's write-set step before
+  `renew`, PR B) and at each change (the Settings doors). Accepted as accident guards in shared-user mode.
 - **What a merge arms.** Nothing a running session sees.
   - PR A: no row exists until the operator taps Start, and the console offers it only under `overlord-v1` (Q33). With
     no row, `roleOf`'s new input reads `not-designated`, `identityOf` answers the session id, and the roll and sleep
@@ -525,7 +527,7 @@ Net code lines, as `server/test/growthCheck.ts` counts them (comments and blank 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
 | A | 1 to 5 | The row, its writers and reader, and the authority records; the deciders and the widened placement; `roleOf`'s reader at four callers, `identityOf` at every live-generation lookup, `goLive`'s re-stamp, and the roll and sleep holds; the body adapter with keep-awake; designate (with its first prompt), retire and the read, on the serialiser; the owed-stop drain; the swap route's early refusal by the session's side | pool set B (B1 and B2), ccd arms A, B and C (C2 if C splits), authority journal A (and A0), sandbox A2 (ruled, X1, X6) | `server/src/coord/schema.ts` about +28 (one migration); `server/src/coord/store.ts` about +14 (delegates); `server/src/server.ts` about +28 (registration, `stopCreated`, the body adapter's and the routes file's deps: the serialiser, `SessionHost`; the swap route's side read); `server/src/watch.ts` about +6 (the mail pace's designation read); `server/src/coord/routes.ts` 0; `shared/api.ts` 0 |
-| B | 6 and 7 | Rebind (with its first prompt), its go-live arm, the old body's clear, stop and markers off from the settle door, and the mail repoint; Restart (with its first prompt); the pending deadline and the settle retry, through the renewal act's acting side | PR A, sandbox B, W1a's renewal act and renewal hand-offs | `server/src/coord/store.ts` about +6; `server/src/server.ts` about +5 (the ensure port, the settle door's designation deps); `server/src/coord/schema.ts` 0 |
+| B | 6, 7 and 10 | Rebind (with its first prompt), its go-live arm, the old body's clear, stop and markers off from the settle door, and the mail repoint; Restart (with its first prompt); the pending deadline and the settle retry, through the renewal act's acting side; the set and the ordered list written before each `renew` of the Overlord | PR A, sandbox B, W1a's renewal act and renewal hand-offs | `server/src/coord/store.ts` about +6; `server/src/server.ts` about +5 (the ensure port, the settle door's designation deps); `server/src/watch.ts` about +2 (the write-set port into `renewalActsOf`); `server/src/coord/schema.ts` 0 |
 | C | 8 and 9 | The model class and account set Settings doors | PR A | `server/src/coord/store.ts` about +4; `server/src/server.ts` 0 |
 
 The review measured `server.ts` and `watch.ts` higher than the first estimate (about +20 to +30 and +6 to +9). Both
@@ -542,7 +544,8 @@ For scale, the files that are not growth-checked change by about:
   `server/src/continuity/continuityStore.ts` +25 (`restampOverlordGeneration`), `server/src/continuity/routes.ts` +6
   (PR A, the two lookups) and +25 (PR B, the settle door's rebind acts);
 - `server/src/continuity/{profileLane,generationsLane,cardFacts}.ts` about +10 each, and in PR B
-  `generationsLane.ts` +15 and `renewalActs.ts` +25 more (the deadline sweep's action and its port);
+  `generationsLane.ts` +15 and `renewalActs.ts` +25 more (the deadline sweep's action and its port), and in PR B
+  `renewalActs.ts` +10 and `renewalWiring.ts` +12 more (Task 10's write-set step and its port);
 - `shared/refusal.ts` +1 (PR B, `overlord-attempt-pending`).
 
 ## Index changes
@@ -1346,7 +1349,8 @@ appended first and its answer checked, X2), then `routeSet(boundId, { class })` 
 server-composed write that D-6790 does not refuse (C45). Over an incoherent journal a change to `opus` is a narrowing
 and lands as its row whenever the journal answers `row-only` (X3, X3b), and a change to `fable` is a widening and
 refuses. A failed route write is reported in
-the answer. The renewal lane writes the record again at the next renewal.
+the answer. The write-set step before the next `renew` (Task 10) writes the set and the list again; the class rides
+the route write here.
 The change lands at the next renewal, never mid-generation (C44). The renewal readings piece's `classChanged` reads it.
 
 - [ ] **Step 1: Failing tests.**
@@ -1406,6 +1410,45 @@ door's.
   reorder as a widening and that skip the count while bound.
 - [ ] **Step 6: Commit.** `feat(overlord): the account set's Settings door, widening behind the step-up (C46, C56)`
 
+### Task 10: The set and the list written before each renewal (PR B)
+
+The renewal readings plan's question 9, ruled in its fix round 1 (F9): designation B owns a write-set step before
+`renew`. Without it, nothing writes the route record's `poolset` and `acctorder` at a renewal, so a change to the
+ordered list (the renewal readings' account hold, §3.6, or an account that stopped counting) reaches ccd's fresh start
+only at the next designation door.
+
+**Files:**
+
+- Modify: `server/src/continuity/renewalActs.ts`: `RenewalActsDeps` gains an optional `beforeRenew?(t: ActTarget):
+  Promise<{ ok: true } | { ok: false; detail: string }>`. In `renew`, before the call is claimed, for an Overlord
+  target (`t.role === 'overlord'`), the act awaits it: `{ ok: false }` makes this try `failed`, logged with its
+  detail, and claims nothing, so the next pass asks again; a coordinator target never calls it.
+- Modify: `server/src/continuity/renewalWiring.ts`: `renewalActsOf` takes the port and passes it through; it decides
+  nothing.
+- Modify: `server/src/watch.ts#FleetWatcher.sweepGenerations` (about +2): binds `beforeRenew` to the designation's
+  write-set: `designationRead()`; a `designated` read for the target's session id: `overlordAccounts(row.accountPools,
+  row.model, facts)` with the facts the watcher builds (the roster, limits, edges, shares and, once the renewal
+  readings' PR H has merged, `held` from `accountHolds`), then `body.writeSet(sessionId, { poolset: the
+  spelling `poolSetSpelling(row.accountPools)` answers, acctorder: list.join(',') })`, as Task 5's designate writes
+  them. Any other read, an `unspellable` set, an empty
+  list or a refused write answers `{ ok: false }` with the reason.
+- Test: `server/test/continuity-renewal-acts.test.ts` (the port's order and its refusal), and the designation suite
+  (the write's argv over a fixture body adapter).
+
+- [ ] **Step 1: Failing tests.**
+  - An Overlord renewal calls `beforeRenew` before the claim and before `host.renew`, once per try.
+  - `{ ok: false }` claims nothing, makes no `renew` call, and counts the try `failed`; the next pass tries again.
+  - A coordinator's renewal never calls it.
+  - The write carries the list in the set's order with a held account left out (once `held` is wired), and the
+    spelling of the row's set.
+  - A `not-designated` or `unmeasured` read, or a binding to another session, answers `{ ok: false }` and writes
+    nothing.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** the two suites, `continuity-generations-lane`,
+  `test/rings/*` and the `tsc` run. Green.
+- [ ] **Step 5: Mutation, by hand.** Call `beforeRenew` after the claim: the refusal case leaves a claimed try and goes
+  red. Let a refused write go on to `renew`: red.
+- [ ] **Step 6: Commit.** `feat(overlord): the set and the ordered list written before each renewal (C46, C56)`
+
 ## Deviations found
 
 These are the departures from the spec's text that this plan makes, by slug. Plan decisions stay plain-words slugs,
@@ -1443,6 +1486,9 @@ and no D-number is minted for them (X9).
   ccd refuses them on a `--route` (pool set's `route-argv-refuses-the-set`). The first placement is the server's pick
   inside the set, and the set binds every later start.
 - **`restart-needs-no-step-up`**: §11.2 lists no step-up for Restart, so it has none. It changes no authority.
+- **`renewal-writes-the-list-before-renew`** (the renewal readings plan's question 9, ruled F9): the route record's
+  second writer, "the renewal lane" (Table 11.1a), is a write-set step before each `renew` of the Overlord, on the
+  renewal act's acting side (Task 10).
 - **`designate-journals-at-go-live`** (X2): §7.6 calls designate an authority record. The record is appended when the
   body goes live, not when the door writes the attempt, because only then are the term and the generation final.
 
