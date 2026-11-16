@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD as CCD_PATH, makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -459,6 +459,23 @@ describe('the asking session\'s id reaches the class gate', () => {
     facts('included', ['claude-a', 'claude-b']);
     expect(target('claude-a', '', 'claude')).toBe('rc=0');
   });
+  it('_swap_target (F3): away from home with home down, a set-side session on an UNRECORDED cur moves (the cur-still-works gate asks with the id)', () => {
+    facts('included', ['claude-b', 'claude-d']);
+    limits('claude', 99, 99); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude-a', 'opus');
+    expect(target('claude-a', '', 'claude'), 'the control: no set, cur stays').toBe('rc=0');
+    setSide();
+    expect(target('claude-a', '', 'claude')).toBe('claude-b rc=0');
+  });
+  it('_swap_target (F3): a forced rescue never returns an unmeasured, UNRECORDED home as the fallback (the hfb gate asks with the id)', () => {
+    facts('included', ['claude-a', 'claude-b', 'claude-d']);
+    limits('claude-a', 99, 99); limits('claude-b', 99, 99); limits('claude-d', 99, 99);   // no row for home: unmeasured, and no candidate has room
+    seedRow('claude-a');   // no class: the gate without an id answers 0 for every lane
+    expect(target('claude-a', '1', 'claude'), 'the control: no set, the unmeasured home is the fallback').toBe('claude rc=0');
+    setSide();
+    const out = target('claude-a', '1', 'claude');
+    expect(out).toBe('rc=1');
+  });
   it('_affinity_cur_serves: a lane that bills credits does not serve a set-side fable session, and does serve a plain one', () => {
     facts('credits', ['claude']);
     limits('claude', 10, 10); sweep({ claude: 0.1 }); seedRow('claude', 'fable');
@@ -485,5 +502,49 @@ describe('the asking session\'s id reaches the class gate', () => {
     facts('included', ['claude']);
     limits('claude', 10, 10); seedRow('claude', 'fable'); setSide();   // no sweep: unmeasured
     expect(h.sh(`_class_gate claude fable ${ID}; echo $?`)).toBe('2');
+  });
+});
+
+// F9: the id-less placers (`_place_for_class`, `_ws_least_loaded`, `_ws_lane_why`) never ask the continuity or billing
+// arms, because they take no session id. A row carrying a `poolset` must therefore never reach them: `cmd_ws_add`'s
+// `--route` refuses `poolset` before placement (`_route_argv_check`, pinned by ccd-route-argv.test.ts), and
+// `_auto_swap_check`'s rehome arm runs only for a session whose side is not a set. These scans red on a NEW id-less
+// caller or on the rehome call leaving its guard, so the next placement path has to take an id.
+describe('F9: a row carrying a poolset never reaches the id-less placement path', () => {
+  const lines = fs.readFileSync(CCD_PATH, 'utf8').split('\n');
+  /** The top-level function enclosing each CODE line (comments and the definitions themselves left out) that names `sym`. */
+  const callersOf = (sym: string): string[] => {
+    const out = new Set<string>();
+    let fn = '';
+    for (const l of lines) {
+      const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(l);
+      if (def) { fn = def[1]!; if (def[1] === sym) continue; }
+      if (l.trimStart().startsWith('#')) continue;
+      if (new RegExp(`(^|[^A-Za-z0-9_])${sym}([^A-Za-z0-9_]|$)`).test(l)) out.add(fn);
+    }
+    return [...out].sort();
+  };
+  it('_place_for_class is called from cmd_ws_add alone', () => {
+    expect(callersOf('_place_for_class')).toEqual(['cmd_ws_add']);
+  });
+  it('_ws_least_loaded is called from _auto_swap_check (the rehome arm) and _place_for_class alone', () => {
+    expect(callersOf('_ws_least_loaded')).toEqual(['_auto_swap_check', '_place_for_class']);
+  });
+  it('_ws_lane_why is called from _ws_wrapper_why and cmd_ws_add alone', () => {
+    expect(callersOf('_ws_lane_why')).toEqual(['_ws_wrapper_why', 'cmd_ws_add']);
+  });
+  it('the _auto_swap_check call of _ws_least_loaded sits inside the branch guarded by `"$pps" != "set "*`', () => {
+    const at = lines.findIndex((l) => /new=\$\(_ws_least_loaded "\$project"\)/.test(l));
+    expect(at).toBeGreaterThan(0);
+    // walk up to the nearest enclosing `if` of lesser indent and check it is the set-side guard
+    const indent = (l: string): number => l.length - l.trimStart().length;
+    const callIndent = indent(lines[at]!);
+    const enclosing: string[] = [];
+    for (let i = at - 1, want = callIndent; i >= 0 && !/^[A-Za-z_]\w*\(\) \{/.test(lines[i]!); i--) {
+      const l = lines[i]!;
+      if (l.trim() === '' || l.trimStart().startsWith('#')) continue;
+      if (indent(l) < want && /^\s*if /.test(l)) { enclosing.push(l.trim()); want = indent(l); }
+    }
+    expect(enclosing.some((l) => l.includes('"$pps" != "set "*')), enclosing.join(' | ')).toBe(true);
   });
 });

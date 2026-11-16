@@ -57,9 +57,10 @@ const seedFacts = (c: Case): void => {
   fs.rmSync(entry, { recursive: true, force: true });
   if (c.asking !== 'set-side') return;
   if (c.side === 'set-unreadable') fs.mkdirSync(entry);
+  else if (c.side === 'set-unreadable-link') fs.symlinkSync(path.join(h.home, 'no-such-target'), entry);
   else fs.writeFileSync(entry, c.side === 'set-malformed' ? 'Z!' : 'pool-a');
 };
-const sideOf = (c: Case) => c.side === 'set-unreadable' ? { state: 'set-unreadable' } as const
+const sideOf = (c: Case) => c.side === 'set-unreadable' || c.side === 'set-unreadable-link' ? { state: 'set-unreadable' } as const
   : c.side === 'set-malformed' ? { state: 'set-malformed' } as const
     : c.asking === 'set-side' ? { state: 'set', set: { pools: ['pool-a'], untagged: false } } as const
       : { state: 'untagged' } as const;

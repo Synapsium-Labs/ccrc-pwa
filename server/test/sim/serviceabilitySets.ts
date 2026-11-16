@@ -22,6 +22,7 @@ const lane = (o: Partial<LaneFacts> = {}): LaneFacts => ({
   anthropic: true, seven: 20, share: { estimatePct: 10, finishedAtS: NOW - 60 },
   fableBilling: 'included', continuity: 'recorded', ...o,
 });
+const SHARE_STALE_S = 28_801;
 const unservable = (why: string) => ({ kind: 'unservable', why });
 
 // ---------- serviceability ----------
@@ -38,9 +39,22 @@ export function serviceabilityCases(m: Pick<ServiceabilityModule, 'serviceabilit
     'a recorded lane leaves a set-side default skipped': () => {
       expect(svc('default', lane(), 'set-side', NOW)).toStrictEqual({ kind: 'skipped' });
     },
-    'the continuity arm runs before the fable arm: no record on a non-Anthropic lane, a stale share, credits': () => {
-      expect(svc('fable', lane({ continuity: 'none', anthropic: false, fableBilling: 'credits' }), 'set-side', NOW)).toStrictEqual(unservable('no-continuity'));
+    'the continuity word applies on top of the base answer (F1): it replaces a servable or unmeasured one, never an unservable one': () => {
       expect(svc('fable', lane({ continuity: 'none', share: null }), 'set-side', NOW)).toStrictEqual(unservable('no-continuity'));
+      expect(svc('fable', lane({ continuity: 'none', share: { estimatePct: 5, finishedAtS: NOW - SHARE_STALE_S } }), 'set-side', NOW)).toStrictEqual(unservable('no-continuity'));
+      expect(svc('fable', lane({ continuity: 'none' }), 'set-side', NOW)).toStrictEqual(unservable('no-continuity'));
+      expect(svc('opus', lane({ continuity: 'unread', seven: null }), 'set-side', NOW)).toStrictEqual(unservable('continuity-unread'));
+      expect(svc('opus', lane({ continuity: 'none' }), 'set-side', NOW)).toStrictEqual(unservable('no-continuity'));
+    },
+    'no record never softens a base refusal (F1): backend, credits, unset, unread and the ceilings keep their own word': () => {
+      expect(svc('fable', lane({ continuity: 'none', anthropic: false, fableBilling: 'credits' }), 'set-side', NOW)).toStrictEqual(unservable('backend'));
+      expect(svc('fable', lane({ continuity: 'none', fableBilling: 'credits' }), 'set-side', NOW)).toStrictEqual(unservable('credits'));
+      expect(svc('fable', lane({ continuity: 'none', fableBilling: 'unset' }), 'set-side', NOW)).toStrictEqual(unservable('billing-unset'));
+      expect(svc('fable', lane({ continuity: 'unread', fableBilling: 'unread' }), 'set-side', NOW)).toStrictEqual(unservable('billing-unread'));
+      expect(svc('fable', lane({ continuity: 'none', share: { estimatePct: 40, finishedAtS: NOW } }), 'set-side', NOW))
+        .toStrictEqual({ kind: 'unservable', why: 'ceiling', figurePct: 40, ceilingPct: 40 });
+      expect(svc('opus', lane({ continuity: 'none', seven: 98 }), 'set-side', NOW))
+        .toStrictEqual({ kind: 'unservable', why: 'ceiling', figurePct: 98, ceilingPct: 98 });
     },
     'backend comes before billing': () => {
       expect(svc('fable', lane({ anthropic: false, fableBilling: 'credits' }), 'set-side', NOW)).toStrictEqual(unservable('backend'));
@@ -80,14 +94,14 @@ const SERVICEABILITY_SET: MutantSet<ServiceabilityModule> = {
       new: "    if (asking === 'set-side' && lane.fableBilling !== 'included') {\n      return { kind: 'unservable', why: lane.fableBilling === 'credits' ? 'credits' : lane.fableBilling === 'unread' ? 'billing-unread' : 'billing-unset' };\n    }\n    if (!lane.anthropic) return { kind: 'unservable', why: 'backend' };\n",
     },
     {
-      id: 'S2 the continuity arm after the default fold',
-      old: "  if (asking === 'set-side' && lane.continuity !== 'recorded') {\n    return { kind: 'unservable', why: lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity' };\n  }\n  if (cls === 'default') return { kind: 'skipped' };\n",
-      new: "  if (cls === 'default') return { kind: 'skipped' };\n  if (asking === 'set-side' && lane.continuity !== 'recorded') {\n    return { kind: 'unservable', why: lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity' };\n  }\n",
+      id: 'S2 the continuity arm skips the default class',
+      old: "|| base.kind === 'unservable') return base;",
+      new: "|| base.kind === 'unservable' || cls === 'default') return base;",
     },
     {
-      id: 'S3 the continuity arm moved past the fable arm (the lower classes then never meet it)',
-      old: "  if (asking === 'set-side' && lane.continuity !== 'recorded') {\n    return { kind: 'unservable', why: lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity' };\n  }\n  if (cls === 'default') return { kind: 'skipped' };\n",
-      new: "  if (cls === 'default') return { kind: 'skipped' };\n",
+      id: 'S3 the continuity arm is DROPPED (no asker ever meets it)',
+      old: "asking !== 'set-side' || lane.continuity === 'recorded' ||",
+      new: "true ||",
     },
     { id: 'S4 no-continuity read as continuity-unread', old: "lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity'", new: "lane.continuity === 'unread' ? 'no-continuity' : 'continuity-unread'" },
     { id: 'S5 credits read as billing-unset', old: "lane.fableBilling === 'credits' ? 'credits' :", new: "lane.fableBilling === 'credits' ? 'billing-unset' :" },
@@ -95,7 +109,8 @@ const SERVICEABILITY_SET: MutantSet<ServiceabilityModule> = {
     { id: 'S7 an unset billing fact reads as credits', old: "lane.fableBilling === 'credits' ? 'credits' : lane.fableBilling === 'unread' ? 'billing-unread' : 'billing-unset'", new: "lane.fableBilling === 'unread' ? 'billing-unread' : 'credits'" },
     { id: 'S8 the billing arm also gates the lower classes', old: "  if (cls === 'default') return { kind: 'skipped' };\n  if (cls === 'fable') {", new: "  if (cls === 'default') return { kind: 'skipped' };\n  if (asking === 'set-side' && lane.fableBilling === 'credits') return { kind: 'unservable', why: 'credits' };\n  if (cls === 'fable') {" },
     { id: 'S9 the billing arm asks every asker', old: "if (asking === 'set-side' && lane.fableBilling !== 'included') {", new: "if (lane.fableBilling !== 'included') {" },
-    { id: 'S10 the continuity arm asks every asker', old: "if (asking === 'set-side' && lane.continuity !== 'recorded') {", new: "if (lane.continuity !== 'recorded') {" },
+    { id: 'S10 the continuity arm asks every asker', old: "asking !== 'set-side' || lane.continuity === 'recorded'", new: "lane.continuity === 'recorded'" },
+    { id: 'S11 the continuity word outranks an unservable base (F1)', old: "|| base.kind === 'unservable') return base;", new: ") return base;" },
   ],
   suite: serviceabilityCases,
 };
@@ -121,10 +136,10 @@ export function askingOfCases(m: Pick<ServiceabilityModule, 'askingOf'>): Record
 const ASKING_SET: MutantSet<ServiceabilityModule> = {
   modulePath: SERVICEABILITY_MODULE,
   mutants: [
-    { id: 'A1 a set is not a set-side asker', old: "    case 'set': return 'set-side';\n", new: '' },
-    { id: 'A2 an unreadable set is not a set-side asker', old: "    case 'set-unreadable': return 'set-side';\n", new: '' },
-    { id: 'A3 a malformed set is not a set-side asker', old: "    case 'set-malformed': return 'set-side';\n", new: '' },
-    { id: 'A4 every side is a set-side asker', old: "    default: return 'other';", new: "    default: return 'set-side';" },
+    { id: 'A1 a set is not a set-side asker', old: "case 'set': case 'set-unreadable'", new: "case 'set-unreadable'" },
+    { id: 'A2 an unreadable set is not a set-side asker', old: "case 'set-unreadable': case 'set-malformed'", new: "case 'set': case 'set-malformed'" },
+    { id: 'A3 a malformed set is not a set-side asker', old: "case 'set-malformed': return 'set-side';", new: "return 'set-side';" },
+    { id: 'A4 every project word is a set-side asker', old: "case 'malformed': return 'other';", new: "case 'malformed': return 'set-side';" },
   ],
   suite: askingOfCases,
 };

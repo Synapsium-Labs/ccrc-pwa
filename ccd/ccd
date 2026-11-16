@@ -19803,13 +19803,16 @@ _serviceable() {   # wrapper class [id] -> rc 0 servable | 1 unservable | 2 unme
   # window, against SWAP_CEILING — the same test _avail makes, so a candidate _avail admits is servable for them.
   # The Overlord's arms (serviceability plan Task 2): only for an id whose poolset entry exists (no fork otherwise, F7) and
   # whose side is a set; the continuity arm runs before the default fold (F8), the billing arm after the backend test.
-  local w="$1" c="${2:-}" fig rc side=""
+  # F1: the continuity word `cw` applies ON TOP of the base answer, never instead of it: a set-side session never gets less
+  # protection than a plain one, so the backend, billing and ceiling words outrank it and cw replaces only a servable,
+  # unmeasured or skipped answer.
+  local w="$1" c="${2:-}" fig rc side="" cw=""
   if [[ -n "${3:-}" ]] && [[ -e "$REG/$3.poolset" || -L "$REG/$3.poolset" ]]; then side=$(_session_pool_side "$3" ""); fi
   if _pool_side_is_set "$side"; then
-    declare -F _ccrc_continuity >/dev/null 2>&1 || { printf 'continuity-unread'; return 1; }
-    [[ -n "$(_ccrc_continuity "$w")" ]] || { printf 'no-continuity'; return 1; }
+    if ! declare -F _ccrc_continuity >/dev/null 2>&1; then cw=continuity-unread
+    elif [[ -z "$(_ccrc_continuity "$w")" ]]; then cw=no-continuity; fi
   fi
-  [[ -z "$c" || "$c" == default ]] && return 3
+  [[ -z "$c" || "$c" == default ]] && { [[ -n "$cw" ]] && { printf '%s' "$cw"; return 1; }; return 3; }
   if [[ "$c" == fable ]]; then
     _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
     if _pool_side_is_set "$side"; then
@@ -19833,16 +19836,16 @@ _serviceable() {   # wrapper class [id] -> rc 0 servable | 1 unservable | 2 unme
     # because the vocabulary is shared with the L0 twin, which has no
     # interpreter to lose, and because that is literally what happened —
     # nobody produced a figure. rc 2 keeps its own word.
-    case "$rc" in 0) ;; 2) printf 'stale'; return 2 ;; *) printf 'no-figure'; return 2 ;; esac
-    printf '%s' "$fig"
-    [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && return 1
-    return 0
+    case "$rc" in 0) ;; 2) printf '%s' "${cw:-stale}"; [[ -n "$cw" ]] && return 1; return 2 ;; *) printf '%s' "${cw:-no-figure}"; [[ -n "$cw" ]] && return 1; return 2 ;; esac
+    [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && { printf '%s' "$fig"; return 1; }
+    [[ -n "$cw" ]] && { printf '%s' "$cw"; return 1; }
+    printf '%s' "$fig"; return 0
   fi
   _limit_field_to fig "$w" seven
-  [[ -z "$fig" ]] && { printf 'no-figure'; return 2; }
-  printf '%s' "$fig"
-  [[ "$fig" -ge "$SWAP_CEILING" ]] && return 1
-  return 0
+  [[ -z "$fig" ]] && { printf '%s' "${cw:-no-figure}"; [[ -n "$cw" ]] && return 1; return 2; }
+  [[ "$fig" -ge "$SWAP_CEILING" ]] && { printf '%s' "$fig"; return 1; }
+  [[ -n "$cw" ]] && { printf '%s' "$cw"; return 1; }
+  printf '%s' "$fig"; return 0
 }
 
 _class_gate() {   # wrapper class [id] -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured; an id asks `_serviceable` even for an empty or default class (F8)
@@ -20231,7 +20234,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # about — keep/take (0), measured-unservable (1, fall through to the
   # candidate loop: the session MUST LEAVE a lane that cannot serve its class),
   # and UNMEASURED (2, rc 5: nobody decides, and the next tick tries again five
-  # seconds later). With no class `_class_gate` answers 0 for every lane, so
+  # seconds later). With no class and no id `_class_gate` answers 0 for every lane (a set-side session still meets the
+  # continuity arm through its id), so
   # all three lines below are today's lines byte for byte.
   if [[ "$hrc" -eq 0 && "$cur" == "$home" ]]; then
     if [[ -z "$force" ]] && _avail "$home"; then                             # home is fine: stay — if it can serve the class
@@ -26640,8 +26644,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # intended class is composed unchanged.
       case "$srv:$why" in
         0:*) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
-        1:no-continuity|1:continuity-unread)   # F4: no rung serves a lane with no record; no stamp, no restore, and a standing stamp is not composed
-           echo "$(date '+%F %T') continuity-unmet $id: $wrapper ($why); composing $rclass, a standing degraded stamp left as it is" >> "$REG/swap.log"; rdeg="" ;;
+        1:no-continuity|1:continuity-unread)   # F1/F4: no rung serves a lane with no record, so no stamp and no restore; the base answer (no id) rules what is composed
+           _serviceable "$wrapper" "$rclass" >/dev/null && rdeg=""
+           echo "$(date '+%F %T') continuity-unmet $id: $wrapper ($why); composing ${rdeg:-$rclass}, a standing degraded stamp left as it is" >> "$REG/swap.log" ;;
         1:*) below=$(_class_below "$rclass")
            if [[ -n "$below" ]]; then
              # THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R7, mirroring

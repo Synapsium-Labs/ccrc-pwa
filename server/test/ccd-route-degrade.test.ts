@@ -207,9 +207,13 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
   });
 });
 
-// The Overlord's settle arm (serviceability plan question 7, ruled F4): on a lane with no continuity record no rung
-// serves a set-side session, so a stamp would claim a fallback that does not exist.
+// The Overlord's settle arm (serviceability plan question 7, ruled F4 and F1): on a lane with no continuity record no rung
+// serves a set-side session, so a stamp would claim a fallback that does not exist; but the backend, billing, share and
+// seven-day tests run first as for a plain session, and the continuity arm applies on top of a passing base only.
 describe('_spawn_start on a lane with no continuity record, for a set-side session', () => {
+  // billing `included` and NO continuity record: the lane the arm is about (an unset billing fact would answer billing-unset first)
+  const billing = (b: 'included' | 'credits'): void => { seedAccountsSh(h.home, rosterWithFacts({ claude: { fableBilling: b } })); };
+  beforeEach(() => billing('included'));
   const setSide = (id: string): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.poolset`), 'pool-a'); };
   const unmet = (): string[] => (fs.existsSync(path.join(h.home, '.cc-sessions', 'swap.log')) ? swapLog() : '')
     .split('\n').filter((l) => l.includes('continuity-unmet'));
@@ -228,8 +232,8 @@ describe('_spawn_start on a lane with no continuity record, for a set-side sessi
     expect(lines[0]).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d continuity-unmet myid: claude \(no-continuity\); composing fable, a standing degraded stamp left as it is$/);
   });
 
-  it('no stamp stands: still no stamp, no route row, the line written, the intended class composed', () => {
-    seed('myid'); h.sh('_reg_set myid class opus'); limits('claude', 10, 99); setSide('myid');
+  it('no stamp stands, the base servable: still no stamp, no route row, the line written, the intended class composed', () => {
+    seed('myid'); h.sh('_reg_set myid class opus'); limits('claude', 10, 50); setSide('myid');
     const [p] = spawnBoth('myid');
     expect(p).toContain('--model opus ');
     expect(h.reg('myid', 'degraded')).toBeNull();
@@ -237,8 +241,37 @@ describe('_spawn_start on a lane with no continuity record, for a set-side sessi
     expect(unmet()).toHaveLength(1);
   });
 
+  it('F1: the seven-day ceiling outranks the continuity word: a set-side opus session degrades like a plain one', () => {
+    seed('myid'); h.sh('_reg_set myid class opus'); limits('claude', 10, 99); setSide('myid');
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model sonnet ');
+    expect(h.reg('myid', 'degraded')).toBe('sonnet');
+    expect(unmet()).toHaveLength(0);
+  });
+
+  it('F1: set-side fable on a credits lane with no record degrades to opus with a stamp, as a plain session does', () => {
+    billing('credits');
+    seed('myid'); h.sh('_reg_set myid class fable'); sweep({ claude: 0.1 }); setSide('myid');
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model opus ');
+    expect(h.reg('myid', 'degraded')).toBe('opus');
+    expect(eventsOf(h.home, 'route')).toHaveLength(1);
+    expect(unmet()).toHaveLength(0);
+  });
+
+  it('F1: no record and the base UNMEASURED, a degraded stamp standing: composes the stamp\'s class, leaves it, names it in the line', () => {
+    seed('myid'); h.sh('_reg_set myid class fable; _reg_set myid degraded opus'); setSide('myid');   // no sweep file
+    const stamp = path.join(h.home, '.cc-sessions', 'myid.degraded');
+    const before = fs.readFileSync(stamp);
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model opus ');
+    expect(fs.readFileSync(stamp).equals(before)).toBe(true);
+    expect(eventsOf(h.home, 'route')).toHaveLength(0);
+    expect(unmet()[0]).toMatch(/continuity-unmet myid: claude \(no-continuity\); composing opus, a standing degraded stamp left as it is$/);
+  });
+
   it('an old projection says continuity-unread in the same arm', () => {
-    seed('myid'); h.sh('_reg_set myid class fable; _reg_set myid degraded opus'); setSide('myid');
+    seed('myid'); h.sh('_reg_set myid class fable; _reg_set myid degraded opus'); sweep({ claude: 0.1 }); setSide('myid');
     const sh = path.join(h.home, '.ccrc', 'accounts.sh');
     fs.writeFileSync(sh, fs.readFileSync(sh, 'utf8').replace(/^_ccrc_continuity\(\) \{\n[\s\S]*?^\}\n/m, ''));
     const [p] = spawnBoth('myid');

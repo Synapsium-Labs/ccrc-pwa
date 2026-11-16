@@ -64,10 +64,9 @@ export const ASKINGS: readonly Asking[] = Object.keys(ASKING_MAP) as Asking[];
 /** The one reader of "is this asker a set-side session": a set and both undecidable-set words; every project word is `other`. */
 export function askingOf(side: SessionPoolSide): Asking {
   switch (side.state) {
-    case 'set': return 'set-side';
-    case 'set-unreadable': return 'set-side';
-    case 'set-malformed': return 'set-side';
-    default: return 'other';
+    case 'set': case 'set-unreadable': case 'set-malformed': return 'set-side';
+    case 'tagged': case 'untagged': case 'unreadable': case 'malformed': return 'other';
+    default: { const unreachable: never = side; return unreachable; }
   }
 }
 
@@ -90,11 +89,16 @@ export function classBelow(cls: ModelClass): ModelClass | null {
   return i > 0 ? CLASSES[i - 1]! : null;
 }
 
+/** F8 + F1: a set-side asker is held to the continuity record whatever its class, `default` included, but ON TOP of the base
+ *  answer: a set-side session never gets less protection than a plain one, so an unservable base (backend, billing, ceiling)
+ *  keeps its own word and the continuity word replaces only a skipped, servable or unmeasured one. */
 export function serviceability(cls: ModelClass | 'default', lane: LaneFacts, asking: Asking, nowS: number): Serviceability {
-  // F8: a set-side asker is held to the continuity record whatever its class, `default` included.
-  if (asking === 'set-side' && lane.continuity !== 'recorded') {
-    return { kind: 'unservable', why: lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity' };
-  }
+  const base = baseServiceability(cls, lane, asking, nowS);
+  if (asking !== 'set-side' || lane.continuity === 'recorded' || base.kind === 'unservable') return base;
+  return { kind: 'unservable', why: lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity' };
+}
+
+function baseServiceability(cls: ModelClass | 'default', lane: LaneFacts, asking: Asking, nowS: number): Serviceability {
   if (cls === 'default') return { kind: 'skipped' };
   if (cls === 'fable') {
     // A backend that is not Anthropic has no Fable to serve. That is a fact of
