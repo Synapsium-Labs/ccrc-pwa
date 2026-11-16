@@ -12,6 +12,8 @@ import type { BindingKind, EpicState, PlanEndOutcome, TicketState } from '../../
 import type { LinkingMode } from '../../../shared/linking.js';
 import { redactShapedCount } from '../coord/redact.js';
 import { publicTextVerdict, ticketRefOfBranch } from '../linking/policy.js';
+import type { RaiseItemInput } from '../coord/ledgersStore.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../coord/planStore.js';
 import { LINEAR_INITIATIVE_STATUSES, withCcrcProvenance, type CcrcOpInput, type CcrcOpName, type LinearInitiativeStatus } from './hierarchyOps.js';
 import { statusOfType, type LinearDirectoryEntries } from './ops.js';
@@ -407,4 +409,37 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     }
   }
   return { steps: phases.flat(), failedInputs, notices };
+}
+
+// ── The initiatives-off item (Task 3.5, §5.2's "initiatives off") ──
+
+/** What the pass does about one workspace's operator item: raise it, settle it, or leave things as they are. */
+export type InitiativesItemVerdict = 'raise' | 'settle' | 'none';
+
+/**
+ * Per workspace of the snapshot: a workspace reading `off` where this programme has a project whose setting is `on` needs
+ * the item (one per workspace, so none when `openFor` already holds one); a workspace reading `on` settles the one that
+ * stands. `unknown` (a probe that has not answered) changes nothing, and a project set `off` needs nothing.
+ */
+export function initiativesItemVerdicts(s: SyncSnapshot, openFor: ReadonlySet<string>): { workspaceId: string; verdict: InitiativesItemVerdict }[] {
+  return s.workspaces.map((w) => {
+    const needed = s.projects.some((p) => p.workspaceId === w.workspaceId && p.initiatives === 'on');
+    const verdict: InitiativesItemVerdict = w.initiatives === 'off' && needed && !openFor.has(w.workspaceId) ? 'raise'
+      : w.initiatives === 'on' && openFor.has(w.workspaceId) ? 'settle' : 'none';
+    return { workspaceId: w.workspaceId, verdict };
+  });
+}
+
+/** The operator item that asks for initiatives to be turned on in one workspace. Its steps name no workspace or team. */
+export function initiativesItemInput(workspaceId: string): RaiseItemInput {
+  return {
+    program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', neededBy: 'later', soonLabel: null, secretSlot: null,
+    title: 'Turn on initiatives in this Linear workspace',
+    why: 'A programme here is set to carry a Linear initiative, but this workspace has initiatives switched off. Until they are on, its epics sync as projects with no initiative above them.',
+    how: [
+      'In Linear, open the workspace settings and turn on Initiatives (a workspace admin does this).',
+      'Come back here and choose Check again: ccrc reads the workspace once more and, when initiatives are on, links the projects to their initiatives and closes this item.',
+    ],
+    options: null, action: { verb: 'linear-initiatives', workspaceId },
+  };
 }

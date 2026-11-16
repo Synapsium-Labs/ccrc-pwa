@@ -27,7 +27,7 @@ import { programmeEnd } from '../coord/planPolicy.js';
 import type { BindingRow, PlanStorePort, StoredPlan, TicketRow } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import type { BindingKind } from '../../../shared/plan.js';
+import { LINEAR_SYNC_PROGRAMME, type BindingKind } from '../../../shared/plan.js';
 import type { FleetSession } from '../../../shared/api.js';
 import { slugForTicket } from '../linking/policy.js';
 import { markLinearRejected } from './connection.js';
@@ -39,7 +39,7 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
-import { planSyncSteps, type Local, type SyncSnapshot, type SyncStep } from './planSyncPolicy.js';
+import { initiativesItemInput, initiativesItemVerdicts, planSyncSteps, type Local, type SyncSnapshot, type SyncStep } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
  *  plan verbs becomes one pass. */
@@ -73,6 +73,8 @@ export interface PlanSyncDeps {
   directory: LinearDirectoryRead;
   /** A workspace's directory is not filled: ask the refresher to fill it (`LinearRefresher#nameMiss`). */
   directoryMiss: (slot: LinearSlotRef, keyDigest: string) => void;
+  /** Queue the slot's directory refresh, the initiatives probe with it, past its window (`LinearRefresher#queueDirectory`). */
+  queueDirectory?: (slot: LinearSlotRef) => void;
   markSlotRejected: (slot: LinearSlotRef, digest: string, now: number) => Promise<void>;
   now: () => number;
   privateTrackerKeys: readonly string[];
@@ -151,6 +153,30 @@ export class PlanSync {
         }
       }
       if (requeued) this.deps.plan.markSyncDue(p.slug, now - PLAN_SYNC_DEBOUNCE_MS);
+    }
+  }
+
+  /** The operator's Check again on an initiatives item: queue the probe for that workspace's slot and answer at once, never
+   *  awaiting it. False when no slot serves the workspace or this sync has no way to queue. */
+  async checkInitiatives(workspaceId: string): Promise<boolean> {
+    const slot = slotsOf(await this.deps.readLinearStore()).get(workspaceId);
+    if (slot === undefined || this.deps.queueDirectory === undefined) return false;
+    this.deps.queueDirectory(slot.ref);
+    return true;
+  }
+
+  /** Raise the operator item of a workspace reading `off` and settle it when it reads `on` (L1's `initiativesItemVerdicts`
+   *  decides; this acts). One item per workspace: the open ones are looked up by their action. */
+  private reconcileInitiativesItems(snap: SyncSnapshot): void {
+    const { coord } = this.deps;
+    const now = this.deps.now();
+    const open = new Map<string, number>();
+    for (const i of coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open) {
+      if (i.action?.verb === 'linear-initiatives') open.set(i.action.workspaceId, i.id);
+    }
+    for (const { workspaceId, verdict } of initiativesItemVerdicts(snap, new Set(open.keys()))) {
+      if (verdict === 'raise') coord.raiseItem(initiativesItemInput(workspaceId), now, 'ccrc');
+      else if (verdict === 'settle') coord.moveItem(open.get(workspaceId)!, 'settle', 'ccrc', { note: 'Initiatives are on in this workspace.' }, now, { programmeHasOpenRun: false });
     }
   }
 
@@ -258,6 +284,7 @@ export class PlanSync {
       // `clearSyncDue` below, so a put is either in this snapshot or leaves its due row to the next pass.
       const built = this.snapshot(slug, store);
       if (built === null) { plan.clearSyncDue(slug); return 'done'; }
+      try { this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
       const { steps, failedInputs, notices } = planSyncSteps(built.snap);
       for (const n of notices) this.mailOpenIssuesLeft(slug, n.count);
       let requeued = false;
@@ -671,6 +698,7 @@ export function planSyncFor(o: {
     coord: o.coord, plan: o.plan, ccrcDir: o.ccrcDir, readLinearStore: o.readLinearStore, directory: o.refresher.directory,
     call: (ask) => runCcrcOp({ ccrcDir: o.ccrcDir, rate: o.rate, journal: o.journal, policy: o.policy, timeoutMs: PLAN_SYNC_CALL_TIMEOUT_MS }, ask),
     directoryMiss: (slot, digest) => { o.refresher.nameMiss(slot, digest); },
+    queueDirectory: (slot) => { o.refresher.queueDirectory(slot); },
     markSlotRejected: async (slot, digest, now) => {
       await (slot.source === 'legacy' ? markLinearRejected(o.ccrcDir, digest, now) : markLinearSlotRejected(o.ccrcDir, slot.id, digest, now));
     },
