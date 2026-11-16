@@ -337,6 +337,8 @@ Measured on `main` at `9cf263d44` (2026-11-16), by reading the files.
   arming, the call-time check still answers `not-asked`, writes no record, and counts no call against the ceiling.
 - **The journal's direction:** check each `decisionRowDirection` case against question 5. Pay most attention to the
   spend axis, where `off` to `shadow` widens.
+- **Boot coherence.** `decision_rows` is guarded by the authority journal, so it is never seeded: a row with no
+  journal head would read `missing` and roll authority back on every box that upgrades.
 - **The key.** It must never appear in the read, a refusal, the feed, a log line or an error. The masker must re-key
   for the server slot.
 - **No second mechanism.** One adapter. One store module. Records reused through one reader. The lane is a
@@ -350,7 +352,7 @@ authority journal A, which is merged.
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net code lines) |
 |---|---|---|---|---|
 | A | 1 to 5 | `DECISION_QUESTIONS` (W2's seven rows) and the L0 words; `planDecision`, `encodeDecisionRequest`, `readDecisionAnswers`; the `DecisionModel` port and its HTTP adapter; `decision_records` and `decision_days` with their writers; `gatherDecisions`, the one caller, tested with doubles and not wired. Every row is off, nothing is reachable | nothing: **ready to build** | `schema.ts` +24 (one migration: two tables and an index) |
-| B | 6 to 9 | `decision_rows`, `decision_host` and `decision_lines`; `authority-decision-row` in the grammar; the server-level key slot; the arm, key and read doors behind the step-up; `admitLine`, `canaryVerdict`, `anchorDrift`, `applyDecision` live; the egress, labels and state-read ports; the anchor-set lane with its fixtures; M19's read; `deps.decisions` wired | PR A, authority journal A (#2895, merged): **ready once A lands** | `schema.ts` +33 (one migration: three tables and the seed); `server.ts` +3 (one import, one registration call); `watch.ts` +8 (`sweepDecisionAnchors` and its poll line) |
+| B | 6 to 9 | `decision_rows`, `decision_host` and `decision_lines`; `authority-decision-row` in the grammar; the server-level key slot; the arm, key and read doors behind the step-up; `admitLine`, `canaryVerdict`, `anchorDrift`, `applyDecision` live; the egress, labels and state-read ports; the anchor-set lane with its fixtures; M19's read; `deps.decisions` wired | PR A, authority journal A (#2895, merged): **ready once A lands** | `schema.ts` +31 (one migration: three tables, no seed); `server.ts` +3 (one import, one registration call); `watch.ts` +8 (`sweepDecisionAnchors` and its poll line) |
 
 Each pull request merges `main` once before merge and re-measures its migration slot (the index's "Where lanes meet").
 If B's migration measures over 40, its `decision_lines` canary columns move to `decision_days` (one row per row and
@@ -801,7 +803,9 @@ CREATE TABLE decision_rows (
   updatedAt  INTEGER NOT NULL,
   actor      TEXT NOT NULL            -- the device actor, or 'server' for a hold
 );
--- one row per DECISION_ROW_IDS member, mode 'off', ceiling 600: seeded by this migration
+-- NO seed. A table in OVERLORD_AUTHORITY_TABLES that holds a row while the journal has no head row reads `missing` at
+-- boot, and the guard rolls authority back. So an absent row reads `off` with the default ceiling (600) through the
+-- one reader, decisionRowOf, and the operator's first move on a row inserts it, journal record first.
 CREATE TABLE decision_host (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   kind TEXT NOT NULL, endpoint TEXT NOT NULL, modelId TEXT NOT NULL,
@@ -843,7 +847,8 @@ export function setDecisionHostInTx(db: DatabaseSync, host: { kind: DecisionHost
 export function admitDecisionLine(db: DatabaseSync, line: DecisionLineWrite): number;
 ```
 
-`moveDecisionRowInTx` reads the row in the transaction, refuses `row-changed` when it is not `expected`, then calls
+`moveDecisionRowInTx` reads the row in the transaction (an absent row as the default side, `off` at 600, unheld),
+refuses `row-changed` when it is not `expected`, then calls
 `appendInTx` with `from` set to the row it read, and writes the row only on `appended` or `row-only`.
 
 - [ ] **Step 1: Failing tests:**
@@ -851,8 +856,11 @@ export function admitDecisionLine(db: DatabaseSync, line: DecisionLineWrite): nu
     its fold, and each direction case of question 5.
   - `chained-journal-formats.test.ts`: the kind's row.
   - `decision-model-arming.test.ts`:
-    - the seed;
-    - a move appends, then writes, in one transaction;
+    - the migration writes no `decision_rows` row, and an absent row reads `off` at 600 through `decisionRowOf`;
+    - a box upgraded with no authority head row boots `coherent` (seeding a row reds this: the guard reads
+      `missing`);
+    - a move appends, then writes, in one transaction; a first move on an absent row inserts it, with `from` read as
+      the default;
     - a widening over a `rolled-back` guard writes nothing, and a narrowing writes `row-only`;
     - `row-changed` refuses;
     - a table listed in `OVERLORD_AUTHORITY_TABLES` with no head row reads `missing` at boot.
