@@ -89,6 +89,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  clearScreenCache(); // a seeded lane read never leaks into the next case, whichever way this one ended
   vi.unstubAllGlobals();
   window.history.replaceState(null, '', '/');
 });
@@ -356,7 +357,6 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     }));
     const { container } = render(<RoutingSection />);
     expect(container.querySelector('.route-queued')?.textContent).toBe('asked Gamma 6.1');
-    clearScreenCache();
   });
 
   it('the routing line reads exactly the sentence, whichever parts it carries', () => {
@@ -382,7 +382,7 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       act(() => useFleetStore.setState({ sessions: [row] }));
       const { container, unmount } = render(<RoutingSection />);
       const el = container.querySelector<HTMLElement>('.insp-routing-row')!;
-      const sentence = routingLine(row, routeView(row, row.wrapper, undefined, 'anthropic', null), 'Lane A', null, undefined).sentence;
+      const sentence = routingLine(row, routeView(row, row.wrapper, undefined, 'anthropic', null), 'Lane A', null).sentence;
       // The shape really carries its part, and the component prints the sentence and nothing else.
       expect(sentence, name).toContain(expected);
       expect(el.textContent, name).toBe(sentence);

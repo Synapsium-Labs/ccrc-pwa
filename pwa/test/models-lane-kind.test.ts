@@ -90,6 +90,36 @@ describe('effortOptions off the dedicated list ignores the catalogue\'s levels',
   });
 });
 
+describe('effortOptions keeps a recorded rung the catalogue does not list, so the intent never goes invisible', () => {
+  const OPUS = ['low', 'medium', 'high', 'xhigh'];
+  const row = (o: ReturnType<typeof effortOptions>, v: string) => o.find((x) => x.route.value === v);
+  it('an intended rung off the narrowed list stays as a lit row, named as not listed', () => {
+    const o = effortOptions('lane-b', CODEX, OPUS, null, false, { intended: 'max', inert: false, unreadable: false });
+    expect(labels(o)).toEqual(['Low', 'Medium', 'High', 'Xhigh', 'Max', 'Auto']);
+    expect(row(o, 'max')?.active).toBe(true);
+    expect(row(o, 'max')?.sublabel).toBe('not listed for this model');
+    expect(row(o, 'high')?.sublabel).toBeUndefined();
+  });
+  it('the live level the pane reports stays too, when no intent is recorded', () => {
+    const o = effortOptions('lane-b', CODEX, OPUS, 'max', false);
+    expect(row(o, 'max')?.active).toBe(true);
+    expect(row(o, 'max')?.sublabel).toBe('not listed for this model');
+  });
+  it('control: a listed intent adds no row, and an unreadable field lights none', () => {
+    expect(labels(effortOptions('lane-b', CODEX, OPUS, null, false, { intended: 'high', inert: false, unreadable: false })))
+      .toEqual(['Low', 'Medium', 'High', 'Xhigh', 'Auto']);
+    const u = effortOptions('lane-b', CODEX, OPUS, 'max', false, { intended: 'max', inert: false, unreadable: true });
+    expect(labels(u)).toEqual(['Low', 'Medium', 'High', 'Xhigh', 'Auto']);
+  });
+  it('a word off the ladder is still never a row', () => {
+    expect(labels(effortOptions('lane-b', CODEX, OPUS, null, false, { intended: 'ludicrous', inert: false, unreadable: false })))
+      .toEqual(['Low', 'Medium', 'High', 'Xhigh', 'Auto']);
+  });
+  it('effortIsKnown still reads the catalogue alone, so the unlisted intent is unmeasurable, not queued', () => {
+    expect(effortIsKnown('lane-b', CODEX, OPUS, 'max')).toBe(false);
+  });
+});
+
 describe('effortIsKnown follows the narrowed list', () => {
   it('max is unknown under a list without it, known when the lane does not say', () => {
     expect(effortIsKnown('lane-b', CODEX, ['low', 'medium', 'high', 'xhigh'], 'max')).toBe(false);
@@ -169,6 +199,24 @@ describe('routeView.effortLevels: the levels of the class the picker lights', ()
     expect(routeView(sess({ model: 'model-6.1-gamma', route: fields({ class: 'default' }) }), 'lane-b', CODEX, 'openai', LANE_B).effortLevels)
       .toBeNull();
     expect(routeView(sess({ model: 'something-else' }), 'lane-b', CODEX, 'openai', LANE_B).effortLevels).toBeNull();
+  });
+  it('a degraded session names the SERVED class\'s levels, not the intended class\'s', () => {
+    const degraded = (to: string): FleetSession['route'] =>
+      ({ fields: { class: 'opus' }, degraded: to, inert: [], unreadable: [] });
+    // ccd types the served class's model into the pane while the degrade stands.
+    const served = sess({ model: 'model-6-beta', route: degraded('haiku') });
+    expect(routeView(served, 'lane-b', CODEX, 'openai', LANE_B).effortLevels).toEqual(['low', 'medium']);
+    // The served class has no catalogue row: the lane does not say, so it is null, never the intended class's list.
+    expect(routeView(sess({ model: 'model-6-delta', route: degraded('fable') }), 'lane-b', CODEX, 'openai', LANE_B).effortLevels)
+      .toBeNull();
+    // Control: with no degrade the intended class names the levels.
+    expect(routeView(sess({ model: 'model-6.1-gamma', route: fields({ class: 'opus' }) }), 'lane-b', CODEX, 'openai', LANE_B).effortLevels)
+      .toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+  it('a degraded word that is not a class leaves the lit class to name the levels', () => {
+    const odd: FleetSession['route'] = { fields: { class: 'opus' }, degraded: 'ludicrous', inert: [], unreadable: [] };
+    expect(routeView(sess({ model: 'model-6.1-gamma', route: odd }), 'lane-b', CODEX, 'openai', LANE_B).effortLevels)
+      .toEqual(['low', 'medium', 'high', 'xhigh']);
   });
   it('an intended effort the lit class does not list is unmeasurable, not queued; a listed one still queues', () => {
     const max = sess({ model: 'model-6.1-gamma', effort: 'low', route: fields({ effort: 'max' }) });

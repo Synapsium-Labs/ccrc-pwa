@@ -15,7 +15,7 @@
 // that local-write lane for the tap's own moment (up to 60 seconds, then its toast), while the inspector's line reads
 // only the record and says nothing is asked.
 import type { FleetSession, RouteField } from '../../../shared/api';
-import type { LaneModelsRead } from '../../../shared/models';
+import { CLASSES, type LaneModelsRead } from '../../../shared/models';
 import type { ProviderId } from '../../../shared/providers';
 import {
   classReadbackMeasurable, effortIsKnown, laneClassEfforts, liveModelNames, modelOptions, modelReadbackFor,
@@ -101,7 +101,13 @@ export function routeView(
     wrapper, entry, lane, live?.model ?? null,
     routeInfo === null ? undefined : { intended: classIntended, inert: classInert, unreadable: classUnreadable },
   ).find((o) => o.active)?.route.value ?? null;
-  const effortLevels = laneClassEfforts(lane, litClass);
+  // A degraded session runs the SERVED class's model (`routeInfo.degraded`, see `classPending` below), so its levels
+  // are that class's: the intended class's catalogue row describes a model that is not running. A degraded word that
+  // is not a class (a newer build's) leaves the lit class to decide.
+  const servedClass = routeInfo?.degraded ?? null;
+  const effortLevels = laneClassEfforts(
+    lane, servedClass !== null && (CLASSES as readonly string[]).includes(servedClass) ? servedClass : litClass,
+  );
   // The intended value's readback vs. the live read-back: `live.effort`
   // directly for effort (`ultracode` is its own boolean, not an effort
   // string — the same split `pick`'s own read-back effect already makes),

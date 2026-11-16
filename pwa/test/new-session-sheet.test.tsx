@@ -1025,12 +1025,16 @@ describe("NewSessionSheet's Effort select follows the picked class's catalogue l
     expect(levels(effort)).toEqual(['Unset', 'Low', 'Medium', 'High', 'Xhigh', 'Auto']);
   });
 
-  it('an Effort the newly picked class does not list is cleared', async () => {
+  // A select whose value matches no option reads as its first option, so '' right after the change proves nothing. A held
+  // Effort would show again once the class lists it: going back to opus is what tells a cleared Effort from a held one.
+  it('an Effort the newly picked class does not list is cleared, and stays cleared when the class changes back', async () => {
     const { effort, cls } = await openLaneB();
     fireEvent.change(cls, { target: { value: 'opus' } });
     fireEvent.change(effort, { target: { value: 'xhigh' } });
     expect(effort.value).toBe('xhigh');
     fireEvent.change(cls, { target: { value: 'haiku' } });
+    expect(effort.value).toBe('');
+    fireEvent.change(cls, { target: { value: 'opus' } });
     expect(effort.value).toBe('');
   });
 

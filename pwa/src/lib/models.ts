@@ -273,6 +273,9 @@ export function classReadbackMeasurable(
   return provider !== null && provider === modelListProvider(wrapper, entry);
 }
 
+/** The sublabel of a level row the lane's catalogue does not list for the model the session runs (D-8686). */
+const NOT_LISTED = 'not listed for this model';
+
 /** The five level rows' labels are the ladder rung capitalised, nothing more
  *  (`xhigh` -> `Xhigh`) — exactly today's hand-typed labels, so no rendered
  *  text changes. */
@@ -291,9 +294,10 @@ const capitalise = (rung: EffortRung): string => rung[0]!.toUpperCase() + rung.s
  *
  *  D-8686 (re-plan R1): on the dedicated list, `efforts` (the levels the catalogue lists for the model of the class
  *  the session runs, `laneClassEfforts`) narrows the five level rows to the ladder rungs it names, in ladder order; a
- *  word off the ladder is never a row, and a list with no ladder rung leaves `Auto` alone. `null` (the lane does not
- *  say) and `[]` (the row lists none, which `parseRegistry`'s own effort check reads as no constraint) leave all five
- *  rungs. On the Anthropic list `efforts` is ignored. `Auto` is last on every list, and Ultracode is spliced at index
+ *  word off the ladder is never a row, and a list with no ladder rung leaves `Auto` alone. The one exception is the
+ *  rung the recorded intent (or, with none, the pane's live level) names: it stays a lit row, sublabelled as not
+ *  listed, so a recorded level never goes invisible. `null` (the lane does not say) and `[]` (the row lists none,
+ *  which `parseRegistry`'s own effort check reads as no constraint) leave all five rungs. On the Anthropic list `efforts` is ignored. `Auto` is last on every list, and Ultracode is spliced at index
  *  4 only off the dedicated list, which always has all five rungs there, so index 4 is still "before Max". */
 export function effortOptions(
   wrapper: string,
@@ -315,11 +319,14 @@ export function effortOptions(
     ? false
     : intended !== null ? rung === intended : (rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung);
   const list = modelListProvider(wrapper, entry);
-  const rungs = list === 'openai' && efforts !== null && efforts.length > 0
-    ? EFFORT_LADDER.filter((rung) => efforts.includes(rung))
-    : EFFORT_LADDER;
+  const narrowed = list === 'openai' && efforts !== null && efforts.length > 0 ? efforts : null;
+  // The rung the intent or the pane names stays a row even when the catalogue omits it, so a recorded level never goes
+  // invisible; it is named as not listed. `effortIsKnown` reads the catalogue alone, so it stays unmeasurable.
+  const rungs = narrowed === null ? EFFORT_LADDER : EFFORT_LADDER.filter((rung) => narrowed.includes(rung) || activeFor(rung));
   const opts: PickOption[] = [
-    ...rungs.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
+    ...rungs.map((rung) => level(
+      capitalise(rung), rung, activeFor(rung), narrowed !== null && !narrowed.includes(rung) ? NOT_LISTED : undefined,
+    )),
     level('Auto', 'auto', unreadable ? false : intended !== null ? intended === 'auto' : e === 'auto'),
   ];
   if (list !== 'openai') {

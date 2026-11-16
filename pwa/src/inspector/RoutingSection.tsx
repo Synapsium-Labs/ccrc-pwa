@@ -28,7 +28,7 @@ export function RoutingSection(): ReactNode {
   const entry = entryFor(roster, row.wrapper);
   const line = routingLine(
     row, routeView(row, row.wrapper, entry, accountProvider(roster, row.wrapper), laneModels),
-    accountLabel(roster, row.wrapper), laneModels, entry,
+    accountLabel(roster, row.wrapper), laneModels,
   );
   // Named by its field: the words around a door are text, so a reader moving by buttons would hear the value alone.
   const part = (p: RoutingPart, i: number): ReactNode => {

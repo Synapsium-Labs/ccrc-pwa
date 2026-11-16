@@ -735,7 +735,7 @@ describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8
       haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: ['low', 'medium'] },
     } },
   };
-  const renderLaneB = (row: RosterWire): string[] => {
+  const renderLaneB = (row: RosterWire, over: Partial<FleetSession> = {}): string[] => {
     const asked: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
       if (!String(url).includes('/api/models/')) return new Response('{}', { status: 200 });
@@ -747,7 +747,7 @@ describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8
     act(() => {
       fleet.setState({
         roster: [...TEST_ROSTER, row], conn: 'open',
-        sessions: [fleetSession({ wrapper: 'lane-b', model: 'model-6.1-gamma', effort: 'low' })],
+        sessions: [fleetSession({ wrapper: 'lane-b', model: 'model-6.1-gamma', effort: 'low', ...over })],
       });
     });
     render(
@@ -782,18 +782,58 @@ describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8
     expect(screen.queryByRole('button', { name: /^Ultracode/ })).toBeNull();
   });
 
-  it('control: the same row without managed gets the Anthropic list, Default, Max and Ultracode', async () => {
-    const asked = renderLaneB({ ...LANE_B_ROW, managed: false });
+  // The recorded-only shape (`managed: false`) and the shape an older server sends (no `managed` key at all) both fall
+  // back to the wrapper check, which puts `lane-b` on the Anthropic list.
+  const { managed: _managed, ...WITHOUT_MANAGED } = LANE_B_ROW;
+  it('control: the same row without the managed key gets the Anthropic list, Default, Max and Ultracode', async () => {
+    const asked = renderLaneB(WITHOUT_MANAGED);
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     await act(async () => { await Promise.resolve(); });
     openModelSheet();
     expect(await screen.findByRole('button', { name: /^Default/ })).toBeInTheDocument();
     cleanup();
-    const again = renderLaneB({ ...LANE_B_ROW, managed: false });
+    const again = renderLaneB(WITHOUT_MANAGED);
     await waitFor(() => expect(again.length).toBeGreaterThan(0));
     await act(async () => { await Promise.resolve(); });
     openEffortSheet();
     expect(await screen.findByRole('button', { name: /^Max/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Ultracode/ })).toBeInTheDocument();
+  });
+
+  it('control: the recorded-only row (managed false) also gets the Anthropic list', async () => {
+    const asked = renderLaneB({ ...LANE_B_ROW, managed: false });
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /^Default/ })).toBeInTheDocument();
+  });
+
+  // The screen hands the roster row to `routeView`, which decides what the header calls queued. Nothing else on the
+  // screen changes when it does not (the lit class, hence the levels, is the same on both lists), so the badge is what
+  // measures the wiring.
+  describe('the queued badge follows the roster row the screen passes to routeView', () => {
+    const route = (fields: NonNullable<FleetSession['route']>['fields']): FleetSession['route'] =>
+      ({ fields, degraded: null, inert: [], unreadable: [] });
+    /** Opens the model sheet and waits for the lane's read to land (its rows carry the lane's own labels). */
+    const readLanded = async (): Promise<void> => {
+      openModelSheet();
+      await screen.findByRole('button', { name: /Gamma 6\.1/ });
+    };
+
+    it('a class asked on a managed Codex lane shows queued while the pane runs another class', async () => {
+      renderLaneB(LANE_B_ROW, { model: 'model-6-beta', route: route({ class: 'opus' }) });
+      await readLanded();
+      expect(screen.getAllByText('queued').length).toBeGreaterThan(0);
+    });
+
+    it('an effort the lit class does not list is not queued, and a listed one is', async () => {
+      renderLaneB(LANE_B_ROW, { effort: 'low', route: route({ effort: 'max' }) });
+      await readLanded();
+      expect(screen.queryByText('queued')).toBeNull();
+      cleanup();
+      renderLaneB(LANE_B_ROW, { effort: 'low', route: route({ effort: 'high' }) });
+      await readLanded();
+      expect(screen.getAllByText('queued').length).toBeGreaterThan(0);
+    });
   });
 });
