@@ -9,7 +9,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type PlanChanges, type PlanStorePort } from '../src/coord/planStore.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
-import { PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_DISPATCH_WAIT_MS, PlanSync } from '../src/linear/planSync.js';
+import { PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_DISPATCH_WAIT_MS, PlanSync, prOfRunFrom } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
@@ -37,11 +37,11 @@ interface Rig {
 }
 let dirs: string[] = [];
 let counter = 100;
-async function rig(o: { mode?: 'private' | 'public'; runs?: number } = {}): Promise<Rig> {
+async function rig(o: { mode?: 'private' | 'public'; runs?: number; noSlot?: boolean; noDirectory?: boolean; fleet?: () => never[] | unknown[] } = {}): Promise<Rig> {
   const dir = mkTmp('ccrc-plan-dwait-');
   dirs.push(dir);
   const ccrcDir = path.join(dir, '.ccrc');
-  await seedSlot(ccrcDir, 'a');
+  if (o.noSlot !== true) await seedSlot(ccrcDir, 'a');
   const db = memCoordDb();
   const coord = new CoordStore(db);
   db.prepare("INSERT INTO project_linking (project, teamKey, override, visibility, slug, template, measuredAt) VALUES ('project-a', 'AAA', ?, ?, 'owner/repo', 'absent', ?)")
@@ -59,9 +59,9 @@ async function rig(o: { mode?: 'private' | 'public'; runs?: number } = {}): Prom
   r.sync = new PlanSync({
     coord, plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir),
     call: async (ask) => { r.asks.push(ask); return r.respond.current(ask); },
-    directory: { get: () => DIR, filledAt: () => T - 1000 },
+    directory: { get: () => (o.noDirectory === true ? null : DIR), filledAt: () => T - 1000 },
     directoryMiss: () => undefined, markSlotRejected: async () => undefined,
-    now: () => r.t.now, privateTrackerKeys: [], prOfRun: (id) => r.prs.get(id) ?? null,
+    now: () => r.t.now, privateTrackerKeys: [], prOfRun: o.fleet === undefined ? (id) => r.prs.get(id) ?? null : prOfRunFrom(coord, o.fleet as never),
   });
   for (let w = 1; w <= (o.runs ?? 1); w++) {
     const res = coord.openRun({ program: SLUG, title: `Wave ${w}`, project: 'project-a', wave: w, waveOf: 3, claimedBy: OWNER, homeProject: 'project-a',
@@ -205,5 +205,36 @@ describe('the dispatch wait (D-8182, §5.6)', () => {
     const r2 = await rig();
     expect(await r2.sync.ensureTicketBound(r2.runs[0]!, 50)).toEqual({ identifier: expect.stringMatching(/^AAA-\d+$/) });
     expect(vi.getTimerCount()).toBe(0);        // neither call left its timer behind
+  });
+
+  it('a session PR is the run\'s only when its branch is the run\'s own branch (no lineage yet)', async () => {
+    let fleet: unknown[] = [];
+    const r = await rig({ mode: 'public', fleet: () => fleet });
+    r.db.prepare("UPDATE runs SET sessionId = 'sess-a', branch = 'ws/mine' WHERE id = ?").run(r.runs[0]!);
+    await tick(r);
+    fleet = [{ id: 'sess-a', branch: 'ws/earlier-wave', pr: { number: 3 } }];
+    await tick(r); await tick(r);
+    expect(links(r)).toHaveLength(0);                                   // another branch's PR: no link, and nothing recorded
+    fleet = [{ id: 'sess-a', branch: 'ws/mine', pr: { number: 4 } }];
+    await tick(r);
+    expect(links(r)).toHaveLength(1);
+    expect(links(r)[0]!.input['url']).toBe('https://github.com/owner/repo/pull/4');
+    fleet = [{ id: 'sess-a', branch: null, pr: { number: 5 } }];       // an unreadable branch is no PR either
+    const r2 = await rig({ mode: 'public', fleet: () => fleet });
+    r2.db.prepare("UPDATE runs SET sessionId = 'sess-a', branch = 'ws/mine' WHERE id = ?").run(r2.runs[0]!);
+    await tick(r2); await tick(r2);
+    expect(links(r2)).toHaveLength(0);
+  });
+
+  it('a private project with no usable Linear slot or directory answers at once, not after the budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    for (const o of [{ noSlot: true }, { noDirectory: true }]) {
+      const r = await rig(o);
+      const t0 = Date.now();
+      expect(await r.sync.dispatchSlug(r.runs[0]!, undefined)).toBeUndefined();   // no timer advance: it settled by itself
+      expect(Date.now() - t0).toBeLessThan(PLAN_SYNC_DISPATCH_WAIT_MS);
+      expect(r.asks).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    }
   });
 });

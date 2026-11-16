@@ -679,7 +679,8 @@ export function planSyncFor(o: {
 }
 
 /** §5.6: a run's pull request as the server knows it: the newest of its folded `.prhistory` lineage (written when the run
- *  closes), else its session's PR in the newest fleet listing. Synchronous; null when neither names one. */
+ *  closes), else its session's PR in the newest fleet listing when that session is on the run's own branch. Synchronous; null (no PR yet,
+ *  and an unreadable branch is the same: the link waits) when neither names one. */
 export function prOfRunFrom(coord: CoordStore, fleet: () => readonly FleetSession[] | null): NonNullable<PlanSyncDeps['prOfRun']> {
   return (runId) => {
     const read = coord.run(runId);
@@ -688,6 +689,9 @@ export function prOfRunFrom(coord: CoordStore, fleet: () => readonly FleetSessio
     if (last !== undefined) return { number: last.pr, branch: last.branch };
     const sid = read.run.sessionId;
     const s = sid === null ? undefined : fleet()?.find((f) => f.id === sid);
-    return s?.pr?.number != null ? { number: s.pr.number, branch: s.branch } : null;
+    // The session's PR is this run's only when it sits on the run's own workspace branch: a resumed session may still show an
+    // earlier wave's PR. A branch that cannot be read on either side is "no PR yet": the link waits and the next pass asks again.
+    const own = read.run.branch;
+    return s?.pr?.number != null && own !== null && s.branch !== null && s.branch === own ? { number: s.pr.number, branch: s.branch } : null;
   };
 }
