@@ -28,7 +28,7 @@ afterEach(() => {
 /** The page every case routes on: `a/b.md` of `demo`, in the first section, with `a/c.md` in the tree. */
 function ctx(): DocLinkContextValue {
   return {
-    project: 'demo', pageRef: null, view: 'committed', section: SECTION, path: 'a/b.md',
+    project: 'demo', pageRef: null, pageAt: null, view: 'committed', section: SECTION, path: 'a/b.md',
     tree: treeOk({ entries: [entry(SECTION, 'a/b.md'), entry(SECTION, 'a/c.md')] }), pageSource: 'committed',
     urls: new WeakMap(), onFragment: vi.fn(),
   };

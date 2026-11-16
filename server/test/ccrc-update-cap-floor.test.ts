@@ -16,6 +16,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, s
 import { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
+import { itLinux } from './platformFixtures.js';
 import { keepDigest } from './installTreeFixture.js';
 import { printableDetail } from '../src/update/inventory.js';
 import {
@@ -35,6 +36,11 @@ const MALFORMED = "the target's ccdCaps cannot be read";
 const UNLISTABLE = 'make ~/.cc-sessions listable';
 const NOTHING = 'Nothing on this box was changed';
 const WARN_TAIL = (from: string): string => ` - proceeding because this run is --from ${from}`;
+/** The pool set B2's override, at the refusal's front: the one typed way past the row, beside its remedy. */
+const OVERRIDE = 'pass --below-cap pool-set, or ';
+/** The WARN a passed row prints (pool set B2): what it passed, why, and for whom. */
+const PASSED = (why: string, ids = 'lane-b-overlord'): string =>
+  `update: WARN: --below-cap passed the capability floor for pool-set (${why}; a poolset stands for ${ids}) - a box below the word ignores that fact`;
 
 /** A set standing for `id`: a regular file at `~/.cc-sessions/<id>.poolset`. */
 function plantSet(home: string, id = 'lane-b-overlord'): string {
@@ -82,7 +88,7 @@ function snapshot(home: string): { stamp: string; installed: string | null; link
 /** Asserts the refusal: exit 1, the remedy-led sentence on stderr, and the box exactly as it was. */
 function expectRefused(home: string, before: ReturnType<typeof snapshot>, r: { code: number; stderr: string }, why: string): void {
   expect(r.code, `stderr: ${r.stderr}`).toBe(1);
-  expect(r.stderr).toContain(`${REMEDY}: ${why}; a poolset stands for lane-b-overlord. ${NOTHING}`);
+  expect(r.stderr).toContain(`${OVERRIDE}${REMEDY}: ${why}; a poolset stands for lane-b-overlord. ${NOTHING}`);
   expect(snapshot(home)).toEqual(before);
 }
 
@@ -301,9 +307,10 @@ describe('capability floor, call site (b): a rollback by flip reads the kept tre
     expect(last['phase']).toBe('failed');
     const detail = String(last['detail']);
     expect(detail).toContain(WAY_OUT);
-    expect(detail.startsWith(REMEDY)).toBe(true);
+    expect(detail.startsWith(`${OVERRIDE}${REMEDY}`)).toBe(true);
     const cut = printableDetail(detail);
     expect(cut.length).toBeLessThanOrEqual(200);
+    expect(cut, 'the 200-character cut dropped the override (pool set B2)').toContain('--below-cap pool-set');
     expect(cut, 'the 200-character cut dropped the remedy').toContain(WAY_OUT);
     expect(cut).toContain(LACKS);
   });
@@ -445,5 +452,203 @@ describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is rea
     const a = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     expect(readFileSync(script, 'utf8')).toBe(a.replace(ROW, ROW + EXTRA));
     copyFileSync(script, join(home, 'unused'));
+  });
+});
+
+describe('the override, --below-cap <word> (pool set B2, Task 9): passes its row alone, with a WARN, and reaches every re-exec', () => {
+  it('update --below-cap pool-set passes the "lacks" refusal with the WARN, and the update completes', () => {
+    const home = movingBox('ccrc-capfloor-bc-lacks-', ['ws-add']);
+    plantSet(home);
+    const r = runUpdate(home, ['--below-cap', 'pool-set']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain(PASSED(LACKS));
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged spine never ran').toBe(true);
+  });
+
+  it('it passes every other refusal of Table 2 too: absent, malformed, an unreadable stamp, an unlistable registry', () => {
+    const home = freshUpdateBox('ccrc-capfloor-bc-rows-');
+    plantSet(home);
+    const stamp = join(home, 'staged-build.json');
+    writeFileSync(stamp, shippedStamp('v2.0.0', 'c'.repeat(40)));
+    for (const [caps, why] of [[undefined, ABSENT], ['pool-set', MALFORMED]] as const) {
+      setCaps(stamp, caps);
+      const r = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" cli pool-set || rc=$?; echo "rc=$rc"`);
+      expect(r.stdout, String(caps)).toContain(PASSED(why));
+      expect(r.stdout, String(caps)).toContain('rc=0');
+    }
+    const gone = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${home}/no-such-stamp" cli pool-set || rc=$?; echo "rc=$rc"`);
+    expect(gone.stdout).toContain(PASSED("the target's stamp could not be read (rc 3)"));
+    expect(gone.stdout).toContain('rc=0');
+    const reg = join(home, '.cc-sessions');
+    chmodSync(reg, 0o300);
+    try {
+      // An unlistable registry passes only when the flag names every row's word, whatever the table holds.
+      const r = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" cli "$(_cap_floor_words)" || rc=$?; echo "rc=$rc"`);
+      expect(r.stdout).toContain('update: WARN: --below-cap passed the capability floor for an unlistable ~/.cc-sessions');
+      expect(r.stdout).toContain('rc=0');
+      const refused = sourcedCcrc(home, `_upd_cap_floor_check "${stamp}" cli`);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toMatch(/pass --below-cap pool-set(,[a-z0-9-]+)*, or make ~\/\.cc-sessions listable/);
+      const one = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" cli "$(_cap_floor_words),pool-set" || rc=$?; echo "rc=$rc"`);
+      expect(one.stdout).toContain('rc=0');
+    } finally { chmodSync(reg, 0o700); }
+  });
+
+  it('a word outside the table, a capital, an empty value or no value is a usage error (exit 2), and nothing changes', () => {
+    const home = movingBox('ccrc-capfloor-bc-usage-', ['ws-add']);
+    plantSet(home);
+    const before = snapshot(home);
+    for (const args of [['--below-cap', 'something-else'], ['--below-cap', 'Pool-Set'], ['--below-cap', ''], ['--below-cap', 'pool-set,'], ['--below-cap']]) {
+      const r = runUpdate(home, args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.stderr, args.join(' ')).toContain('--below-cap names capability floor words, comma-joined: pool-set');
+      expect(r.stderr, args.join(' ')).toContain(' (got: ');
+      expect(snapshot(home)).toEqual(before);
+    }
+    const rb = rollbackRun(home, ['--to', 'v1.0.0', '--below-cap', 'something-else']);
+    expect(rb.code).toBe(2);
+    expect(rb.stderr).toContain('--below-cap names capability floor words');
+  });
+
+  it('--force alone still refuses, and --check beside --below-cap is refused at exit 2 (the D-3139 shape)', () => {
+    const home = movingBox('ccrc-capfloor-bc-force-', ['ws-add']);
+    plantSet(home);
+    const before = snapshot(home);
+    expectRefused(home, before, runUpdate(home, ['--force']), LACKS);
+    const c = runUpdate(home, ['--check', '--below-cap', 'pool-set']);
+    expect(c.code).toBe(2);
+    expect(c.stderr).toContain('update: --check and --below-cap are exclusive');
+  });
+
+  it('a Claude Code session (CLAUDECODE set) is refused the flag on update and rollback: exit 2, the operator\'s flag, nothing changed (fix round 1, F1)', () => {
+    const home = movingBox('ccrc-capfloor-bc-session-', ['ws-add']);
+    plantSet(home);
+    const before = snapshot(home);
+    for (const r of [runUpdate(home, ['--below-cap', 'pool-set'], { CLAUDECODE: '1' }),
+      rollbackRun(home, ['--to', 'v1.0.0', '--below-cap', 'pool-set'], { CLAUDECODE: '1' })]) {
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("--below-cap is the operator's flag, typed in their own shell: a Claude Code session never passes the capability floor; nothing was changed");
+      expect(snapshot(home)).toEqual(before);
+    }
+    expect(runUpdate(home, [], { CLAUDECODE: '1' }).stderr, 'without the flag a session meets the floor itself').toContain(`${OVERRIDE}${REMEDY}`);
+  });
+
+  itLinux('a detached update carries the flag, last in the fixed order, to its child (forwarding 1)', () => {
+    const home = movingBox('ccrc-capfloor-bc-detach-', ['ws-add']);
+    plantSet(home);
+    const r = runUpdate(home, ['--below-cap', 'pool-set', '--detach', '--to', 'v2.0.0', '--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(fileText(join(home, 'systemd-run-argv')).trim()).toBe(
+      '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+      + 'ccrc-detach update --to v2.0.0 --from cli --force --below-cap pool-set');
+  });
+});
+
+describe('the override on the rollback verb: its kept branch, its detach and its fall-through (pool set B2, Task 9)', () => {
+  function flipBox(prefix: string, caps: unknown): { home: string; kept: string } {
+    const home = freshUpdateBox(prefix);
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    setCaps(join(kept, '.ccrc-stamp.json'), caps);
+    keepDigest(kept, home);
+    return { home, kept };
+  }
+
+  it('a kept tree that lacks the word: --below-cap pool-set flips with the WARN', () => {
+    const { home, kept } = flipBox('ccrc-capfloor-bc-flip-', ['ws-add']);
+    plantSet(home);
+    const r = rollbackRun(home, ['--below-cap', 'pool-set']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain(PASSED(LACKS));
+    expect(linkOf(home)).toBe(kept);
+  });
+
+  itLinux('a detached rollback carries the flag to its child (forwarding 2)', () => {
+    const { home } = flipBox('ccrc-capfloor-bc-rbdetach-', ['ws-add']);
+    plantSet(home);
+    const r = rollbackRun(home, ['--to', 'v1.0.0', '--detach', '--from', 'pwa', '--below-cap', 'pool-set']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(fileText(join(home, 'systemd-run-argv')).trim()).toBe(
+      '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+      + 'ccrc-detach rollback --to v1.0.0 --from pwa --below-cap pool-set');
+  });
+
+  it('a rollback to a version not kept falls through to the update, which refuses below the word; the flag rides the fall-through and passes (forwarding 3)', () => {
+    const mk = (prefix: string): string => {
+      const { home } = flipBox(prefix, ['pool-set']);
+      const tree = stubTree(home, { version: 'v1.5.0' });
+      setCaps(join(tree, 'build.json'), ['ws-add']);
+      rmSync(join(tree, 'MANIFEST'));
+      writeManifest(tree);
+      packRelease(home, tree, { tag: 'v1.5.0', latest: false });
+      plantSet(home);
+      return home;
+    };
+    const refused = mk('ccrc-capfloor-bc-fall-no-');
+    const r0 = rollbackRun(refused, ['--to', 'v1.5.0']);
+    expect(r0.code, `stderr: ${r0.stderr}\nstdout: ${r0.stdout}`).toBe(1);
+    expect(r0.stderr).toContain(`${OVERRIDE}${REMEDY}: ${LACKS}`);
+    expect(existsSync(join(refused, 'staged-ccrc-argv'))).toBe(false);
+    const passed = mk('ccrc-capfloor-bc-fall-yes-');
+    const r1 = rollbackRun(passed, ['--to', 'v1.5.0', '--below-cap', 'pool-set']);
+    expect(r1.stdout + r1.stderr).toContain(PASSED(LACKS));
+    expect(existsSync(join(passed, 'staged-ccrc-argv')), `the fall-through refused: ${r1.stderr}`).toBe(true);
+  });
+});
+
+describe('the override and THE TABLE: --below-cap names any row\'s word, and overrides only the row it names (pool set B2)', () => {
+  const ROW = "  'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='\n";
+  // A fictional row, so a row a later piece ships never collides with it.
+  const EXTRA = "  'tablefact|table-word-v1|the remedy of a row this test adds'\n";
+  function patched(home: string, caps: string[]): { script: string; stamp: string } {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    expect(src, 'the row line moved: the patch has nothing to anchor on').toContain(ROW);
+    const script = join(home, 'ccrc-patched');
+    writeFileSync(script, src.replace(ROW, ROW + EXTRA));
+    const stamp = join(home, 'target-build.json');
+    writeFileSync(stamp, shippedStamp('v2.0.0', 'c'.repeat(40)));
+    setCaps(stamp, caps);
+    return { script, stamp };
+  }
+  const sh = (home: string, script: string, body: string): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync(BASH, ['-c', `. "$1"; ${body}`, 'ccrc-under-test', script], { env: updateEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const both = (prefix: string): { home: string; script: string; stamp: string } => {
+    const home = freshUpdateBox(prefix);
+    const p = patched(home, ['ws-add']);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'lane-a-overlord.tablefact'), 'x\n');
+    plantSet(home);
+    return { home, ...p };
+  };
+
+  it('both facts stand and the target lacks both words: --below-cap pool-set passes that row and still refuses the other, naming its override and remedy', () => {
+    const { home, script, stamp } = both('ccrc-capfloor-bc-table-one-');
+    const r = sh(home, script, `_upd_cap_floor_check "${stamp}" cli pool-set`);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain(PASSED(LACKS));
+    expect(r.stderr).toContain('pass --below-cap table-word-v1, or the remedy of a row this test adds: the target build lacks table-word-v1; a tablefact stands for lane-a-overlord');
+    expect(r.stderr).not.toContain('lacks pool-set');
+  });
+
+  it('naming both words passes both, each with its WARN; with no flag one refusal names both words at its front', () => {
+    const { home, script, stamp } = both('ccrc-capfloor-bc-table-both-');
+    const r = sh(home, script, `rc=0; _upd_cap_floor_check "${stamp}" cli pool-set,table-word-v1 || rc=$?; echo "rc=$rc"`);
+    expect(r.stdout).toContain('rc=0');
+    expect(r.stdout).toContain('--below-cap passed the capability floor for pool-set (the target build lacks pool-set; a poolset stands for lane-b-overlord); table-word-v1 (');
+    const none = sh(home, script, `_upd_cap_floor_check "${stamp}" cli`);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toContain('pass --below-cap pool-set,table-word-v1, or ');
+  });
+
+  it('the argument check reads the table: table-word-v1 is a word in the patched copy and a usage error in the shipped file', () => {
+    const { home, script } = both('ccrc-capfloor-bc-table-arg-');
+    expect(sh(home, script, '_below_cap_arg 2 table-word-v1 && echo ok').stdout.trim()).toBe('ok');
+    expect(sh(home, script, '_below_cap_arg 2 pool-set,table-word-v1 && echo ok').stdout.trim()).toBe('ok');
+    const shipped = sh(home, join(REPO, 'ccd', 'ccrc'), '_below_cap_arg 2 table-word-v1 && echo ok');
+    expect(shipped.code).toBe(2);
+    expect(shipped.stdout).not.toContain('ok');
   });
 });

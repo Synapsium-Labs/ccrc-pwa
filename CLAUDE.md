@@ -380,7 +380,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
   the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
   `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
-  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A box's tree is the symlink
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. None of `ccrc update`, `rollback` or `rollout` is a session's: the classifier's forbidden row, the hook's child deny and the child
+  deny file name all three heads, and `--below-cap` (the capability floor's override) refuses inside a Claude Code session
+  (`CLAUDECODE` set) — both accident guards, which `env -u`, a script file or another interpreter runs past. A box's tree is the symlink
   `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
   passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
   `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`

@@ -347,7 +347,7 @@ function treeBody(src: string, tree: DocsTreeOk = treeOk(), url = '/docs/demo/sp
   const detached = detachUrls(outcome.tree);
   const page = leafAt(url);
   const link: Omit<DocLinkContextValue, 'urls'> = {
-    project: 'demo', pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
+    project: 'demo', pageRef: page.ref, pageAt: null, view: page.view, section: page.section, path: page.path, tree,
     pageSource: pinFor(tree, page)?.kind === 'draft' ? 'draft' : 'committed', onFragment: () => {},
   };
   return { kind: 'tree', tree: detached.tree, urls: detached.urls, link, store };

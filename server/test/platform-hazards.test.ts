@@ -392,12 +392,37 @@ describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s
     console.info(`R14(i): bash takes ${LOC} here (${process.platform}; bash ${probe(LOC).bashv})`);
   });
 
-  // The control. Both answers are the hazard itself, which is why dropping a pin reds T4-M32, T4-M31 and T1-1 on
-  // Linux. If either flipped here, those mutation rows would be hollow on this platform.
-  itLinux('R14(i): on Linux, under the UTF-8 locale and no pin, read -d \'\' misses a NUL after a lead byte and a read -r loop merges the lines', () => {
+  /** Whether this bash is one that misreads: every bash below 5.3. Measured 2026-11-16 (desktop-polish Task C34,
+   *  D-8657) under C.UTF-8 with these probes: 5.1.16, 5.2.15 and 5.2.37 miss the NUL and merge the lines, while 5.3.9 and
+   *  5.3.20 do neither, on glibc and on musl alike, so the change is bash's own and not the C library's. A bash below 5.1 is
+   *  inferred to misread, not measured. `null` when the version cannot be read. */
+  const misreadingBash = (bashv: string): boolean | null => {
+    const m = /^(\d+)\.(\d+)/.exec(bashv);
+    if (m === null) return null;
+    return Number(m[1]) < 5 || (Number(m[1]) === 5 && Number(m[2]) < 3);
+  };
+
+  // The control. On a bash that misreads, both answers are the hazard itself, which is why dropping a pin reds T4-M32,
+  // T4-M31 and T1-1 there; if either flipped on such a bash, those mutation rows would be hollow, so this asserts them.
+  // From bash 5.3 the unpinned reads read bytes correctly, the pins guard nothing on that bash and those rows cannot
+  // red there, so it RECORDS which answer it gave and asserts only that both probes ran (the fleet box's bash 5.3.9 was
+  // red here on every run before C34; CI's 5.2.21 asserts).
+  itLinux('R14(i): on Linux, under the UTF-8 locale and no pin, a bash below 5.3 misses a NUL after a lead byte and merges a line ending in one; a later bash is recorded', () => {
     const p = probe(LOC);
-    expect.soft(p.nulRc, `under ${LOC}: an unpinned read -d '' over a lead byte then a NUL (${p.out.slice(0, 200)})`).toBe('1');
-    expect.soft(p.lines, `under ${LOC}: an unpinned read -r loop over a line ending in a lead byte (${p.out.slice(0, 200)})`).toBe('1');
+    const misreads = misreadingBash(p.bashv);
+    expect(misreads, `the bash version could not be read (${p.out.slice(0, 200)})`).not.toBeNull();
+    if (misreads === true) {
+      expect.soft(p.nulRc, `under ${LOC} with bash ${p.bashv}: an unpinned read -d '' over a lead byte then a NUL (${p.out.slice(0, 200)})`).toBe('1');
+      expect.soft(p.lines, `under ${LOC} with bash ${p.bashv}: an unpinned read -r loop over a line ending in a lead byte (${p.out.slice(0, 200)})`).toBe('1');
+      return;
+    }
+    const misses = p.nulRc === '1';
+    const merges = p.lines === '1';
+    console.info(`R14(i): under ${LOC} with bash ${p.bashv}, an unpinned read -d '' ${misses ? 'misses' : 'sees'} the NUL after a lead byte `
+      + `and an unpinned read ${merges ? 'merges' : 'keeps'} the line (LINES=${p.lines}), so dropping a locale pin `
+      + `${misses || merges ? 'can' : 'cannot'} red T4-M32, T4-M31 and T1-1 on this bash`);
+    expect(['0', '1'], `the NUL probe under bash ${p.bashv} gave NUL_RC=${p.nulRc} (${p.out.slice(0, 200)})`).toContain(p.nulRc);
+    expect(p.lines, `the line probe under bash ${p.bashv} gave LINES=${p.lines} (${p.out.slice(0, 200)})`).toMatch(/^\d+$/);
   });
 
   // RECORDED, not wished for: either answer is a fact, so this asserts only that each probe ran and produced its
