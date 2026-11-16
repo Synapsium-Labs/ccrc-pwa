@@ -56,6 +56,20 @@ const holdClosingContent = (): (() => void) => {
   return () => { spy.mockRestore(); };
 };
 
+/** Ends a closing dialog's exit, as the browser's `animationend` does, so Radix unmounts it and runs its own undo. */
+const finishExit = async (dialog: Element): Promise<void> => {
+  const end = new Event('animationend', { bubbles: true });
+  Object.defineProperty(end, 'animationName', { value: 'sheet-out' });
+  await act(async () => { dialog.dispatchEvent(end); });
+  await settle();
+};
+
+/** Whether this element or an ancestor of it is hidden from assistive technology. */
+const hiddenUp = (el: Element): boolean => {
+  for (let at: Element | null = el; at !== null; at = at.parentElement) if (at.getAttribute('aria-hidden') === 'true') return true;
+  return false;
+};
+
 /** A page with a live region and a confirm opened from a button. */
 function Page(): ReactNode {
   const [open, setOpen] = useState(false);
@@ -192,6 +206,14 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
       expect(hiddenUp(middle), 'the sheet directly under the closing confirm stayed hidden').toBe(false);
       expect(hiddenUp(bottom), 'the bottom sheet was announced while the middle sheet is open over it').toBe(true);
       expect(pageHidden(), 'the page was announced behind two open sheets').toBe(true);
+      // Review 2310 F3 (Task C40): and once the confirm has gone, Radix's undo leaves the same picture.
+      const confirm = [...document.querySelectorAll('[role="dialog"]')].find((d) => d.getAttribute('data-state') === 'closed');
+      expect(confirm, 'CONTROL: the closing confirm is the one closed dialog').toBeDefined();
+      await finishExit(confirm!);
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the confirm has unmounted, both sheets still open').toBe(2);
+      expect(hiddenUp(middle), 'the middle sheet is hidden after the confirm unmounted').toBe(false);
+      expect(hiddenUp(bottom), 'the bottom sheet was announced after the confirm unmounted').toBe(true);
+      expect(pageHidden(), 'the page was announced behind two open sheets after the confirm unmounted').toBe(true);
     } finally { release(); }
   });
 
@@ -252,6 +274,101 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
       await settle();
       expect(own.getAttribute('aria-hidden')).toBe('true');
       own.remove();
+    } finally { release(); }
+  });
+
+  // Review 2310 F2 (Task C40, D-8698), no stack: a sheet that opens while the one before it is still closing (a menu
+  // sheet whose row closes it and opens the next, in one commit). The first sheet's Radix marks an element the page hid
+  // itself as already hidden (it never restores that one); the second must not take it for a mark of its own and lift it.
+  it('a sheet opened while the previous one closes never lifts an element the page hid itself, and still announces the page', async () => {
+    function Chain(): ReactNode {
+      const [first, setFirst] = useState(false);
+      const [second, setSecond] = useState(false);
+      return (
+        <main>
+          <button type="button" onClick={() => setFirst(true)}>Open it</button>
+          <Sheet open={first} onClose={() => setFirst(false)} title="Menu">
+            <button type="button" onClick={() => { setFirst(false); setSecond(true); }}>Next</button>
+          </Sheet>
+          <Sheet open={second} onClose={() => setSecond(false)} title="Next sheet">
+            <button type="button" onClick={() => setSecond(false)}>Done</button>
+          </Sheet>
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    const own = document.createElement('div');
+    own.setAttribute('aria-hidden', 'true');
+    own.textContent = 'decoration';
+    document.body.appendChild(own);
+    try {
+      render(<Chain />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await settle();
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the menu is closing as the next sheet opens').toBe(2);
+      expect(own.hasAttribute('data-aria-hidden'), 'CONTROL: Radix marked the page\'s own hidden element').toBe(true);
+      expect(pageHidden(), 'CONTROL: the next sheet hides the page').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await settle();
+      expect(own.getAttribute('aria-hidden'), 'the closing sheet lifted an element the page hid itself').toBe('true');
+      expect(pageHidden(), 'the page is still aria-hidden while the second sheet closes').toBe(false);
+      for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: both sheets have unmounted').toBe(0);
+      expect(own.getAttribute('aria-hidden'), 'an element the page hid itself was left announced for good').toBe('true');
+      expect(pageHidden(), 'the page stayed hidden after both sheets left').toBe(false);
+    } finally { own.remove(); release(); }
+  });
+
+  // Review 2310 F1 (Task C40, D-8698), stacked: two confirms overlap over a sheet that holds a live region (so Radix marks
+  // that sheet's children, an element it hid itself among them). The first confirm's Radix marks that element as already
+  // hidden; the second, closing, must not lift it through the topmost dialog's `contains` arm.
+  it('a confirm opened while another closes, over a sheet with a live region, never lifts an element that sheet hid itself', async () => {
+    function Overlap(): ReactNode {
+      const [open, setOpen] = useState(false);
+      const [first, setFirst] = useState(false);
+      const [second, setSecond] = useState(false);
+      return (
+        <main>
+          <button type="button" onClick={() => setOpen(true)}>Open it</button>
+          <Sheet open={open} onClose={() => setOpen(false)} title="Actions">
+            <p aria-live="polite">Ready.</p>
+            <span aria-hidden="true" data-testid="decoration">*</span>
+            <button type="button" onClick={() => setFirst(true)}>Release</button>
+          </Sheet>
+          <Sheet open={first} onClose={() => setFirst(false)} title="Release how?">
+            <button type="button" onClick={() => { setFirst(false); setSecond(true); }}>For good</button>
+          </Sheet>
+          <QuickConfirm open={second} onClose={() => setSecond(false)} title="Release for good?" consequence="It releases."
+            confirmLabel="Yes, release" onConfirm={() => undefined} />
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    try {
+      render(<Overlap />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      const decoration = screen.getByTestId('decoration');
+      // Read before the confirms open: Radix then marks this button itself, and a hidden button has no name.
+      const releaseButton = screen.getByRole('button', { name: 'Release' });
+      fireEvent.click(releaseButton);
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'For good' }));
+      await settle();
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the first confirm is closing as the second opens').toBe(3);
+      expect(decoration.hasAttribute('data-aria-hidden'), 'CONTROL: Radix marked the sheet\'s own hidden element').toBe(true);
+      expect(hiddenUp(releaseButton), 'CONTROL: the second confirm hides the sheet under it').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await settle();
+      expect(decoration.getAttribute('aria-hidden'), 'the closing confirm lifted an element the sheet hid itself').toBe('true');
+      expect(hiddenUp(releaseButton), 'the sheet under the closing confirm stayed hidden').toBe(false);
+      expect(pageHidden(), 'the page behind the sheet still open was announced as the confirm closed').toBe(true);
+      for (const dialog of [...document.querySelectorAll('[role="dialog"][data-state="closed"]')]) await finishExit(dialog);
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: both confirms have unmounted, the sheet still open').toBe(1);
+      expect(decoration.getAttribute('aria-hidden'), 'an element the sheet hid itself was left announced for good').toBe('true');
+      expect(hiddenUp(releaseButton), 'the sheet is hidden after both confirms left').toBe(false);
     } finally { release(); }
   });
 });
