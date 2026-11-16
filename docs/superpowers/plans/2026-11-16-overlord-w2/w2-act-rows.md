@@ -825,6 +825,10 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
 **Agreed:**
 - The piece's scope and its two pull requests follow the W2 index and review 2253's rulings: F2's operation key after
   the fence, F4's `widens` columns, and `acknowledge`'s act row in PR B.
+- The coordinator's scope additions from the act catalogue's review (run 2271): the writer takes, checks and consumes
+  `MayActAllow`; it re-runs the ceilings for the act's and the effect's groups inside its write, counting by effect as
+  well as by kind; a start keys on its request alone; the allow's cell decides what is written; `escalate-request` is a
+  catalogue kind.
 
 **Waiting on the coordinator:**
 - The eleven open questions (§2), each with a recommendation. Questions 2, 4 and 8 change what other pieces build.
