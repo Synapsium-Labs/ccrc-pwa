@@ -172,6 +172,7 @@ import { createWorkerSeen, workerSeenOf, type WorkerSeen, type WorkerSeenBoard }
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
+import { overlapsPass } from './coord/overlapsLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type EmptyTries } from './continuity/generationsLane.js';
 import { renewalHoldsMail } from './continuity/renewalFeed.js';
 import { renewalActsOf } from './continuity/renewalWiring.js';
@@ -790,6 +791,9 @@ export class FleetWatcher {
   private prStates = new Map<string, PrState>();
   /** The landing radar lane's map (wave 4b), keyed by session id: `sweepRadar` is its one writer. */
   private landings = new Map<string, SessionLanding>();
+  /** Overlord W2 overlaps: the projects whose last radar read failed (not `absent`), or 'listing' when its last listing
+   *  failed or it never ran. `sweepRadar` sets it beside each assignment of `landings`; the overlaps arm reads it as "not read". */
+  private radarUnreadNow: ReadonlySet<string> | 'listing' = 'listing';
   /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. Keyed by the
    *  raw name; `sweepRadar` prints it through `printableDetail`, so a listed name cannot forge a log line. */
   private radarSaid = new Map<string, string>();
@@ -1977,7 +1981,7 @@ export class FleetWatcher {
       if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${printableDetail(key)}`} is ${reason}`);
       this.radarSaid.set(key, reason);
     };
-    if (records === null) { this.landings = reaged(); return; }
+    if (records === null) { this.landings = reaged(); this.radarUnreadNow = 'listing'; return; }
     const heads = this.currentHeadBranches();
     const { byProject, stray } = radarRowsOf(records, (r) => {
       const pr = sessionPrOf(r, this.prStates);
@@ -1992,15 +1996,20 @@ export class FleetWatcher {
       this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2);
     if (gen !== this.radarGen) return;
     said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
-    if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); return; }
+    if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); this.radarUnreadNow = pass.reason === 'absent' ? new Set() : 'listing'; return; }
     const next = new Map<string, SessionLanding>();
+    const unread = new Set<string>();
     for (const [project, read] of pass.reads) {
       said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
-      if (!read.ok) continue;
+      if (!read.ok) { if (read.reason !== 'absent') unread.add(project); continue; }
       for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
     }
     this.landings = next;
+    this.radarUnreadNow = unread;
   }
+
+  /** The projects whose last radar read failed, or 'listing' (Overlord W2 overlaps, the review's F11 b): a copy. */
+  radarUnread(): ReadonlySet<string> | 'listing' { return this.radarUnreadNow === 'listing' ? 'listing' : new Set(this.radarUnreadNow); }
 
   /** The delegation lane's input from the last census pass (see `delegationCensus`). */
   currentDelegationCensus(): DelegationCensusPass | null {
@@ -2816,6 +2825,8 @@ export class FleetWatcher {
       void this.sweepUntold().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the CASE lane (Overlord §10.5, Table 11.1c's `cases` row), in shadow: it records cases and sends nothing.
       void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the OVERLAPS arm (Overlord §5.5, §5.6, W2), after the radar's dispatch: it records pairs, sends nothing.
+      void this.sweepOverlaps(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the GENERATIONS lane (Overlord §3.3.11, W1a), in shadow: it mints and records, and acts on no session.
       void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the LAUNCH-PROFILE lane (Overlord §3.6 H1, W1a), in shadow until its row is live.
@@ -6102,6 +6113,17 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     await this.runLane('cases', () => casesPass({ coord, now: () => this.deps.time.clock.wall() }));
+  }
+
+  /** The overlaps arm (Overlord spec §5.5 and §5.6, W2; plan w2-overlaps.md Task 4): one read-and-record pass on the wall
+   *  clock the time ports carry. A session's project comes from the tick's listing through `radarRowsOf` (measured only). */
+  async sweepOverlaps(records: readonly SessionRecord[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const projects = new Map([...radarRowsOf(records, (r) => ({ id: r.id, branch: null, pr: null })).byProject]
+      .flatMap(([project, rows]) => rows.map((r) => [r.id, project] as const)));
+    await this.runLane('overlaps', () => overlapsPass({ coord, now: () => this.deps.time.clock.wall(),
+      landings: () => this.currentLandings(), projectOf: (id) => projects.get(id) ?? null, radarUnread: () => this.radarUnread() }));
   }
 
   /** When the node's current ccrc install completed (`~/.ccrc/installed`'s time): the roll's release read and the
