@@ -73,6 +73,10 @@ export type DecisionRowId = 'programme.pick' | 'programme.any' | 'scope.widens' 
 
 /** A row's switch (ruling F7). `off` is never asked; `shadow` is asked, recorded and gates nothing; `armed` may gate. */
 export type DecisionRowMode = 'off' | 'shadow' | 'armed';
+export const DECISION_ROW_MODE_MAP: Record<DecisionRowMode, true> = { off: true, shadow: true, armed: true };
+export const DECISION_ROW_MODES = Object.keys(DECISION_ROW_MODE_MAP) as readonly DecisionRowMode[];
+export const isDecisionRowMode = (v: unknown): v is DecisionRowMode =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(DECISION_ROW_MODE_MAP, v);
 
 /** One side of an arming move. In L0 so that the authority grammar and the deciders share it (review 2262 F21). */
 export interface DecisionRowSide {

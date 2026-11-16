@@ -3,7 +3,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  DECISION_OUTCOMES, DECISION_QUESTIONS, DECISION_ROW_DEFAULT, DECISION_ROW_IDS, decisionMarkOf,
+  DECISION_OUTCOMES, DECISION_QUESTIONS, DECISION_ROW_DEFAULT, DECISION_ROW_IDS, DECISION_ROW_MODES, decisionMarkOf,
+  isDecisionRowMode,
   type DecisionCheck, type DecisionQuestionRow, type DecisionRowId,
 } from '../../shared/decisionModel.js';
 
@@ -109,6 +110,12 @@ describe('DECISION_QUESTIONS: W2 seven rows (Table 3.7b, plan Table 1)', () => {
     }
     expect(ROWS.filter((r) => r.orders === 'both').map((r) => r.id))
       .toEqual(['programme.pick', 'readback.omits', 'readback.adds', 'goals.conflict']);
+  });
+
+  it('the three switch positions are derived from one map, and the guard refuses anything else', () => {
+    expect(DECISION_ROW_MODES).toEqual(['off', 'shadow', 'armed']);
+    for (const m of DECISION_ROW_MODES) expect(isDecisionRowMode(m), m).toBe(true);
+    for (const v of ['held', 'Off', '', null, 1]) expect(isDecisionRowMode(v), String(v)).toBe(false);
   });
 
   it('every row ships off', () => {
