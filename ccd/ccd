@@ -1853,7 +1853,7 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
 # what the generator writes, so a field added there reds here until it is named.
 _CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM CCRC_PAY_PER_USE)
-_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_fable_billing _ccrc_continuity _ccrc_secrets_file _ccrc_auth_dir)
+_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_fable_billing _ccrc_continuity _ccrc_org _ccrc_secrets_file _ccrc_auth_dir)
 # The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
 # so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
 # ccd-tick-budget.test.ts, is exact). The file is a few KB. `-f` first, as the
@@ -2564,6 +2564,11 @@ _codex_lanes() {
 # untagged — today's behaviour, with no `command not found` on stderr and no
 # rc 127 leaking into a `$(…)` capture.
 _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# The organization label (`_ccrc_org`), guarded like `_acct_pool`, and the relation of two accounts by it: the bash twin
+# of `shared/accountOrg.ts#orgRelation` (org-relation.test.ts). One account is `same`; a missing label is `unknown`.
+_acct_org() { declare -F _ccrc_org >/dev/null 2>&1 && _ccrc_org "$1"; return 0; }
+_org_rel() { local a b; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
+  if [[ -z "$a" || -z "$b" ]]; then echo unknown; elif [[ "$a" == "$b" ]]; then echo same; else echo other; fi; return 0; }
 # Item 5 (I3, wave-1 fix round A) — whether THIS box has a control plane BY
 # CONFIGURATION, measured the ONLY honest way: is `ccd-pool-sync.timer`'s
 # unit file actually installed. NEVER `$REG/pool-epoch`'s own absence — that
