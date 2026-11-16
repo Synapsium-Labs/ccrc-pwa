@@ -36,8 +36,10 @@ the numbers. The plan as merged governs; where the shipped code differed, the co
 - **`a-sighting-can-add-only-a-goals-changed-close`**: Task 2's property "adding a sighting never adds a close" cannot hold
   literally, because rule 7's `goals-changed` close needs a sighting. The property asserts no `lapsed` or
   `programme-ended` close is added.
-- **`migration-slot-positional`**: the migration is entry 83 by position on the `main` this branch started from (82
-  there). The brief expects 85 or higher once queued W1 pieces land; renumbering is at landing, on the coordinator's word.
+- **`migration-slot-positional`**: the coordinator granted migration 87 (84 to 86 are granted to queued pieces). Migrations
+  are positional (`COORD_SCHEMA_VERSION = MIGRATIONS.length`), so after one merge of `main` (83 entries) the entry is 84 by
+  position, and `coord-db.test.ts` and `run-close-switch.test.ts` pin 84, which is what the code measures; pins at 87
+  would be red until 84 to 86 land. The coordinator renumbers at landing.
 
 ## Hidden pins met (not in the plan's file list)
 

@@ -854,6 +854,13 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
     expect(skill).not.toContain('reclaim-pause');
   });
 
+  // The Overlord W1 ccd arms: `ccd keep-awake` sets and clears the sleep markers on the Overlord's body; it is the server's
+  // act through the designation's doors, never a worker's.
+  it('never names keep-awake — the sleep markers\' writer is the server\'s', () => {
+    expect(`${skill}\nccd keep-awake\n`, 'CONTROL: a planted mention is seen').toContain('keep-awake');
+    expect(skill).not.toContain('keep-awake');
+  });
+
   // The stall watch's level and quiet time are the operator's alone (stall-watch
   // settings design 2026-10-05 §10). The skill never names the door that sets
   // them.

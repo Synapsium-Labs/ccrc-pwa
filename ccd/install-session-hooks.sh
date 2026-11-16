@@ -186,7 +186,7 @@ _child_deny_json() {
     heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
   fi
   up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
-  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps ws-lease-mark delegation-adopt roll claude; do
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   for v in update rollback rollout; do
@@ -235,8 +235,11 @@ _account_deny_json() {
     rules+=("Bash(ccrc account $w:*)")
   done
   rules+=('Bash(ccd-account-auth:*)' 'Bash(ccd account-pane:*)')
+  # shellcheck disable=SC2088  # a deny rule's path keeps its literal tilde: Claude Code expands it, not bash
   for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env' \
-           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**'; do
+           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**' \
+           '~/.ccrc/operator-model.db*' '~/.ccrc/privacy-journal.log' '~/.ccrc/privacy-journal.torn/**' '~/ccrc-backups/*/operator-model.db*' \
+           '~/.ccrc/coordination-restore.stage/*/operator-model.db*' '~/.ccrc/coordination-restore.foreign/*/operator-model.db*'; do
     rules+=("Read($p)")
   done
   for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done

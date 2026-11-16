@@ -126,6 +126,8 @@ function wavesOf(runs: readonly PortfolioRun[]): Wave[] {
 
 const earliestDispatch = (w: Wave): number | null =>
   w.runs.reduce<number | null>((m, r) => (r.dispatchedAt === null ? m : m === null ? r.dispatchedAt : Math.min(m, r.dispatchedAt)), null);
+/** A wave a rebuild stood in for: its `dispatchedAt` is the rebuild's time, never measured from (review 2130 F10). */
+const rebuiltWave = (w: Wave): boolean => w.runs.some((r) => r.rebuilt === true);
 
 /** Question 7: a programme with an open run of any kind, and a ranked programme that closed a run in the window. */
 function listed(p: PortfolioProgramme, runs: readonly PortfolioRun[], ranked: boolean, now: number): boolean {
@@ -147,12 +149,12 @@ function entryOf(
   let cycleUnmeasured = 0;
   for (const w of done) {
     const d = earliestDispatch(w);
-    if (d === null || w.rep.closedAt === null) cycleUnmeasured += 1;
-    else cycles.push(w.rep.closedAt - d);
+    if (d === null || w.rep.closedAt === null || rebuiltWave(w)) cycleUnmeasured += 1;
+    else cycles.push(Math.max(0, w.rep.closedAt - d));   // F10: never negative under clock skew
   }
 
-  const started = waves.filter((w) => w.bucket === 'working' || w.bucket === 'waiting')
-    .map(earliestDispatch).filter((d): d is number => d !== null);
+  const open = waves.filter((w) => w.bucket === 'working' || w.bucket === 'waiting');
+  const started = open.filter((w) => !rebuiltWave(w)).map(earliestDispatch).filter((d): d is number => d !== null);
 
   const doneRunIds = new Set(done.flatMap((w) => w.runs.map((r) => r.id)));
   const rounds = runs.filter((r) => r.kind === 'review' && r.reviews !== null && doneRunIds.has(r.reviews)).length;
@@ -191,7 +193,8 @@ function entryOf(
     },
     cycle: measureOf(cycles),
     cycleUnmeasured,
-    oldestOpenMs: started.length === 0 ? null : now - Math.min(...started),
+    oldestOpenMs: started.length === 0 ? null : Math.max(0, now - Math.min(...started)),
+    oldestOpenUnmeasured: open.filter(rebuiltWave).length,
     reviewRounds: { rounds, waves: done.length },
     ended28: {
       done: ended.filter((w) => w.bucket === 'done').length,
