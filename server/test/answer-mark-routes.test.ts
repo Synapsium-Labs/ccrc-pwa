@@ -165,17 +165,43 @@ describe('POST /api/answer-marks: refusals write nothing and emit nothing', () =
     expect(r.waiting()).toBe(0);
   });
 
-  it('each shape refusal is bad-request, and so is kind ask until PR B', async () => {
+  it('each shape refusal is bad-request', async () => {
     const r = await rig({ armed: false });
     const id = item(r);
     const good = { kind: 'item', id, mark: 'unsure', value: true };
     for (const body of [{}, { ...good, extra: 1 }, { ...good, kind: 'approval' }, { ...good, mark: 'sure' }, { ...good, id: 0 },
-      { ...good, id: 1.5 }, { ...good, id: '3' }, { ...good, value: 1 }, { ...good, value: 'true' }, { ...good, kind: 'ask' }]) {
+      { ...good, id: 1.5 }, { ...good, id: '3' }, { ...good, value: 1 }, { ...good, value: 'true' }]) {
       const res = await mark(r, body);
       expect([res.statusCode, (res.json() as { error: string }).error], JSON.stringify(body)).toEqual([400, 'bad-request']);
     }
-    expect((await mark(r, { ...good, kind: 'ask' })).json()).toMatchObject({ detail: 'ask-marks-not-yet' });
     expect(actors(r)).toEqual([]);
+  });
+});
+
+describe('the ask arm over buildServer (answer marks B; its cases are answer-mark-ask-door.test.ts\'s)', () => {
+  const ask = (r: Rig, state: string, releasedAt: number | null, child = 'lane-a-child'): number => Number(r.coord.db.prepare(
+    'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, releasedAt) ' +
+    "VALUES (?, ?, 'lane-a-parent', ?, 'k1', 1, 'd', 'Which base?', '[]', ?, ?)",
+  ).run(Date.now() - 3 * WINDOW, child, r.runA, state, releasedAt).lastInsertRowid);
+
+  it('armed, an ask tick takes a session: without one it is 401, with the box token alone still 401, and with one it is marked', async () => {
+    const r = await rig({ armed: true });
+    const id = ask(r, 'released', Date.now() - HOUR);
+    const body = { kind: 'ask', id, mark: 'unsure', value: true };
+    expect((await mark(r, body, {})).statusCode).toBe(401);
+    expect((await mark(r, body, { 'x-ccrc-mail-token': ID_GATE_TOKEN })).statusCode).toBe(401);
+    const res = await mark(r, body);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(actors(r)).toEqual([{ actor: 'device:lightMyRequest' }]);
+  });
+
+  it('with no watcher the live read is unmeasured: a released ask inside the window is a cleared row, and one past it is unlisted', async () => {
+    const r = await rig({ armed: false });
+    const inside = ask(r, 'released', Date.now() - HOUR);
+    ask(r, 'declined', Date.now() - WINDOW - HOUR, 'lane-a-other');
+    const v = await waitingView(r);
+    expect(v.asks).toEqual([]);
+    expect(v.asksCleared?.map((a) => [a.id, a.live])).toEqual([[inside, 'unmeasured']]);
   });
 });
 

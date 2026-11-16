@@ -14,7 +14,7 @@ import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, is
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
-import type { AnswerMarksView } from './answerMarks.js';
+import type { AnswerMarksView, AskMarkRow } from './answerMarks.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -308,6 +308,11 @@ export interface WaitingView {
    *  Recently cleared window. OPTIONAL on the wire: an older server omits both. ADDITIVE. */
   calls?: CallView[];
   callsCleared?: CallView[];
+  /** Overlord W1, answer marks B: the asks the operator has, each with its two marks. `asks` are the live ones, whose boxes sit
+   *  on their child's question row; `asksCleared` the rest, rows of Recently cleared. OPTIONAL and ADDITIVE: absent means this
+   *  server cannot mark an ask (an older one, or its read of the asks failed), so the console draws no ask box. */
+  asks?: AskMarkRow[];
+  asksCleared?: AskMarkRow[];
 }
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };
