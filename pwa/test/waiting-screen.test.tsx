@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
+import type { AskMarkRow } from '../../shared/answerMarks';
 import { fleetHues } from '../src/fleet/programmeBoxes';
 import { ClearedTrail, ItemRows, WaitingScreen } from '../src/ledgers/WaitingScreen';
 import { fleetSession } from './fleetFixture';
@@ -896,6 +897,74 @@ describe('the answer marks on the list (Overlord W1)', () => {
     render(<ClearedTrail items={view(true).cleared} now={NOW} />);
     const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
     expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+});
+
+describe('the answer marks on asks (Overlord W1, answer marks B)', () => {
+  const NEVER = { state: 'never' as const };
+  const MARKS = { couldAnswer: { state: 'marked' as const, id: 7, at: NOW - MIN, signedIn: true }, unsure: NEVER };
+  const askRow = (o: Partial<AskMarkRow> = {}): AskMarkRow => ({
+    id: 31, childId: 'project-a-ask', program: null, question: 'Which base should the branch use?', how: 'lapsed', reason: null,
+    at: NOW - 30 * MIN, live: true, answerMarks: MARKS, ...o,
+  });
+  const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+  const other = fleetSession({ id: 'project-a-other', bucket: 'attention', title: 'Another question', bucketSince: NOW - 6 * MIN });
+  const groupsOf = () => screen.queryAllByRole('group', { name: 'Your marks for the Overlord' });
+
+  it('a question row whose session has a live ask draws both boxes; a question row with none draws no box', () => {
+    open({ view: waitingView({ asks: [askRow()] }), sessions: [asking, other] });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-ask'))).toEqual(['31']);
+    expect((within(groups[0]!).getAllByRole('checkbox') as HTMLInputElement[]).map((b) => b.checked)).toEqual([true, false]);
+    const otherRow = screen.getByRole('button', { name: /Another question/ }).closest('li')!;
+    expect(within(otherRow).queryAllByRole('checkbox')).toEqual([]);
+    // Never inside the row's button.
+    expect(within(screen.getByRole('button', { name: /A question/ })).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('a session whose listed ask is not live (its dialog has gone, or it shows a permission prompt) draws no box on its row', () => {
+    open({ view: waitingView({ asks: [askRow({ live: false })] }), sessions: [asking] });
+    const row = screen.getByRole('button', { name: /A question/ }).closest('li')!;
+    expect(within(row).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('an older server, with no ask lists, draws no ask box anywhere', () => {
+    open({ view: waitingView(), sessions: [asking] });
+    expect(groupsOf()).toEqual([]);
+  });
+
+  it('a cleared ask is a row of Recently cleared, with how it reached you and its age, and its two boxes', () => {
+    const cleared = askRow({ id: 32, live: false, how: 'declined', at: NOW - 2 * 60 * MIN, program: 'prog-a', question: 'Keep the old flag?' });
+    open({ view: waitingView({ asksCleared: [cleared] }), sessions: [] });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    const row = within(trail).getByText(/Keep the old flag\?/).closest('li')!;
+    expect(row.textContent).toContain('its parent passed it to you 2h ago');
+    expect(row.querySelector('s')).toBeNull();
+    expect(within(row).getByRole('group', { name: 'Your marks for the Overlord' }).getAttribute('data-ask')).toBe('32');
+    expect(within(row).getAllByRole('checkbox')).toHaveLength(2);
+  });
+
+  it('filtered to the sessions in no programme, the trail holds their cleared asks alone', () => {
+    const none = askRow({ id: 33, live: false, question: 'An ask in no programme' });
+    const prog = askRow({ id: 34, live: false, program: 'prog-a', question: 'An ask in prog-a' });
+    open({ view: waitingView({ asksCleared: [none, prog] }), sessions: [asking], programme: '' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText(/An ask in no programme/)).toBeTruthy();
+    expect(within(trail).queryByText(/An ask in prog-a/)).toBeNull();
+  });
+
+  it('a tap on an ask box sends kind ask', async () => {
+    const set = vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', id: 8, at: NOW, signedIn: true } });
+    open({ view: waitingView({ asks: [askRow()] }), sessions: [asking] });
+    fireEvent.click(within(groupsOf()[0]!).getAllByRole('checkbox')[1]!);
+    await waitFor(() => expect(set).toHaveBeenCalledWith('ask', 31, 'unsure', true));
+  });
+
+  it('on the device\'s saved copy the ask boxes are disabled', () => {
+    open({ view: waitingView({ asks: [askRow()], asksCleared: [askRow({ id: 35, live: false })] }), sessions: [asking], notCurrent: 'Saved on this device' });
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(4);
     for (const b of boxes) expect(b.disabled).toBe(true);
   });
 });

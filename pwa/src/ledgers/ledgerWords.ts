@@ -13,6 +13,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { isRunClosed, sessionProgramme } from '../fleet/runWords';
 import { needsYou, needsYouCount } from './needsYou';
 import { waitingPath } from '../lib/routes';
+import type { AskMarkRow } from '../../../shared/answerMarks';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -59,13 +60,20 @@ export const CLEARED_SHOWN = 5;
 export const showAllWord = (n: number): string => `Show all ${n}`;
 export const SHOW_FEWER_WORD = 'Show fewer';
 
+/** One row of the Recently cleared trail: an item the coordinator confirmed, or (answer marks B) an ask the operator has that is
+ *  not live. `at` is when it cleared (an item's `closedAt`, an ask's last change of state); an ask's `program` is null when its
+ *  child is in no programme. */
+export type ClearedEntry =
+  | { readonly kind: 'item'; readonly item: ItemView; readonly at: number; readonly program: string }
+  | { readonly kind: 'ask'; readonly ask: AskMarkRow; readonly at: number; readonly program: string | null };
+
 /** The Recently cleared trail opened whole, by programme (D-8194): one group per programme in the order of its newest clear (the
- *  trail is newest first), each holding its items in the trail's order. */
-export interface ClearedGroup { readonly program: string; readonly items: readonly ItemView[] }
-export function clearedGroups(trail: readonly ItemView[]): ClearedGroup[] {
-  const by = new Map<string, ItemView[]>();
-  for (const i of trail) { const g = by.get(i.program); if (g === undefined) by.set(i.program, [i]); else g.push(i); }
-  return [...by].map(([program, items]) => ({ program, items }));
+ *  trail is newest first), each holding its rows in the trail's order. The asks in no programme are one group, `null`. */
+export interface ClearedGroup { readonly program: string | null; readonly entries: readonly ClearedEntry[] }
+export function clearedGroups(trail: readonly ClearedEntry[]): ClearedGroup[] {
+  const by = new Map<string | null, ClearedEntry[]>();
+  for (const e of trail) { const g = by.get(e.program); if (g === undefined) by.set(e.program, [e]); else g.push(e); }
+  return [...by].map(([program, entries]) => ({ program, entries }));
 }
 /** The line beside a card that links the items its text names (D-8194): a card is one button, so its links sit beside it. */
 export const MENTIONS_WORD = 'Mentions';
@@ -75,12 +83,18 @@ export const itemRefWord = (id: number): string => `item ${id}`;
 export const clearedCountWord = (n: number): string => `${n} cleared`;
 
 /** What the Recently cleared trail draws (D-8194): the items cleared inside `CLEARED_WINDOW_MS` of the page clock, the edge
- *  included as the server's list includes it, newest first (the id breaks a tie). The server sends the same window; this
- *  read keeps a list heard a while ago from showing what has since aged out. A copy: the input is not touched. */
-export function clearedTrail(items: readonly ItemView[], now: number): ItemView[] {
-  return items
-    .filter((i) => i.closedAt !== null && i.closedAt >= now - CLEARED_WINDOW_MS)
-    .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0) || b.id - a.id);
+ *  included as the server's list includes it, and (answer marks B) the asks the operator has that are not live and changed
+ *  state inside the same window, together, newest first (an item before an ask at the same instant, then the id breaks a
+ *  tie). The server sends the same window; this read keeps a list heard a while ago from showing what has since aged out. A
+ *  copy: the inputs are not touched. */
+export function clearedTrail(items: readonly ItemView[], now: number, asks: readonly AskMarkRow[] = []): ClearedEntry[] {
+  const entries: ClearedEntry[] = [
+    ...items.filter((i) => i.closedAt !== null && i.closedAt >= now - CLEARED_WINDOW_MS)
+      .map((item) => ({ kind: 'item' as const, item, at: item.closedAt ?? 0, program: item.program })),
+    ...asks.filter((a) => a.live !== true && a.at >= now - CLEARED_WINDOW_MS).map((ask) => ({ kind: 'ask' as const, ask, at: ask.at, program: ask.program })),
+  ];
+  const idOf = (e: ClearedEntry): number => (e.kind === 'item' ? e.item.id : e.ask.id);
+  return entries.sort((a, b) => b.at - a.at || (a.kind === b.kind ? 0 : a.kind === 'item' ? -1 : 1) || idOf(b) - idOf(a));
 }
 
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */

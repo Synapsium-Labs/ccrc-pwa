@@ -4,9 +4,9 @@
 //
 // A mark grants nothing and is never an answer: the boxes only label a question for the Overlord to learn from later.
 import {
-  ANSWER_MARK_STATE_MAP, type AnswerMarkName, type AnswerMarkView, type AnswerMarksView,
+  ASK_MARK_HOW_MAP, ANSWER_MARK_STATE_MAP, type AnswerMarkName, type AnswerMarkView, type AnswerMarksView, type AskMarkHow,
+  type AskMarkRow,
 } from '../../../shared/answerMarks';
-import type { ItemView } from '../../../shared/ledgers';
 
 /** The operator's words for the two marks. */
 export const ANSWER_MARK_LABEL: Readonly<Record<AnswerMarkName, string>> = {
@@ -39,10 +39,10 @@ const isMarkView = (v: unknown): v is AnswerMarkView => {
   return true;
 };
 
-/** THE ONE READER of an item's `answerMarks` (plan question 14). Absent means this server cannot mark this row (an older
- *  server, or a row with no box), never "never marked": `unsupported`, and the row draws no box. A field that is not an
- *  `AnswerMarksView` is `unsupported` too. */
-export function answerMarksOf(item: Pick<ItemView, 'answerMarks'>): AnswerMarksView | 'unsupported' {
+/** THE ONE READER of a row's `answerMarks`, an item's or an ask's (plan question 14). Absent means this server cannot mark
+ *  this row (an older server, or a row with no box), never "never marked": `unsupported`, and the row draws no box. A field
+ *  that is not an `AnswerMarksView` is `unsupported` too. */
+export function answerMarksOf(item: { readonly answerMarks?: unknown }): AnswerMarksView | 'unsupported' {
   const v: unknown = item.answerMarks;
   if (typeof v !== 'object' || v === null) return 'unsupported';
   const o = v as Record<string, unknown>;
@@ -74,3 +74,36 @@ export function shownMark(server: AnswerMarkView, pending: boolean | null, curre
   if (pending !== null) return { checked: pending, disabled: true, note: null };
   return { checked: server.state === 'marked', disabled: !current, note: null };
 }
+
+/** THE ONE READER of the waiting view's ask lists (answer marks B, plan Task 6): the rows that are asks the operator has, each
+ *  with both marks. Absent (an older server, or one that could not read its asks) is no row at all, so no ask box is drawn; a
+ *  row that is not an `AskMarkRow` is left out, never guessed at. */
+export function askRowsOf(rows: unknown): AskMarkRow[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((r): r is AskMarkRow => {
+    if (typeof r !== 'object' || r === null) return false;
+    const o = r as Record<string, unknown>;
+    return typeof o['id'] === 'number' && typeof o['childId'] === 'string' && typeof o['at'] === 'number'
+      && typeof o['question'] === 'string' && (o['program'] === null || typeof o['program'] === 'string')
+      && typeof o['how'] === 'string' && Object.hasOwn(ASK_MARK_HOW_MAP, o['how'])
+      && (o['live'] === true || o['live'] === false || o['live'] === 'unmeasured') && answerMarksOf(o) !== 'unsupported';
+  });
+}
+
+/** A question row's ask (plan Task 6): the listed ask of this session that the server read as live, so the boxes name the
+ *  question the row shows and never an older ask of the same child. None for a session with no listed ask (a root session's
+ *  own ask, an ask still held), for one whose ask is not live (its dialog has gone, or it shows a permission prompt), and
+ *  when the server sent no ask list. */
+export function askMarksFor(sessionId: string, asks: unknown): AskMarkRow | null {
+  return askRowsOf(asks).find((a) => a.childId === sessionId && a.live === true) ?? null;
+}
+
+/** How a cleared ask reached the operator, in their words, before its age. */
+export const ASK_HOW_WORD: Readonly<Record<AskMarkHow, string>> = {
+  answered: 'you answered it',
+  declined: 'its parent passed it to you',
+  lapsed: 'its parent did not answer in time',
+  'released-at-mint': 'it came straight to you',
+};
+/** A cleared ask whose question text the retention has blanked. */
+export const ASK_NO_TEXT_WORD = 'A question (its text is no longer kept)';
