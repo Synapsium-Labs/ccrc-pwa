@@ -77,6 +77,15 @@ They decide every question the plan leaves open.
   which are not built yet. So this is scope for a later wave of this programme, planned once those tables land; the
   same rulings call a stage a phase, not a wave, on the console (items 354, 355).
 
+- **2026-11-16 — wave 3's seven departures are issued D-8675 to D-8681 (the whole block), defined in the plan's
+  "Deviations found" (where `deviation-refs.test.ts` reads definitions; its scan does not enter plan subdirectories),
+  with the full record in the wave's task note `docs/superpowers/plans/2026-11-10-linear-hierarchy/w3-plan-sync.md`.** conflict-detail (D-8675),
+  recovery-by-request-id (D-8676), link-by-fingerprint (D-8677), write-ask-destination-team (D-8678), pr-link-rule
+  (D-8679), requeue-keeps-bound (D-8680), no-unlink (D-8681). All were accepted as the worker proposed them. Waves 4 to 7
+  take a fresh block from the allocator. Carried to wave 4: what a project switched off after it was linked does to its
+  existing link (D-8681 leaves the link in place); `creator { id }` on `issueOwned` at the next capture; a project's
+  extra `teamIds` passed to the write policy.
+
 ## Carried constraints
 
 Reviewers of every wave get these.
