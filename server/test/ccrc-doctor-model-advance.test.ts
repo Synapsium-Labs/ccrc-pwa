@@ -130,7 +130,8 @@ function check(h: string, name: Check, extra: NodeJS.ProcessEnv = {}, o: { pre?:
   for (const k of ['CCRC_MODELS_NOW', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_MODELS_LOCK_S', 'CCRC_ROLE', 'CCD_TIMEOUT_KILL_AFTER']) {
     delete inherited[k];
   }
-  const env = { ...ghContainedEnv(h, { ...inherited, HOME: h }, { systemd: true }), CCRC_MODELS_NOW: NOW, ...extra };
+  const env: NodeJS.ProcessEnv = { ...ghContainedEnv(h, { ...inherited, HOME: h }, { systemd: true }), CCRC_MODELS_NOW: NOW,
+    ...extra };
   if (o.noJq) env['PATH'] = pathWithoutJq(h, env['PATH'] ?? '');
   const script = ['umask 022', `. "${join(h, 'ccrc', 'ccd', 'ccrc')}"`, '. "$CCRC_HERE/ccrc-doctor-checks"', SVC_FAKE,
     ...(o.pre === undefined ? [] : [o.pre]), `_check_${name}`].join('\n');
