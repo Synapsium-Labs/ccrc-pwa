@@ -162,6 +162,15 @@ function grow(A) {
   }
 }
 const FNV0 = 0x811c9dc5 | 0, DJB0 = 5381;
+/** The two cheap hashes' seeds for the line being read: the fixed bases under the salt, so the tree scan is unchanged,
+ *  and bases derived from the key otherwise, so the token cache of a keyed index holds no unkeyed hash of an egress
+ *  token and a crafted collision cannot be built without the key (Overlord W2, `token-hashes-seeded-by-the-key`). */
+let S1 = FNV0, S2 = DJB0;
+function seedsOf(key) {
+  if (key === PRIVATE_NAME_SALT) return [FNV0, DJB0];
+  const d = createHmac('sha256', key).update('ccrc-private-names/token-seeds').digest();
+  return [d.readInt32LE(0), d.readInt32LE(4)];
+}
 let sawCase = false;
 function tokenize(s) {
   sawCase = false;
@@ -174,7 +183,7 @@ function tokenize(s) {
     if (!isAlnum(c)) { i++; continue; }
     let joiner = prevEnd < 0 ? 0 : joinerOf(s, prevEnd, i);
     let pieceStart = i;
-    let h1 = FNV0, h2 = DJB0;
+    let h1 = S1, h2 = S2;
     for (;;) {
       const lc = isUpper(c) ? c | 32 : c;
       h1 = Math.imul(h1 ^ lc, 16777619);
@@ -186,7 +195,7 @@ function tokenize(s) {
         sawCase = true;
         if (n >= T.start.length) grow(T);
         T.start[n] = pieceStart; T.end[n] = i; T.join[n] = joiner; T.h1[n] = h1; T.h2[n] = h2; n++;
-        joiner = J_CASE; pieceStart = i; h1 = FNV0; h2 = DJB0;
+        joiner = J_CASE; pieceStart = i; h1 = S1; h2 = S2;
       }
     }
     if (n >= T.start.length) grow(T);
@@ -291,6 +300,20 @@ export function hashCacheSize() {
   return HASHES.size;
 }
 
+/** The line the pair cache holds, or null. Test-only: it shows that `privateNameHits` keeps none of its text. */
+export function retainedLine() {
+  return lastLine;
+}
+
+/** The token cache of the index of `entries` under `key`, as `h1:h2:length` rows (none when no index is built).
+ *  Test-only: it shows that two keys never share a cached token hash. */
+export function cachedTokenHashes(entries, key = PRIVATE_NAME_SALT) {
+  const ix = INDEXES.get(entries)?.get(key);
+  const out = [];
+  if (ix) for (let at = 0; at <= ix.mask; at++) if (ix.used[at]) out.push(`${ix.k1[at]}:${ix.k2[at]}:${ix.k3[at]}`);
+  return out;
+}
+
 /** Per entries array: the entries each first-token hash starts, and a cache from
  *  a token's two cheap hashes and its length to the entries that can start at
  *  it (null when none) — an open-addressing table, because a Map lookup per
@@ -306,6 +329,9 @@ function indexOf(entries, key = PRIVATE_NAME_SALT) {
   let perKey = INDEXES.get(entries);
   if (!perKey) { perKey = new Map(); INDEXES.set(entries, perKey); }
   let ix = perKey.get(key);
+  // An array changed in place after its index was built (an append, a replaced end) rebuilds it: a stale index would
+  // scan without the new entries (Overlord W2, `the-index-rebuilds-on-a-changed-list`).
+  if (ix && (ix.count !== entries.length || ix.first !== entries[0] || ix.last !== entries[entries.length - 1])) ix = undefined;
   if (!ix) {
     const byF = new Map();
     for (const en of entries) {
@@ -314,7 +340,8 @@ function indexOf(entries, key = PRIVATE_NAME_SALT) {
     }
     const words = entries.filter((en) => en.mode === 'words');
     ix = { byF, words, maxN: Math.max(1, ...entries.map((en) => en.n)),
-      wordsN: Math.max(0, ...words.map((en) => en.n)), key, size: 0, ...slots(1 << 17) };
+      wordsN: Math.max(0, ...words.map((en) => en.n)), key, seeds: seedsOf(key),
+      count: entries.length, first: entries[0], last: entries[entries.length - 1], size: 0, ...slots(1 << 17) };
     perKey.set(key, ix);
   }
   return ix;
@@ -358,13 +385,14 @@ const candidatesAt = (ix, s, A, k) => lookup(ix, A.h1[k], A.h2[k], A.end[k] - A.
  *  @param {string} line @param {Entry[]} entries @param {string} [key] @returns {Hit[]} */
 export function hitsAt(line, entries, key = PRIVATE_NAME_SALT) {
   const ix = indexOf(entries, key);
+  [S1, S2] = ix.seeds;
   const { s, map } = foldMapped(line);
   cur = null; curS = s; curMap = map;
   const n = tokenize(s);
   windows(ix, s, T, n);
   // Whether a phrase could start in this line's last tokens and run on to the
   // next line: `pairHits` reads it rather than tokenizing the line again.
-  lastLine = line; lastEntries = entries; lastKey = key; lastStarts = false;
+  lastLine = line; lastIx = ix; lastStarts = false;
   for (let k = Math.max(0, n - ix.wordsN + 1); k < n && !lastStarts; k++) {
     const cands = candidatesAt(ix, s, T, k);
     lastStarts = cands !== null && cands.some((en) => en.mode === 'words');
@@ -381,7 +409,7 @@ export function hitsAt(line, entries, key = PRIVATE_NAME_SALT) {
 /** The line being read: its hits so far (null until the first), folded text and
  *  offset map. Module state rather than a closure per line: there are 1.9M lines. */
 let cur = null, curS = '', curMap = null;
-let lastLine = null, lastEntries = null, lastKey = PRIVATE_NAME_SALT, lastStarts = false;
+let lastLine = null, lastIx = null, lastStarts = false;
 function push(en, start, end) {
   if (cur === null) cur = [];
   else if (cur.some((x) => x.start === start && x.end === end)) return;
@@ -425,7 +453,7 @@ const CAMEL_MAX_PIECES = 4, CAMEL_MAX_CHARS = 40;
 function camelRuns(ix, s, n) {
   for (let a = 0; a < n; a++) {
     if (a + 1 >= n || T.join[a + 1] !== J_CASE) continue;
-    let h1 = FNV0, h2 = DJB0;
+    let h1 = S1, h2 = S2;
     for (let b = a; b < n && b < a + CAMEL_MAX_PIECES && (b === a || T.join[b] === J_CASE)
       && T.end[b] - T.start[a] <= CAMEL_MAX_CHARS; b++) {
       for (let q = T.start[b]; q < T.end[b]; q++) {
@@ -495,15 +523,16 @@ const CONTINUATION = new RegExp(`^[\\s${IGNORABLE}]*(?:\\/\\/+|\\*+|#+|>+|--|;+)
 
 /** A `words` phrase broken across a line break: the hits in the facing ends of
  *  two adjacent lines that neither line holds alone. Reported against the
- *  first line, under `key` throughout: the `words` sub-index and the pair cache are per key.
+ *  first line, under `key` throughout: the `words` sub-index and the pair cache are per index, so per key.
  *  @param {string} prev @param {string} line @param {string} file @param {Entry[]} entries @param {string} [key] */
 export function pairHits(prev, line, file, entries, key = PRIVATE_NAME_SALT) {
-  const { words } = indexOf(entries, key);
+  const ix = indexOf(entries, key);
+  const { words } = ix;
   if (words.length === 0 || !prev || !line) return [];
   // A phrase broken here starts in the previous line's last few tokens: unless
   // one of them can start a phrase there is nothing to read. `hitsAt` measured
   // that when it read the previous line, which is the usual order of calls.
-  if (prev !== lastLine || entries !== lastEntries || key !== lastKey) hitsAt(prev, entries, key);
+  if (prev !== lastLine || ix !== lastIx) hitsAt(prev, entries, key);
   if (!lastStarts) return [];
   // Only whitespace may sit between a phrase's words, so the previous line must
   // end on a letter or digit (trailing blanks and invisibles aside) and this one
@@ -536,8 +565,10 @@ export function maskText(text, entries) {
   return out;
 }
 
-/** A list `privateNameHits` will not scan: it has no key, or its first entry is not the canary under that key. It
- *  carries no detail, so it can never echo an entry or a text (Overlord W2, `private-name-hits-checks-its-list`). */
+/** A list or a text `privateNameHits` will not scan: no key, the public salt or a key under
+ *  `NAME_LIST_KEY_MIN_BYTES` bytes, a first entry that is not the canary under the key, a malformed entry, or a text
+ *  that is not a string. It carries no detail, so it can never echo an entry or a text, and the caller reads one word
+ *  for all of them (Overlord W2, `private-name-hits-checks-its-list`, `private-name-hits-one-refusal`). */
 export class PrivateNameListInvalid extends Error {
   constructor() {
     super('the private-name list is invalid');
@@ -545,32 +576,51 @@ export class PrivateNameListInvalid extends Error {
   }
 }
 
+/** The shortest key `privateNameHits` takes, in UTF-8 bytes. */
+export const NAME_LIST_KEY_MIN_BYTES = 16;
+
 /** A list built under one key, the canary first: `{ key, entries }`.
  *  @typedef {{ key: string, entries: Entry[] }} NameList */
 
-/** The one check the egress doors call (Overlord W2, `private-name-hits-answers-ids`): the `h8` of every entry the text
- *  hits, each once, in the order of first hit, scanning each line and each pair of adjacent lines (a `words` phrase
- *  broken by a line break) under `list.key`, and `[]` when it hits none. Never text, positions or a count of characters;
- *  no file exemption applies, since an egress text has no file. A list with no key, or whose first entry is not the
- *  canary under that key, throws `PrivateNameListInvalid`: with the salt as every default, a lost key would otherwise
- *  scan under the salt, match nothing and pass a known name.
+const HEX32 = /^[0-9a-f]{32}$/;
+const isEntry = (en) => en !== null && typeof en === 'object' && HEX32.test(en.h) && HEX32.test(en.f)
+  && Number.isInteger(en.n) && en.n >= 1 && MODES.includes(en.mode);
+
+/** The one check the egress doors call (Overlord W2, `private-name-hits-answers-ids`, `hits-are-whole-text`): the `h8`
+ *  of every entry the text hits, each once, in the order of where its hit starts, and `[]` when it hits none. Never
+ *  text, positions or a count of characters. The WHOLE text decides a hit, any whitespace run (line breaks and blank
+ *  lines included) joining a phrase's words, so no split of a name over lines passes. Each pair of adjacent lines is
+ *  read as well, for a phrase broken across a repeated comment or quote marker (`// zed` then `// quux`), placed at the
+ *  end of its first line. No file exemption applies, since an egress text has no file. Nothing of the text is left in
+ *  the matcher when it returns. A list it cannot trust throws `PrivateNameListInvalid` before anything is scanned:
+ *  with the salt as every default, a lost key would otherwise scan under the salt, match nothing and pass a known name.
  *  @param {string} text @param {NameList} list @returns {string[]} */
 export function privateNameHits(text, list) {
   const key = list?.key;
   const entries = list?.entries;
-  if (typeof key !== 'string' || key === '' || !Array.isArray(entries) || entries.length === 0) throw new PrivateNameListInvalid();
+  if (typeof text !== 'string') throw new PrivateNameListInvalid();
+  if (typeof key !== 'string' || key === PRIVATE_NAME_SALT) throw new PrivateNameListInvalid();
+  if (new TextEncoder().encode(key).length < NAME_LIST_KEY_MIN_BYTES) throw new PrivateNameListInvalid();
+  if (!Array.isArray(entries) || entries.length === 0) throw new PrivateNameListInvalid();
+  if (!entries.every(isEntry)) throw new PrivateNameListInvalid();
   const canary = entryOf(CANARY, 'part', key);
   const first = entries[0];
-  if (!first || first.h !== canary.h || first.f !== canary.f || first.n !== canary.n || first.mode !== canary.mode) {
+  if (first.h !== canary.h || first.f !== canary.f || first.n !== canary.n || first.mode !== canary.mode) {
     throw new PrivateNameListInvalid();
   }
-  const ids = new Set();
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (i > 0) for (const id of pairHits(lines[i - 1], lines[i], '', entries, key)) ids.add(id);
-    for (const hit of hitsAt(lines[i], entries, key)) ids.add(hit.h8);
+  try {
+    /** @type {Map<string, number>} the first position each id is found at */
+    const at = new Map();
+    const note = (id, pos) => { const was = at.get(id); if (was === undefined || pos < was) at.set(id, pos); };
+    for (const hit of hitsAt(text, entries, key)) note(hit.h8, hit.origStart);
+    const lines = text.split('\n');
+    for (let i = 1, end = lines[0].length; i < lines.length; end += 1 + lines[i].length, i++) {
+      for (const id of pairHits(lines[i - 1], lines[i], '', entries, key)) note(id, end);
+    }
+    return [...at].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+  } finally {
+    lastLine = null; lastIx = null; lastStarts = false;
   }
-  return [...ids];
 }
 
 /** The committed entries: the canary first, then every entry of every list row
