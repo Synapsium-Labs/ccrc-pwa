@@ -12,6 +12,8 @@ dates and what blocks it.
   reads changes.
 - **The Portfolio part gains fields.** Forecasts B adds health, the sealed dates, the edges, the critical path and the
   spend to `portfolioFor`'s entry. The board copies them into the Portfolio part as the reader answers them.
+- **The answer has a named bound** (ruled, fix round 1, F11). At most 500 request rows fleet-wide and 256 KiB an answer;
+  past either, the answer is cut and says so, with `truncated: true` and the counts.
 - **The board still decides nothing.** Every new part is a reader's answer, grouped and cut to a bound. The gatherer
   calls each new reader once per read, each in its own `try`, so one failed reader makes its own part `unmeasured` and
   never fails the board.
@@ -54,7 +56,7 @@ below on `main` before it builds):
 | `w2-requests.md` (request record A, #2928) | `server/src/coord/overlordRequestStore.ts#openRequests`, `RequestRow`, the ten states, `OPEN_REQUEST_STATES` |
 | `w2-overlaps.md` (overlaps A, #2923) | `server/src/coord/programmePairsStore.ts#standingPairs`, `StandingPairWire` and `standingPairWire` in `shared/programmeFacts.ts` |
 | `w2-forecasts-health.md` (forecasts B, #2921) | `PortfolioEntry`'s optional `health`, `forecast`, `edges`, `spend` and `criticalPath`, and `PortfolioView.calibration` (`shared/portfolio.ts`) |
-| `w2-inbox-band-3.md` (inbox band 3, run 2280's branch) | `CoordStore#heldReportsFor(limit)`, ids and times only, and its sentence "the board's W2 piece reads `heldReportsFor` for its Unread reports part" |
+| `w2-inbox-band-3.md` (inbox band 3, run 2280's branch) | `CoordStore#heldReportsFor(limit): { rows: readonly HeldReportFact[]; total }`, ids and times only, and its sentence "the board's W2 piece reads `heldReportsFor` for its Unread reports part". Band 3 names `HeldReportFact` without a shape; this plan reads it as `{ deliveryId, mailId, requestId, fromId, at }`, the fields of band 3's `ReportInboxRow` it carries, and Task 1 pins that (F14) |
 
 Written against `main` at `fe887521f` (2026-11-16). None of the five pieces is on `main` yet.
 
@@ -67,9 +69,12 @@ Written against `main` at `fe887521f` (2026-11-16). None of the five pieces is o
   request id, sender and subject, at most 50, with the total.
 - **Overlaps and Goal conflicts:** the standing pairs from overlaps A's one reader, split by kind, with each goal
   conflict's ruling.
-- **Portfolio:** the five fields forecasts B adds to `portfolioFor`'s entry, copied as answered.
+- **Portfolio:** the five fields forecasts B adds to `portfolioFor`'s entry, copied as answered, except that each
+  edge's `why` is marked untrusted on the way (F12).
 - **Every text a session wrote is `UntrustedText`:** a request's summary and news, a report's subject, a pair's paths,
   an edge's reason.
+- **A named size bound:** 500 request rows fleet-wide and 256 KiB an answer, cut in a stated order, with
+  `truncated: true` and the counts when cut (F11).
 - **Nothing a running session sees changes at merge** beyond the board's own answer, which only the designated session
   reads, under `overlord-v1`. Requests exist only once `overlord-route-v1` opens the doors that make them, so until
   then the Requests parts are measured and empty.
@@ -157,13 +162,35 @@ the operator.
 - **BQ9. The Portfolio part copies, and computes nothing** (slug `board-portfolio-copies-the-entry`). §5.6 has the
   board answer "the health word, the median and 85% dates, and what blocks it".
   **Recommendation:** the board's Portfolio part carries `health`, `forecast`, `edges`, `criticalPath` and `spend` from
-  each `PortfolioEntry` unchanged, and the view's `calibration` once. "What blocks it" is the entry's `edges` (with
+  each `PortfolioEntry`, and the view's `calibration` once. Each is copied unchanged but one: an edge's `why`, a plain
+  string on `ProgrammeEdge` written through the coordinator's remaining-work door, is copied as `UntrustedText` with
+  source `coordinator` (Table 2, fix round 1, F12). So `BoardPortfolioEdge` is `ProgrammeEdge` with `why` marked. "What blocks it" is the entry's `edges` (with
   `clearingShipped`, so a list "clearing not shipped" is read as such) and `criticalPath`. The board adds no field of
   its own, and never calls `programmeHealth` or `forecastProgramme` (forecasts B's question 7).
 - **BQ10. No new census row, no new door** (slug `board-w2-no-new-door`). **Recommendation:** the handler, its gate
   order, its ceiling (120 an hour), its read-ledger line (door `board`, scope `fleet`, the programme count) and its
   masking (`MASKED_GET_ROUTES`) stay as board B2 built them. The ledger line's count stays the programme count: a
   reader of the ledger compares reads, and a count that changed meaning in W2 would break that comparison.
+- **BQ11. The answer's size bound** (slug `board-w2-size-bound`; ruled, fix round 1, F11). With every part at its
+  per-part cap, 50 programmes of 50 requests and 50 unowned are 2,550 request rows, each with up to 200 characters of
+  summary and 200 of news, in one read into the Overlord's context. Board B2's size test names no number.
+  **Ruling:** at most `BOARD_REQUESTS_FLEET_MAX` (500) request rows across every `requests` part and `requests-unowned`,
+  and at most `BOARD_ANSWER_MAX_BYTES` (256 KiB, 262,144 bytes of the answer's JSON in UTF-8) an answer.
+  **Recommendation, the cut:** `composeBoard` cuts after the per-part caps, in one fixed order, and decides nothing
+  else:
+  1. **Rows.** Request rows are kept in this order until 500: `requests-unowned` first (the ones the Overlord must still
+     route), then each programme's part in the board's programme order, each in ascending id. The rest move into their
+     part's `omitted`.
+  2. **Bytes.** The composer measures the answer's JSON. While it is over 256 KiB it drops, one row at a time, from the
+     end of that same request order, then the newest unread report, then the last pair of each pairs part in turn, each
+     dropped row counted in its part's `omitted` (for reports, the part's `total` is unchanged and the listed rows
+     fewer). Health, the portfolio's fields and the W1 parts are never cut: they are small and fixed in count.
+  3. **Said.** A cut answer carries `truncated: true` and `cut: { requestsListed, requestsOmitted, reportsOmitted,
+     pairsOmitted, bytes }`, `bytes` the size after the cut. An answer that was not cut carries neither field, which is
+     also what a W1 server answers: absence means nothing was cut.
+
+  The handler masks the answer after composing it (`MASKED_GET_ROUTES`). Task 4 measures the masked answer against the
+  bound as well, so a mask that came out longer than what it replaced cannot pass unseen.
 
 ## 2. What exists today
 
@@ -224,7 +251,8 @@ cuts, and decides nothing.*
 - **What a merge arms.** Only the board's answer changes, and only the designated session reads it, under `overlord-v1`.
   The Overlaps, Goal conflicts and Portfolio additions carry rows from the merge (index, "What a merge arms"). Requests
   and reports carry rows only once `overlord-route-v1` opens the doors that make them.
-- **Size.** Board B2's size test over 50 programmes stays green with every W2 part at its bound (Task 4).
+- **Size.** The answer is at most 500 request rows and 256 KiB (BQ11), cut in BQ11's order and saying so. Board B2's
+  size test over 50 programmes stays green with every W2 part at its bound (Task 4).
 - **SAFETY.** No ccd verb, no fleet act, no live `~/.ccrc`. Tests build `coord.db` in memory or under the per-run temp
   root.
 - **Growth.** No growth-checked file is touched except, possibly, `server/src/index.ts`'s deps (not growth-checked).
@@ -245,7 +273,8 @@ cuts, and decides nothing.*
 2. Every field Table 2 names is `UntrustedText`, and no field carries an operator message's text, a `doneTest`, a
    `closeNote` or a report's body.
 3. `composeBoard` decides nothing: no sort but the stated ones, no filter but the owner grouping and the bounds.
-4. The board's answer for 50 programmes with every W2 part full stays inside board B2's size bound.
+4. The board's answer for 50 programmes with every W2 part full is at most 500 request rows and 256 KiB, cut in BQ11's
+   order, with `truncated: true` and the counts.
 5. Nothing a W1 caller reads changes.
 
 ## 5. The PR split
@@ -266,8 +295,10 @@ For scale, the files that are not growth-checked change by about this much: `sha
 **Files:**
 - Modify: `shared/overlordBoard.ts` (`BOARD_PART_MAP` gains the five keys of Table 1; `BoardRequest`, `BoardReport`,
   `BoardPair`, the five parts' types; the Portfolio part's type gains `health?`, `forecast?`, `edges?`,
-  `criticalPath?`, `spend?` and the view's `calibration?`, each typed from `shared/portfolio.ts`; `BOARD_REQUESTS_MAX`,
-  `BOARD_REPORTS_MAX` and `BOARD_PAIRS_MAX`, each 50)
+  `criticalPath?`, `spend?` and the view's `calibration?`, each typed from `shared/portfolio.ts`, with `edges?` as
+  `BoardPortfolioEdge[]`; `BOARD_REQUESTS_MAX`, `BOARD_REPORTS_MAX` and `BOARD_PAIRS_MAX`, each 50;
+  `BOARD_REQUESTS_FLEET_MAX` (500) and `BOARD_ANSWER_MAX_BYTES` (262,144); the answer's optional `truncated` and
+  `cut`)
 - Modify: `server/test/overlord-board.test.ts` (the wire's own cases)
 
 **Interfaces:**
@@ -300,6 +331,16 @@ export type BoardReportsPart =
 export type BoardPairsPart =
   | { readonly state: 'measured'; readonly pairs: readonly BoardPair[]; readonly omitted: number }
   | { readonly state: 'unmeasured'; readonly reason: string };
+/** An edge as the board carries it: forecasts B's `ProgrammeEdge` with its reason marked (F12). */
+export type BoardPortfolioEdge = Omit<ProgrammeEdge, 'why'> & { readonly why: UntrustedText };
+export const BOARD_REQUESTS_FLEET_MAX = 500;
+export const BOARD_ANSWER_MAX_BYTES = 262_144;   // 256 KiB of the answer's JSON, UTF-8
+/** Present only on an answer BQ11 cut; absent means nothing was cut. */
+export interface BoardCut {
+  readonly requestsListed: number; readonly requestsOmitted: number;
+  readonly reportsOmitted: number; readonly pairsOmitted: number; readonly bytes: number;
+}
+// The board answer gains: readonly truncated?: true; readonly cut?: BoardCut;
 ```
 
 Whether `shared/overlordBoard.ts` imports the request and pair types by type-only import or restates them is board
@@ -308,14 +349,17 @@ first and follows it.
 
 - [ ] **Step 1: Re-measure the inputs.** On `main`, read `shared/overlordBoard.ts`'s `BOARD_PART_MAP` spelling, the
   W1 part shape and `UntrustedText`'s constructor; `overlordRequestStore.ts#openRequests` and `RequestRow`;
-  `programmePairsStore.ts#standingPairs` and `StandingPairWire`; `PortfolioEntry`'s W2 fields; and
-  `CoordStore#heldReportsFor`'s row type. If any name differs from this plan, use `main`'s and record the difference
-  under "Deviations found" in the pull request's notes file.
+  `programmePairsStore.ts#standingPairs` and `StandingPairWire`; `PortfolioEntry`'s W2 fields and `ProgrammeEdge`; and
+  `CoordStore#heldReportsFor`'s row type, `HeldReportFact` (F14). If any name differs from this plan, use `main`'s and
+  record the difference under "Deviations found" in the pull request's notes file. `HeldReportFact` is pinned by a
+  type-level test that it carries `deliveryId`, `mailId`, `requestId`, `fromId` and `at` and no subject or body; if band
+  3 shipped another shape, `BoardReport` follows it and the notes file says so.
 - [ ] **Step 2: Failing tests** (`overlord-board.test.ts`, its wire block):
   - `BOARD_PART_MAP` lists the five new keys and every W1 key unchanged (a characterization of the W1 keys first,
     green on `main` before this task's edit);
   - each new key's scope is the one Table 1 gives;
-  - the three bounds are 50.
+  - the three per-part bounds are 50, `BOARD_REQUESTS_FLEET_MAX` is 500 and `BOARD_ANSWER_MAX_BYTES` is 262,144;
+  - `HeldReportFact`'s fields, as above.
 - [ ] **Step 3: Run.** `ccrc test -- ./node_modules/.bin/vitest run test/overlord-board.test.ts`. Red.
 - [ ] **Step 4: Implement** the types and the map's rows. **Step 5: Run.** Green, and the three typechecks.
 - [ ] **Step 6: Commit.** `feat(overlord): the board's W2 parts on the wire (Overlord W2 board)`
@@ -335,7 +379,8 @@ first and follows it.
 | `requests: { ok: true, rows } \| { ok: false, reason }` | `requests` per listed programme, `requests-unowned` | Rows with `owner` equal to a listed programme's slug go to that programme; the others, `owner` null or a slug the board does not list, go to `requests-unowned`. Ascending id. Cut at 50 with `omitted`. `ok: false` makes every one of these parts `unmeasured` with the reason |
 | `reports: { ok: true, rows, total, subjects } \| { ok: false, reason }` | `unread-reports` | Rows in the reader's order (oldest first), each with its subject from `subjects` (a map from mail id to text, `null`, or `'unread'`); a row whose subject is `'unread'` gets `subject: null` and its delivery id in `subjectsUnread` |
 | `pairs: { ok: true, rows } \| { ok: false, reason }` | `overlaps`, `goal-conflicts` | Split by `kind`, the reader's order kept, each cut at 50 with `omitted`, `evidence.paths` marked |
-| `portfolioFor`'s entry and view | Portfolio | The five fields copied when present, absent when absent; `calibration` once |
+| `portfolioFor`'s entry and view | Portfolio | The five fields copied when present, absent when absent; each edge's `why` marked `UntrustedText`, source `coordinator` (F12); `calibration` once |
+| The composed answer | every requests part, `unread-reports`, the pairs parts | BQ11's cut: 500 request rows fleet-wide, then 256 KiB, in its fixed order, each dropped row counted; `truncated: true` and `cut` when cut, neither otherwise |
 
 *Table 3. The composer's W2 rules. Nothing else is sorted, filtered or computed.*
 
@@ -354,6 +399,15 @@ first and follows it.
     through; a failed pairs read makes both parts `unmeasured`;
   - the Portfolio part carries each of the five fields when the entry has it, and lacks it when the entry lacks it
     (an absent field is never `null` and never `[]`); `calibration` appears once;
+  - each edge's `why` is `UntrustedText` with source `coordinator`, and every other edge field is copied unchanged
+    (F12);
+  - the row bound (F11): 50 programmes of 50 open requests and 50 unowned answer exactly 500 request rows, all 50
+    unowned first and then the programmes in order, ascending id inside each; every part's `omitted` adds up to the
+    2,050 left out; the answer carries `truncated: true` and `cut.requestsListed: 500`;
+  - the byte bound (F11): rows whose summaries and news are 200 characters each, enough to pass 256 KiB under 500
+    rows, answer JSON of at most 262,144 bytes; the rows dropped are the last of the request order, then reports, then
+    pairs; `cut.bytes` is the answer's measured size; the W1 parts and the Portfolio part are whole;
+  - an answer under both bounds carries neither `truncated` nor `cut`;
   - every W1 part's answer is unchanged for a fixture with no W2 input (the characterization, green on `main` first).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green, and the typechecks.
 - [ ] **Step 5: Mutation.** Add to `composeBoard`'s set, each a named mutant, and run
@@ -364,7 +418,12 @@ first and follows it.
   - W2-4: cut requests newest first;
   - W2-5: read a failed pairs read as `[]`;
   - W2-6: copy a portfolio field that is absent as `null`;
-  - W2-7: drop a report whose subject read failed.
+  - W2-7: drop a report whose subject read failed;
+  - W2-8: copy an edge's `why` unmarked (F12);
+  - W2-9: skip the fleet-wide row cut;
+  - W2-10: keep cutting past 500 without setting `truncated`;
+  - W2-11: cut `requests-unowned` before the programmes' parts;
+  - W2-12: skip the byte cut.
 
   Each must be killed. Raise the set's floor in `mutation-floors.json` to the measured score.
 - [ ] **Step 6: Commit.** `feat(overlord): composeBoard composes requests, reports, pairs and the portfolio's W2 fields (Overlord W2 board)`
@@ -403,8 +462,11 @@ first and follows it.
 - [ ] **Step 1: Failing tests** (over the real handler, as board B2's door suite builds it):
   - a designated session with its card read gets the five new keys, and an older W1 fixture's answer still parses with
     W1's own readers (the additive rule);
-  - with 50 programmes, 50 requests each, 50 unowned, 50 reports and 50 pairs of each kind, the answer stays inside
-    board B2's size bound, and each part's `omitted` counts the overflow;
+  - with 50 programmes, 50 requests each, 50 unowned, 50 reports and 50 pairs of each kind, the answer is cut at 500
+    request rows, its masked JSON is at most `BOARD_ANSWER_MAX_BYTES`, it carries `truncated: true` with the counts, and
+    each part's `omitted` counts the overflow (the test at the bound, F11);
+  - the same fixture with 200-character summaries, news and subjects stays at most `BOARD_ANSWER_MAX_BYTES` after
+    masking;
   - the read-ledger line is unchanged: door `board`, scope `fleet`, the programme count, one line per read;
   - every refusal of the gate order (`not-the-overlord`, `capability-missing`, `card-unread`, `renewing`,
     `overlord-off`, `read-ceiling`) answers before any W2 reader is called (spies at zero);
@@ -432,16 +494,23 @@ By slug; the coordinator mints the numbers (cross-plan ruling X9).
   Overlord was `ready`", with its subject read here (BQ5).
 - **`board-w2-untrusted-text`**: the Overlord's own summary is untrusted too (BQ6).
 - **`board-pairs-standing-only`** and **`board-portfolio-copies-the-entry`**: the board copies its readers' answers and
-  evaluates nothing (BQ8, BQ9).
+  evaluates nothing (BQ8, BQ9); an edge's `why` is marked untrusted on the way (F12).
+- **`board-w2-size-bound`** (ruled, F11): 500 request rows fleet-wide and 256 KiB an answer, cut in one fixed order,
+  with `truncated: true` and the counts (BQ11).
+- **`held-report-fact-shape`** (F14): band 3 names `HeldReportFact` without a shape; this plan reads and pins it as
+  `{ deliveryId, mailId, requestId, fromId, at }`.
 
 ## 8. What the index should change
 
 - **Table W2, the row "Board's W2 parts":** "Requests (per programme, and `requests-unowned` for open requests with no
   listed owner), Unread reports (every unacked report, from band 3's `heldReportsFor`, each subject read through
   `mailOrigin`), Overlaps and Goal conflicts (overlaps A's `standingPairs`, split by kind, with each ruling), each a new
-  key with a measured and an unmeasured arm, cut at 50 with a count; the Portfolio part's `health`, `forecast`, `edges`,
-  `criticalPath`, `spend` and `calibration`, copied from `portfolioFor`; `shared/overlordBoard.ts` gains the parts
-  additively". Size unchanged: 1 PR, 4 tasks.
+  key with a measured and an unmeasured arm, cut at 50 with a count; the Portfolio part's `health`, `forecast`, `edges`
+  (each edge's `why` as untrusted text), `criticalPath`, `spend` and `calibration`, copied from `portfolioFor`; the
+  answer's size bound, at most 500 request rows fleet-wide and 256 KiB, past either cut and carrying `truncated: true`
+  with the counts; `shared/overlordBoard.ts` gains the parts additively". Size unchanged: 1 PR, 4 tasks.
+- **The row "Inbox band 3":** name `HeldReportFact`'s shape, `{ deliveryId, mailId, requestId, fromId, at }`, ids and
+  times only (F14), which the board pins.
 - **"Where lanes meet", `server/src/coord/overlordRoutes.ts`:** the board's W2 parts change no handler; they pass three
   readers into the board's existing deps.
 - **"States W3 may read":** the board's W2 keys and their two arms, for W3's Engagement and Attention parts to sit
@@ -454,9 +523,12 @@ By slug; the coordinator mints the numbers (cross-plan ruling X9).
   inbox band 3; the board is the Overlord's view, and the operator rules goal conflicts on the home (index question 17).
 - From W1: the board composes and decides nothing; a later part is a new key; a failed input is its part's
   `unmeasured`; text a session wrote is data.
+- From fix round 1 (review 2298): the named size bound (F11), the edge's `why` marked (F12), `HeldReportFact` named
+  (F14).
 
-**Waiting on the coordinator** (at this plan's review): BQ1 to BQ10 stand as recommendations. The two that change what
-the Overlord sees are BQ2 (a fleet-wide part for unowned requests) and BQ5 (every unacked report, with its subject).
+**Waiting on the coordinator:** nothing. BQ1 to BQ11 stand as the plan builds them. The ones that change what the
+Overlord sees are BQ2 (a fleet-wide part for unowned requests), BQ5 (every unacked report, with its subject) and BQ11
+(a cut answer says so).
 
 **Waiting on the operator:** nothing.
 
