@@ -121,7 +121,10 @@ own row and no state column.
 - **gate-lifted-safely.** The `continuity` row and its gate shipped together in #2786, and no door ever accepted Live for
   it, so no stored `live` can stand on a box except by a hand write to coord.db; lifting the gate arms nothing. The
   coordinator's ruling on review 2149: the replay quiz (#2839) lands before this piece, so its baseline refusal attaches to
-  the lifted gate before `continuity` can be armed.
+  the lifted gate before `continuity` can be armed. The browser case of review 2006 N7 measured the row's gate line wrapping
+  inside the card; with no gate line left, it now measures the row's longest line, the server's `baseline-missing` refusal of a
+  Live, at every width in both skins, after checking the row draws no gate and its Live is enabled (the merge queue's full
+  run found the old case red; measured red again with a gate put back).
 - **compact-refused-at-the-route-doors** (launch profiles B review 2024 F3). The operator's `POST /api/sessions/:id/route`
   and the coordinator's `POST /api/runs/:id/route` refuse `compact` while `continuity` and `launch-profile` are both live,
   400 `bad-request` with the reason (`compactRefusal`, which reads both rows; review 2149 F11: the lane writes `compact` only
