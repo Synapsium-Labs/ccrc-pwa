@@ -2538,7 +2538,7 @@ Review run 2204 read `c16276de2..02b7bc2ac`, with three lenses on `claude-opus-5
 | F-N2 to F-N5 the plan text | `46bf47b17` |
 | these Results | the head commit |
 
-Checks for the round, through `ccrc test`, in the foreground, one file at a time, at `46bf47b17`, after `git fetch -q origin main` (`origin/main` at `649ac3f13`):
+Checks for the round, through `ccrc test`, in the foreground, one file at a time, on these Results (the head commit, after `46bf47b17`), after `git fetch -q origin main` (`origin/main` at `649ac3f13`). Review run 2208 re-ran them at the head:
 
 | Package | Run | Result |
 |---|---|---|
