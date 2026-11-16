@@ -57,6 +57,9 @@ export interface LaneFacts {
 
 /** Whose question: a session whose side is a set, or an undecidable set, gets the Overlord's arms (plan question 5). */
 export type Asking = 'set-side' | 'other';
+const ASKING_MAP: Record<Asking, true> = { 'set-side': true, other: true };
+/** Every `Asking` word, derived from its map (wire totality, D-6048). */
+export const ASKINGS: readonly Asking[] = Object.keys(ASKING_MAP) as Asking[];
 
 /** The one reader of "is this asker a set-side session": a set and both undecidable-set words; every project word is `other`. */
 export function askingOf(side: SessionPoolSide): Asking {
