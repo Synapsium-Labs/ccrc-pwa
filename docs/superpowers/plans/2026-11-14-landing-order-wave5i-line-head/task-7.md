@@ -35,7 +35,7 @@
   - G4 `run-routes ccd-land-probe -t 'mark that throws|lander key and its mirror'`: 2 files, 13 passed.
 
 ## Mutation matrix M1 to M27
-"Owner note" is the task note that measured the row. A row was re-run only when its mutated code changed after the owner measured it. The `Re-run` column records the state at the reviewed tip; fix round 1 re-ran every row except M8-M10, see `fix-round-1.md#r2`.
+"Owner note" is the task note that measured the row. A row was re-run only when its mutated code changed after the owner measured it. The `Re-run` column records the state at the reviewed tip; fix round 1 re-ran every row except M8-M10, see `fix-round-1.md#r2`. Fix round 2 re-audited the rows, see `fix-round-2.md#r7`.
 | Row | Mutant | Measured red assertion | Owner note | Re-run |
 |---|---|---|---|---|
 | M1 | project read refusal `skip` not `stop` | `a store stop in the first project ends the pass`: expected { read: 1, ... } to match { read: 0, stopped: 'store' } | task-1 | no |
