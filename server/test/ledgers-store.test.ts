@@ -39,7 +39,7 @@ describe('raising and reading an item (plan PL2)', () => {
       id, program: 'prog-a', runId, raisedBy: 'lane-a', kind: 'decide', title: 'Turn on the setting',
       why: 'The wave needs it.', how: ['Pick one'], options: ['yes', 'no'], neededBy: 'blocking', soonLabel: null,
       secretSlot: null, state: 'open', answer: null, note: null, raisedAt: NOW, tickedAt: null, closedAt: null,
-      recommended: 0, recommendedWhy: 'Yes keeps the wave moving.', action: null, heldUntil: null,
+      recommended: 0, recommendedWhy: 'Yes keeps the wave moving.', action: null, heldUntil: null, revision: 0,
     } satisfies ItemRow);
     expect(s.itemById(id + 1)).toBeNull();
   });

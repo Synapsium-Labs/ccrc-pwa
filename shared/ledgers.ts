@@ -268,6 +268,10 @@ export interface ItemView {
   /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run`, `close-refused` or `release-review` (D-8293). `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
+  /** The row's revision (Overlord W2, spec §6.7): raised by each move of the item, 0 at its raise. A server from before W2
+   *  omits it. Nothing in the console reads it yet: the first piece that does (W3's answer doors) adds the one reader,
+   *  `rowRevisionOf`, answering a number or `'absent'`. */
+  revision?: number;
   /** The operator's two answer marks (Overlord W1, spec §9.2.1, C70), on a `decide` or `value` item they were shown while it is
    *  listed. ABSENT means this server cannot mark this row (an older server, or a row with no box), never "never marked"
    *  (plan question 14): a reader goes through the console's one reader, `answerMarkWords.ts#answerMarksOf`. */

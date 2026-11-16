@@ -869,6 +869,8 @@ export interface AskRow {
   /** D-5290: why the row was MINTED `released`; `null` for every row the hold
    *  minted, whatever happened to it after. Read through `isAskReleaseReason`. */
   releaseReason: AskReleaseReason | null;
+  /** The row's revision (Overlord W2): raised by each write that changes what an answer acts on, 0 at insert. */
+  revision: number;
 }
 
 /** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
@@ -9187,13 +9189,13 @@ export class CoordStore {
   private static readonly ASK_COLS =
     'CAST(id AS TEXT) AS idText, at, childId, parentId, CAST(runId AS TEXT) AS runIdText, ' +
     'askKey, askAt, dialogId, question, options, ' +
-    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason';
+    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason, revision';
 
   private hydrateAsk(r: {
     idText: string; at: number; childId: string; parentId: string; runIdText: string | null;
     askKey: string; askAt: number; dialogId: string; question: string; options: string;
     state: string; answeredBy: string | null; answer: string | null;
-    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null;
+    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null; revision: number;
   }): { ok: true; ask: AskRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'ask id');
     if (!id.ok) return id;
