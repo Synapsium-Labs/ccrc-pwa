@@ -102,7 +102,7 @@ const tag = (t) => `<span class="tag">${t}</span>`;
 const workPlan = `
 <section class="card" aria-label="Work">
   <h2 class="h">Work</h2>
-  <div class="sum"><b>11 of 21 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting'], [C.todo, '6 not started']])}</div>
+  <div class="sum"><b>11 of 21 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting on you'], [C.todo, '6 not started']])}</div>
   ${bar([[11, C.done], [3, C.prog], [1, C.wait], [6, C.todo]], 21)}
   <div class="strip"><span class="chip">The switch <em>5 of 9 · ◇ 1 of 2</em></span><span class="chip">The list screen <em>6 of 10 · ◇ 0 of 1</em></span><span class="chip">The operator's guide <em>0 of 2 · ◇ 0 of 1</em></span></div>
   <div class="source">From the programme's plan · 3 phases · 3 epics · read 1 min ago</div>
@@ -141,8 +141,8 @@ const workNoPlan = `
   <div class="source">From this programme's runs · waves 1 to 41</div>
   <div class="phase">
     <div class="phase-line"><span class="chev">▾</span><span class="phase-name">In progress</span><span class="phase-count">2</span></div>
-    ${row('● working', 'prog', 'Wave 41 · the export button and its file name', '<a href="#">run 902</a> · moved 20m ago')}
-    ${row('● merging', 'prog', 'Wave 40 · the search box keeps its query across pages', '<a href="#">run 899</a> · in the merge queue')}
+    ${row('● working', 'prog', 'The export button and its file name', '<a href="#">run 902</a> · wave 41 · moved 20m ago')}
+    ${row('● merging', 'prog', 'The search box keeps its query across pages', '<a href="#">run 899</a> · wave 40 · in the merge queue')}
   </div>
   <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">Done</span><span class="phase-count">38 · newest: wave 39, the empty state's wording</span></div></div>
   <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">Failed</span><span class="phase-count">1 · wave 22</span></div></div>

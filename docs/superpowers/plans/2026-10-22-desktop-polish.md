@@ -3781,34 +3781,48 @@ and no-plan mockups in the folder beside it. The build plan is `docs/superpowers
 - **Measured.** Five programmes of different shapes, and the server's plans and runs (spec §2). The stored plan (epics
   and tickets, from the Linear hierarchy's wave 2) is the one structured source whose status the server moves itself.
   2 of the 16 programmes with runs have one today. Plan checkboxes are not a status: 1,724 of 23,366 are ticked across
-  862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale.
+  862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale
+  (this programme's has 40 rows for waves 1 to 42, against wave 132).
   A machine wave is one run (no wave of six programmes holds two work runs), so a stage such as the Overlord's W1 spans
   many waves and is stored nowhere; and the plan's rule tying each epic to a range of waves makes epics act as stages.
 - **Decided.** The card is built on the Linear hierarchy's plan model (programme, epic, checkpoint, ticket; its wave 2
   is on `main`) and supersedes that plan's Task 5.2. To it the design adds a sequence axis: phases in order, each
-  referencing the epics and tickets it takes on, a ticket allowed in several phases. Epics lose their wave ranges, so
-  they can run in parallel inside a phase. The Work card sits below Goals: "N of M done" with a bar and a strip of each
-  epic's count and checkpoints, then phases in order, each ticket inside with its epic as a tag, a slipped ticket read
-  as carried in the earlier phase and counted once. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+  referencing the epics and tickets it takes on, a ticket allowed in several phases, and a slip recorded as a carry
+  from one phase to a later one. The hierarchy's work model is unchanged; epics without wave ranges, which would let
+  them run side by side, are put to the operator (Q5). Done is derived from evidence the server checks (a done run, or
+  a pull request landed on the landing line), stored with its time and re-checked on every read. The Work card sits
+  below Goals: "N of M done" with a bar and a strip of each epic's count and checkpoints, then phases in order, each
+  ticket inside with its epic as a tag, a carried ticket counted once. The view carries both axes, so which one leads
+  changes only the card. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
   `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
   runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
   you moves to the top of the right column. The card replaces the Linear hierarchy plan's Task 5.2.
 - **The builder check** (a fresh reader of the first draft) found two gaps that would make "N of M" wrong: a run opened
   with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
-  ticket done except its own run. `runs open` now refuses `ticket-required` while the run's epic has an open declared
-  ticket, and a coordinator's `plan ticket-done` records a finished ticket with its pull request.
-- **For the operator.** Four questions, raised as Waiting on you items: should live programmes declare their plans now
-  (Q1), which axis leads the card (Q2), the word for a stage (Q3), and what a phase becomes in Linear (Q4).
-- **The build** is six tasks, WM0 to WM5, one PR each. Only WM4 touches claim 4522's files (`ProgrammeScreen.tsx` and
-  `pwa/src/lib/api.ts`), so it waits for that claim. The others touch none of them.
+  ticket done except its own run. In a plan that declares phases, `runs open` now refuses `ticket-required` while the
+  run's epic has an open declared ticket that no run holds, and a coordinator's `plan ticket-done` records a finished
+  ticket with evidence the server verifies (the hierarchy's approved "the coordinator closes it").
+- **The review** (run 2252, 19 findings, all text) led to the coordinator's rulings: done derived and verified, carries
+  recorded, the view carrying both axes, and the hierarchy's model left unchanged except through the operator (Q5).
+  The rest corrected the refusal vocabulary, the claims each task waits for, the overlaps with the hierarchy's wave 3 in
+  flight and its Tasks 4.1, 4.3 and 6.1, the plan's four states (none, declared empty, ended, unreadable), the stuck
+  verdicts' reader, and three cells of the measurement.
+- **For the operator.** Five questions, raised as Waiting on you items. The operator answered four with the
+  recommendations: a stage is a "phase" (R129, item 355), phases lead the card (R130, item 354), a phase becomes a
+  Linear label written by the hierarchy's sync (R131, item 356), and live programmes declare their plans at their next
+  wave boundary after the build lands (R132, item 353). Q5, may an epic have no wave range, is open.
+- **The build** is seven tasks, WM0 to WM6, one PR each; WM6 is built only if Q5 is answered yes. Only WM4 touches
+  claim 4522's files (`ProgrammeScreen.tsx`, `pwa/src/lib/api.ts` and their test), so it waits for that claim. WM0 and
+  WM1 wait for the hierarchy wave 3's claim on `planStore.ts`, or a co-edit grant, and WM1 for `shared/api.ts`.
 
 **Departure `phase-is-not-epic`.** The first draft mapped a phase to an epic and a task to a ticket, and asked only which
 words the card should use. The operator's answer to that question (item 351, 2026-11-16): "the thing is that a
 wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." Then, the same day:
 "I guess we can allow references to epics / tickets that are part of a wave/phase"; a ticket in more than one phase is
 "a good idea"; and "I guess if we properly implement linear it should have the initiatives, projects, etc." The spec now
-keeps the two axes apart, builds the work on the hierarchy's model, adds phases that reference it, and frees epics of
-wave ranges (spec §3 and §8, D13 to D16). Items 349 to 351 are replaced by four new ones on the corrected model.
+keeps the two axes apart, builds the work on the hierarchy's model unchanged, and adds phases that reference it, with
+recorded carries (spec §3 and §8, D14 to D18). Items 349 to 351 were replaced by four new ones on the corrected model
+(353 to 356), and the review added a fifth (Q5).
 
 - **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
   stored plan as the one source of its work list, on two axes, the sequence (phases, added to the plan) and the work
