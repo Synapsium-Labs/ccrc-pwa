@@ -27,6 +27,8 @@ by slug, measurements and what is left for landing. The coordinator folds them i
 | `reference-paragraph-names-the-shapes` | Two sentences and the example | The paragraph also names the three edge shapes and says only the server clears an edge, so a coordinator can write an edge from the reference alone. |
 | `claude-md-names-file-lanes` | Drop the `CLAUDE.md` sentence: `box-token-census.test.ts` reds | No check tied a lane in a file of its own to the bullet, so one was added: the bullet must name every lane of the call record's and the remaining-work door's files. It reds when either sentence is dropped. |
 | `route-files-word-corrected` | `auth-gate.test.ts`: the count of files that register routes | Its header said THIRTEEN while `ROUTES` scans nineteen files; it now says TWENTY, the measured count with this door. |
+| `remaining-refusal-declared-in-l0` | The store answers `too-many-open-edges` | The word is declared once in `shared/programmeFacts.ts` (`RemainingRefusal`, `REMAINING_REFUSALS`, `isRemainingRefusal`), the edge predicates gain `isEdgePredicate`, and `mail-routes.test.ts`'s census of kebab tokens in `server/src/coord` admits both through those guards; the first full CI run found them undeclared. Dropping the census line reds it. |
+| `edge-unmeasurable-week-ruled-separate` | `EDGE_UNMEASURABLE_AFTER_MS` is 7 days | `token-shared.test.ts` holds every seven-day quantity to the token interval unless ruled separate; it joins as the seventeenth, citing the plan's ruled open question 3. The coordinator may overrule. |
 
 ## Measured
 

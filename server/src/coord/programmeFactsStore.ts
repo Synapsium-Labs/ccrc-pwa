@@ -12,7 +12,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
   EDGE_KINDS, EDGE_STATES, OPEN_EDGES_PER_PROGRAMME_MAX, edgeTargetKey, parseEdgeTarget,
-  type EdgeKind, type EdgeState, type EdgeTarget, type ProgrammeEdge, type RemainingStatement,
+  type EdgeKind, type EdgeState, type EdgeTarget, type ProgrammeEdge, type RemainingRefusal, type RemainingStatement,
 } from '../../../shared/programmeFacts.js';
 import { redactCommand } from './redact.js';
 import { edgeTargetVerdict, type EdgeTargetFacts, type NewEdge, type NewRemaining } from './programmeRemaining.js';
@@ -24,7 +24,7 @@ export type { NewEdge, NewRemaining } from './programmeRemaining.js';
 
 export type InsertRemainingResult =
   | { ok: true; id: number; added: number[]; kept: number[] }
-  | { ok: false; why: 'too-many-open-edges'; detail: string };
+  | { ok: false; why: RemainingRefusal; detail: string };
 
 /** Records one statement and its edges in ONE transaction. An edge already open with the same kind and target is kept,
  *  never duplicated (its id goes to `kept`); a new one is inserted (`added`). A statement that would take the programme

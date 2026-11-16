@@ -33,6 +33,7 @@ export const EDGE_KINDS = Object.keys(EDGE_KIND_MAP) as readonly EdgeKind[];
 export type EdgePredicate = 'run-closed' | 'pr-merged' | 'operator-confirms';
 const EDGE_PREDICATE_MAP: Record<EdgePredicate, true> = { 'run-closed': true, 'pr-merged': true, 'operator-confirms': true };
 export const EDGE_PREDICATES = Object.keys(EDGE_PREDICATE_MAP) as readonly EdgePredicate[];
+export const isEdgePredicate = (w: string): w is EdgePredicate => (EDGE_PREDICATES as readonly string[]).includes(w);
 
 /** What an edge waits on, each shape tied to a row of this tree: a run of another programme; a pull request that run's
  *  recorded lineage lists (the lineage records no repository, so the run's project names it); an item of this
@@ -50,6 +51,13 @@ export const EDGE_KIND_OF_PREDICATE: Readonly<Record<EdgePredicate, EdgeKind>> =
 export type EdgeState = 'open' | 'met' | 'target-ended' | 'target-unmeasurable';
 const EDGE_STATE_MAP: Record<EdgeState, true> = { open: true, met: true, 'target-ended': true, 'target-unmeasurable': true };
 export const EDGE_STATES = Object.keys(EDGE_STATE_MAP) as readonly EdgeState[];
+
+/** Why the store refused a statement whose body was good: it would take the programme past `OPEN_EDGES_PER_PROGRAMME_MAX`
+ *  open edges. It rides the door's 400 `detail`, never a `refused` or `reject.code`. */
+export type RemainingRefusal = 'too-many-open-edges';
+const REMAINING_REFUSAL_MAP: Record<RemainingRefusal, true> = { 'too-many-open-edges': true };
+export const REMAINING_REFUSALS = Object.keys(REMAINING_REFUSAL_MAP) as readonly RemainingRefusal[];
+export const isRemainingRefusal = (w: string): w is RemainingRefusal => (REMAINING_REFUSALS as readonly string[]).includes(w);
 
 /** A target in its ONE canonical form, keys in a fixed order: what `programme_edges.target` stores, so the open-edge
  *  index and the body's duplicate check see two equal targets as equal whatever order their keys were sent in. */
