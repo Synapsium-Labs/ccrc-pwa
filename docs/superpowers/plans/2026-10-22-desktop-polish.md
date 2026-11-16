@@ -3769,6 +3769,42 @@ every server test file that drives a copy passes; the `macos.yml` run on the bra
 wave-done mail (it runs after the one push).
 **Rollback.** A plain revert.
 
+### Task C37: the programme page shows its work, done and outstanding (design) (D-8669) — now
+
+**Why.** The operator, 2026-11-16, on a programme's page: "I want to see at a glance on that page what work remains
+outstanding in the programme, what work is already done, at a high level." The page shows Goals, Waiting on you and the
+open runs, and nothing lists the work the programme set out to do. This task is the design only: a spec with mockups,
+and a build plan. No product code.
+
+**What was done.** The spec is `docs/superpowers/specs/2026-11-16-programme-work-map-design.md`, with desktop, phone
+and no-plan mockups in the folder beside it. The build plan is `docs/superpowers/plans/2026-11-16-programme-work-map.md`.
+- **Measured.** Five programmes of different shapes, and the server's plans and runs (spec §2). The stored plan (epics
+  and tickets, from the Linear hierarchy's wave 2) is the one structured source whose status the server moves itself.
+  2 of the 16 programmes with runs have one today. Plan checkboxes are not a status: 1,724 of 23,366 are ticked across
+  862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale.
+- **Decided.** A Work card below Goals: "N of M done" with a bar, then phases in plan order and tasks with one line
+  each. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+  `GET /api/programmes/:slug/plan`. A programme with no stored plan shows its work runs so far, under a note that what
+  remains is not known. The Runs card stays for the acts. On desktop, Waiting on you moves to the top of the right
+  column. The card replaces the Linear hierarchy plan's Task 5.2.
+- **The builder check** (a fresh reader of the spec) found two gaps in the plan model that would make "N of M" wrong:
+  a run opened with no ticket mints its own, so the declared task stays "not started" forever, and nothing can mark a
+  declared task done except its own run. The design closes both: `runs open` refuses `ticket-required` while the
+  phase has an open declared task, and a coordinator's `plan ticket-done` records a finished task with its pull request.
+- **For the operator.** Three questions, raised as Waiting on you items: should live programmes declare their plans
+  (Q1), what order the card uses (Q2), and its words, phase and task (Q3).
+- **The build** is five tasks, WM0 to WM4, one PR each. Only WM3 touches claim 4522's files (`ProgrammeScreen.tsx` and
+  `pwa/src/lib/api.ts`), so it waits for that claim. The others touch none of them.
+
+- **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
+  stored plan as the one source of its work list, with a status decided once on the server, and falls back to the
+  programme's runs. It replaces the Linear hierarchy plan's Task 5.2. Departures are named by slug in the build plan:
+  `hierarchy-5-2-replaced`, `waiting-card-moves-right` and `ticket-required-and-done`.
+
+**Acceptance.** The spec, its mockups and the build plan are on `main`. A fresh builder read the spec before the PR.
+`deviation-refs`, `dtbd` and `topology-clean` pass, and the private-name scan of every new file is clean.
+**Rollback.** A plain revert; nothing ships.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
