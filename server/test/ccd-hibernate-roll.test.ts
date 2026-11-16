@@ -633,3 +633,35 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(h.sh('cmd_caps').split('\n')).toContain('hibernate-fresh');
   });
 });
+
+// The Overlord W1 ccd arms (plan `w1-ccd-arms.md` Task 2, question 1, slug fresh-start-passes-keep-awake-no-roll): designate
+// and rebind set `.no-roll` on the Overlord's body through `ccd keep-awake`, and that body renews by `hibernate --roll --fresh`.
+// The fresh start passes ONE `.no-roll`: a regular, readable file, not a link, holding exactly keep-awake's stamp. Every other
+// `.no-roll` still refuses it, and a plain `--roll` refuses every one. The line tests `-L` too (slug
+// no-roll-line-refuses-a-dangling-link), so a plain `--roll` refuses a dangling link it passed before.
+describe('the Overlord W1 ccd arms: the fresh start passes keep-awake\'s own .no-roll, and nothing else', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const news = (): string[] => calls().filter((l) => /^tmux new-session/.test(l));
+  const uuidNow = (): string => fs.readFileSync(regPath('uuid'), 'utf8').trim();
+  const claimed = (): void => { idle(); h.sh(`_reg_claim ${ID}`); };
+  const fresh = (): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, SPAWNS, REAL);
+  const untouched = (r: { rc: number; err: string }, word: string): void => {
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toMatch(new RegExp(`^ccd: session-busy: ${word} — .*no-roll`));
+    expect(has('hibernated')).toBe(false);
+    expect(has('fresh')).toBe(false);
+    expect(killAt()).toBe(-1);
+    expect(news()).toEqual([]);
+    expect(uuidNow()).toBe(UUID);
+  };
+
+  it('a plain --roll with a dangling .no-roll link (characterized: it proceeded before the line tested -L)', () => {
+    idle();
+    fs.symlinkSync(path.join(h.home, 'nowhere'), regPath('no-roll'));
+    const r = roll();
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+  });
+});
