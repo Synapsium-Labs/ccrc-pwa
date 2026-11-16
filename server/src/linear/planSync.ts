@@ -479,7 +479,8 @@ export class PlanSync {
       if (out.ok) {
         const id = out.created ?? (typeof out.value['id'] === 'string' ? out.value['id'] : null);
         if (id === null) { this.deferUntil(slug, this.deps.now() + this.nextBackoff(slug), 'failure'); return 'defer'; }   // ok without an id: it may have been sent
-        this.bind(b, id, this.identifierOf(out, b), step.fingerprint);
+        // A6 (§5.5): a create records the team it was made in, also on a binding a skip made first with none.
+        this.bind(b, id, this.identifierOf(out, b), step.fingerprint, step.teamKey);
         this.attempts.delete(slug);
         return 'next';
       }
@@ -574,7 +575,7 @@ export class PlanSync {
     }
     const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
     if (v.verdict === 'none') return 'send';
-    this.bind(b, v.id, null, ADOPTED);
+    this.bind(b, v.id, null, ADOPTED, step.teamKey);
     return 'bound';
   }
 
@@ -626,7 +627,7 @@ export class PlanSync {
     }
     const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
     if (v.verdict === 'none') { this.fail(s, 'linear-invalid'); return 'next'; }
-    this.bind(b, v.id, identifier, ADOPTED);
+    this.bind(b, v.id, identifier, ADOPTED, step.teamKey);
     return 'next';
   }
 

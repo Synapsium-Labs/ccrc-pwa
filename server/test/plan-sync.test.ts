@@ -559,6 +559,17 @@ describe('a failed binding is not terminal', () => {
     expect(bindingOfKind(r, 'epic')).toMatchObject({ state: 'bound' });
   });
 
+  it('A6: a binding first made by a skip, created on its requeue, records its team key (§5.5)', async () => {
+    const r = await rig({ mode: 'public' });
+    const t1 = r.plan.planOf(SLUG).epics[0]!.tickets[0]!;
+    r.db.prepare("UPDATE plan_tickets SET title = 'Fix AAA-123 now' WHERE id = ?").run(t1.id);
+    await r.sync.tick(afterDebounce(r));
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'failed', failedWord: 'text-public', teamKey: null });
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: t1.id, title: 'A fine title' }], drop: [] } }), OWNER, r.t.now, null);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'bound', teamKey: 'AAA' });
+  });
+
   it('returns to pending when the directory refresh adds the status type', async () => {
     const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
     await r.sync.tick(afterDebounce(r));
