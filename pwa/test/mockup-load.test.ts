@@ -5,9 +5,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DOCS_CLASS_CAP, contentClass, docsApi, type DocPin, type DocsEntry } from '../../shared/docs';
 import { createFetchQueue, DOCS_PWA_FETCH_CONCURRENCY } from '../src/docs/fetchQueue';
-import { extractMockupRefs, loadMockupAssets, mockupAssetReader } from '../src/docs/mockup/load';
+import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, mockupAssetReader } from '../src/docs/mockup/load';
 import { parseMockup } from '../src/docs/mockup/parse';
-import { planMockupAssets } from '../src/docs/mockup/plan';
+import { extendMockupAssetPlan, planMockupAssets } from '../src/docs/mockup/plan';
 import { MOCKUP_MAX_ASSET_BYTES } from '../src/docs/mockup/policy';
 import type { MockupAssetPlan, MockupAssetReader, MockupContext, MockupReadAnswer, MockupRef } from '../src/docs/mockup/ports';
 import { COMMIT_A, COMMIT_B, FP_1, SERVED, draftOf, entry, fakeLoaders, failedAnswer, holder, treeOk } from './docsFixtures';
@@ -624,5 +624,25 @@ describe('nested discovery through the real CSS scan, the real loader and extend
       sum += r.size.bytes;
     }
     expect(sum).toBe(result.plan.reservedBytes);
+  });
+});
+
+describe('a rewritten plan keeps its basis, admitted pins and row indexes (fix round 2, review run 2281 F7)', () => {
+  it('the plans loadMockupAssets and buildMockupSrcdoc return extend as the plan they were given: a duplicate is admitted once', async () => {
+    const parsed = parseMockup('<!doctype html><img src="a.png"><img src="b.png">');
+    if (!parsed.ok) throw new Error('fixture refused by the pre-scan');
+    const plan = planMockupAssets(extractMockupRefs(parsed.doc, PAGE_BASE).refs, ctxOf([sized('a.png', 3), sized('b.png', 5)]));
+    const loaded = await loadMockupAssets(plan, fakeReader({ 'a.png': 'PNG', 'b.png': 'GIF89' }).reader, signal());
+    const built = buildMockupSrcdoc(parsed.doc, loaded, [], false);
+    if (!built.ok) throw new Error('the build was refused');
+    for (const p of [loaded.plan, built.plan]) {
+      expect(p.basis).toBe(plan.basis);
+      expect([...p.admitted]).toEqual([...plan.admitted]);
+      expect([...p.admitted.values()].map((at) => p.rows[at]!.ref.raw)).toEqual(['a.png', 'b.png']);
+      const next = extendMockupAssetPlan(p, [{ ...root('b.png'), key: 'dup-after-load' }]);
+      expect(next.reservedBytes).toBe(p.reservedBytes);
+      expect(next.admitted.size).toBe(2);
+      expect(next.rows.at(-1)).toMatchObject({ verdict: { v: 'inline' }, size: { kind: 'listed', bytes: 5 } });
+    }
   });
 });
