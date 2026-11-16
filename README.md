@@ -1677,7 +1677,7 @@ which is why both write it to a temp file and `mv` it into place — the deploy 
 scp-to-temp + `mv` as `ccd` itself, landing it **before** `ccd` and before every installer.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden, pool}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool, fableBilling, continuity}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
