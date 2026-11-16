@@ -190,6 +190,18 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(r.command).toHaveBeenLastCalledWith('outline');
   });
 
+  it('a press on a tool takes no focus, so the reader frame keeps it (#2903)', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('plans', 'p.md')] })) });
+    await openReady('/docs/demo/plans/p.md', 412, f);
+    const bar = oneBar();
+    for (const name of [DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents, DOCS_TOOL_TEXT.outline]) {
+      // fireEvent answers false when a handler called preventDefault: the press's default, taking the focus, is not done.
+      expect(fireEvent.pointerDown(within(bar).getByRole('button', { name })), `${name}: the press keeps the focus where it is`).toBe(false);
+    }
+    // The title is a disclosure, not one of the frame's tools: a press on it still takes the focus, as any button's does.
+    expect(fireEvent.pointerDown(bar.querySelector<HTMLElement>('.docs-title')!), 'the title takes the focus').toBe(true);
+  });
+
   it('the title opens the details panel: the crumbs, the truth line and the full header\'s actions, in §4.5\'s order', async () => {
     await openReady('/docs/demo/specs/a.md');
     const title = titleButton();
