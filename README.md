@@ -4054,7 +4054,7 @@ general remote-shell:
   Every granted verb outside that bare-token handful, unlike `stop`, requires a longer prefix before
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
-  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
+  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size`/`keep-awake` need `--session`;
   `coord-pause`, `reclaim-pause`, `scope-sweep-busy` and `delegation-adopt` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
@@ -4068,7 +4068,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`, `delegation-adopt`,
-  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `route`, `win-size`, `keep-awake`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -5641,7 +5641,8 @@ stays awake), no pane menu, background work or subagents, a turn marker that rea
 exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
 event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
 worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
-swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`sleepLane.ts`,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate` (written by hand, or by `ccd keep-awake` on
+the Overlord's body, its one writer in the tree). The sweep (`sleepLane.ts`,
 every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
 operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
 hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after
@@ -5672,7 +5673,11 @@ session whose lane runs nothing newer is never rolled for the build, and a sessi
 reach is not rolled for it again (in this server process). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
 `server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
 (the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
-`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). Under the
+`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). `ccd keep-awake` is
+the one writer of both markers in the tree, on the Overlord's body: it writes the stamp `keep-awake v1`, and `off` removes
+only a marker holding exactly that stamp. The renewal's fresh start (`ccd hibernate --roll --fresh`) passes a `.no-roll`
+holding exactly that stamp, and nothing else; a plain `--roll` refuses every `.no-roll`, a dangling link included. A
+`touch` keeps the stamp, so an operator opts the Overlord's body out by writing other bytes into the marker. Under the
 `Coordinators only` setting a session that is not a coordinator (an unreadable `.child` counts as a child) is never
 rolled, and picks the release up when it next starts for another reason. The act is a row of the
 sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --roll` (D-7458): ccd re-measures, sleeps
@@ -7790,7 +7795,8 @@ you need to reason about one.*
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
   `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
   `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
-  route fields `poolset` and `acctorder`); `ccrc`, the box
+  route fields `poolset` and `acctorder`) and `lib/long-lived.sh` (the Overlord's ccd arms: the
+  `keep-awake` verb's region); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -7967,6 +7973,7 @@ implements — that list is the authority; the table below is a map:
 | `clip <png> [id]` | file an image under `~/.cc-clips` and type its path into the input box of the session the most recently active attached client is on, or of the id given |
 | `route --session <id> --set <field>=<value>… [--apply]` | write a session's routing record (model class, effort, …); `--apply` also applies it to an idle live pane |
 | `win-size --session <id> --mode smallest\|canonical` | un-pin / pin one session's window size |
+| `keep-awake --session <id> --state on\|off` | the server's set / clear of one session's two sleep markers, `.no-hibernate` and `.no-roll`, holding its own stamp (the Overlord's body; never run by hand or by a session) |
 | `ws-add [--no-rc] [--route <field>=<value>]… <project> [slug]` · `ws-rename --session <id> --branch <name>` | a new worktree, branch and session for a project; rename a workspace's branch before it is pushed |
 | `ws-hold --session <id> --reason <text>` · `ws-release --session <id>` | declare / end a program's claim on a workspace |
 | `ws-title --session <id> (--title <text> \| --clear)` | set or clear a workspace's operator title and its `named` marker (the slug and branch never change); `--clear` hands the row back to the ai-title sweep |
@@ -8556,6 +8563,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ~/.local/libexec/ccrc/lib/delegation-lease.sh   # its third library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ~/.local/libexec/ccrc/lib/long-lived.sh   # its fifth library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -8930,9 +8938,10 @@ These conventions carry more weight here than style:
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
   `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
-  (a session's pool set, the Overlord's W1) the fourth; each is treated the same way, their pins
-  `__CCD_LIB_TRAIN_SHA256=stamp-at-install`, `__CCD_LIB_LEASE_SHA256=stamp-at-install` and
-  `__CCD_LIB_POOLSET_SHA256=stamp-at-install`; the body reads and checks all four before it evaluates any.
+  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth;
+  each is treated the same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install`,
+  `__CCD_LIB_LEASE_SHA256=stamp-at-install`, `__CCD_LIB_POOLSET_SHA256=stamp-at-install` and
+  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install`; the body reads and checks all five before it evaluates any.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the

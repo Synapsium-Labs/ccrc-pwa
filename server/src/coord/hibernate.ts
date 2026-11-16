@@ -95,7 +95,8 @@ export const HIBERNATE_ACT_LINE_MS = 60 * 60_000;
 export const HIBERNATE_SWEEP_ACTOR = 'sweep:hibernate';
 
 /** The operator's switches and settings, all in `$REG` (`~/.cc-sessions`), all touched and removed BY HAND — nothing in
- *  the tree writes any of them (`single-definition.test.ts`):
+ *  the tree writes any of them but `<id>.no-hibernate`, which `ccd keep-awake` also writes on the Overlord's body (spec
+ *  §3.2, Overlord W1 ccd arms); the server lists it, never reads its bytes (`single-definition.test.ts`):
  *  - `hibernate-disabled`: the sweep does nothing at all; it wins over `hibernate-live`;
  *  - `hibernate-live`: arms the act (Task 17b): a `hibernate` verdict then composes `ccd hibernate`;
  *  - `hibernate-after-hours`: N in whole hours (1 to 168), read only when listed; anything else is the default;
