@@ -227,6 +227,8 @@ describe('the closed route table', () => {
     // The thirteen Linear rows (D-7669, #1444; `link` since D-8141): every one derives the pane's identity into its query, so each runs in a pane.
     // The coordinator's call record (autonomy-default wave A3, D-8126), behind `calls-v1`; it fills identity from the pane, so it runs in a pane.
     [['calls', 'record', 'prog-a', '--json', '-'], 'POST', '/api/coord/programmes/prog-a/calls'],
+    // What a programme says is left (Overlord W2 remaining work A); it appends identity from the pane, so it runs in a pane.
+    [['programme', 'remaining', 'prog-a', '--json', '-'], 'POST', '/api/coord/programmes/prog-a/remaining'],
     [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
     [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
     [['linear', 'issue', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12'],
@@ -273,7 +275,7 @@ describe('the closed route table', () => {
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
+      || args[0] === 'calls' || args[0] === 'programme' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -325,7 +327,8 @@ describe('the closed route table', () => {
     // Eighty-one since the three `timer` rows (Overlord W1a, the timers piece); eighty-three since the probe door's two (Overlord,
     // the probes piece): `sessions.probe` and `probe.answer`.
     // Eighty-four since `sessions.loads` (Overlord W1 sandbox, the loads report).
-    expect(keys).toHaveLength(84);
+    // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
+    expect(keys).toHaveLength(85);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -340,7 +343,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -519,6 +522,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
       ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
+      ['programme', 'remaining', 'prog-a', '--json', '-'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');
@@ -705,6 +709,56 @@ describe('calls record fills identity from the pane, refuses a caller-named iden
     plantPane('demo-ws', 'uuid-7');
     const r = await run(['calls', 'record', '../x', '--json', '-'], BODY, pane);
     expect([r.status, errorOf(r)]).toEqual([2, 'bad-id']);
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('programme remaining appends identity from the pane, last, and refuses a caller-named identity (Overlord W2)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const BODY = '{"lo":2,"hi":3,"reason":"wave 4 of the plan, and its review","runId":123}';
+  const state = (body: string | undefined, env: Record<string, string | undefined> = pane): Promise<Run> =>
+    run(['programme', 'remaining', 'prog-a', ...(body === undefined ? [] : ['--json', '-'])], body, env);
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row is a POST by programme slug that takes an id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'programme.remaining');
+    expect([row!.method, row!.path, row!.needsId, row!.query, row!.family])
+      .toEqual(['POST', '/api/coord/programmes/{id}/remaining', true, [], null]);
+  });
+
+  it('sends the body with the pane\'s pair appended after the body\'s own fields, and the box token header', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await state(BODY);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/coord/programmes/prog-a/remaining', TOKEN]);
+    expect(Object.keys(JSON.parse(seen[0]!.body) as object)).toEqual(['lo', 'hi', 'reason', 'runId', 'byId', 'byUuid']);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...JSON.parse(BODY), byId: 'demo-ws', byUuid: 'uuid-7' });
+  });
+
+  it('a body-supplied byId or byUuid never wins: a plain one is refused unsent, and the pane\'s pair is the later key', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{"byId":"someone-else","lo":1,"hi":1}', '{"lo":1,"hi":1,"byUuid" : "forged"}']) {
+      const r = await state(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+    // A spelling the textual test misses reaches the server, where the later key, the pane's, is the one a parser keeps.
+    const r = await state('{"lo":1,"hi":1,"reason":"r","\\u0062yId":"someone-else"}');
+    expect(r.status, r.stdout).toBe(0);
+    expect((JSON.parse(seen[0]!.body) as { byId: string }).byId).toBe('demo-ws');
+  });
+
+  it('refuses no body, a non-object body, and a pane with no identity, each unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const none = await state(undefined);
+    expect([none.status, errorOf(none)]).toEqual([2, 'no-body']);
+    for (const b of ['[]', '"x"']) {
+      const r = await state(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    const noPane = await state(BODY, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(noPane.status).not.toBe(0);
+    expect(noPane.stdout).toContain('no-pane');
     expect(seen).toEqual([]);
   });
 });

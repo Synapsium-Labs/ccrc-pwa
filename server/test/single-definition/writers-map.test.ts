@@ -313,7 +313,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots'] as const;
+  'operator_responses', 'response_receipts', 'response_boots', 'programme_remaining', 'programme_edges'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -409,6 +409,10 @@ describe(TABLES_PIN, () => {
       operator_responses: ['insertPushResponseInTx', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       response_receipts: ['server/src/coord/responsesStore.ts#insertReceipt'],
       response_boots: ['server/src/coord/responsesStore.ts#recordResponseBoot'],
+      // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
+      // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
+      programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
+      programme_edges: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
     });
   });
 
@@ -499,6 +503,22 @@ describe(TABLES_PIN, () => {
   });
   it('recordAnswerMark is called exactly once outside the store, inside the POST /api/answer-marks handler', () => {
     expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
+  });
+  // What a programme says is left (Overlord W2 remaining work A, plan w2-remaining-work.md Task 2): `programme_remaining`
+  // is append-only, so no UPDATE or DELETE names it anywhere, even inside its one writer (which the map above cannot tell
+  // from the INSERT), and the writer is reached only from the remaining-work door.
+  const remainingCallSites = callSitesOf('insertRemaining');
+  it('no UPDATE or DELETE names programme_remaining anywhere: append-only', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    const named = files.filter((f) => /(?:UPDATE|DELETE\s+FROM)\s+programme_remaining\b/.test(
+      readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, '')));
+    expect(named.map(rel)).toEqual([]);
+  });
+  it('insertRemaining is called exactly once outside the store, inside the remaining-work door', () => {
+    expect(remainingCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/programmeRemainingRoute.ts#registerProgrammeRemainingRoute @ POST /api/coord/programmes/:slug/remaining',
+      `${S}insertRemaining`,
+    ]);
   });
   // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
   // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.
