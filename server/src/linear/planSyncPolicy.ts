@@ -387,7 +387,7 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
       const mp = {
         name: egress(c.title), description: milestoneDescription(c), targetDate: c.state === 'met' && c.metAt !== null ? dayOf(c.metAt) : null, sortOrder: c.ordinal,
       };
-      const dated = mp.targetDate === null ? {} : { targetDate: mp.targetDate };
+      const dated: Record<string, string> = mp.targetDate === null ? {} : { targetDate: mp.targetDate };
       const dateField = mp.targetDate === null ? [] : ['targetDate'];
       decide({
         phase: 2, kind: 'checkpoint', id: c.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectMilestoneCreate', update: 'projectMilestoneUpdate' },
