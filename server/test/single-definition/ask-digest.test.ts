@@ -1070,7 +1070,7 @@ describe('the Overlord W1 ccd arms: the roll\'s opt-out has one shell writer, ke
 function KEEP_AWAKE_WRITER(marker: 'no-hibernate' | 'no-roll'): string {
   const create = `( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.${marker}" ) 2>/dev/null`;
   return marker === 'no-hibernate'
-    ? `ccd/lib/long-lived.sh: if [[ "$m" == no-hibernate ]]; then ${create}`
+    ? `ccd/lib/long-lived.sh: if [[ "$field" == no-hibernate ]]; then ${create}`
     : `ccd/lib/long-lived.sh: else ${create}; fi && continue`;
 }
 

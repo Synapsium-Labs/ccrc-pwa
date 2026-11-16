@@ -27,23 +27,23 @@ cmd_keep_awake() {   # ccd keep-awake --session <id> --state on|off — set or c
   # file, not readable, or the bounded read timed out) is kept, and the verb exits 1. CHECKED on both arms, for
   # `cmd_coord_pause`'s reason: no `-e`, so an unchecked write would fall through to the echo. Nothing parses the echo.
   # Each marker's create is one spelled line, so the single-definition scan sees each write (ask-digest.test.ts, D-5242).
-  local LC_ALL=C IFS=' ' id="${2-}" state="${4-}" m f rc=0
+  local LC_ALL=C IFS=' ' id="${2-}" state="${4-}" field f rc=0
   [[ $# -eq 4 && "$1" == --session && "$3" == --state && ( "$state" == on || "$state" == off ) ]] \
     || die "usage: ccd keep-awake --session <id> --state on|off"
   _reg_id_ok "$id" || die "bad session id"
   [[ "$state" == off || -f "$REG/$id.uuid" ]] || die "no such session: $id"
-  for m in no-hibernate no-roll; do
-    f="$REG/$id.$m"; _keep_awake_ours "$id" "$m"
+  for field in no-hibernate no-roll; do
+    f="$REG/$id.$field"; _keep_awake_ours "$id" "$field"
     case "$state $KEEP_AWAKE_READ" in
       "off ours") rm -f -- "$f" && [[ ! -e "$f" && ! -L "$f" ]] && continue; die "could not remove $f — the marker still stands" ;;
       "on absent")
-        if [[ "$m" == no-hibernate ]]; then ( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.no-hibernate" ) 2>/dev/null
+        if [[ "$field" == no-hibernate ]]; then ( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.no-hibernate" ) 2>/dev/null
         else ( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.no-roll" ) 2>/dev/null; fi && continue
         [[ -e "$f" || -L "$f" ]] || die "could not write $f — the session is NOT kept awake" ;;
       "on ours"|"off absent") continue ;;
       "off unreadable") rc=1 ;;
     esac
-    printf 'kept %s: not keep-awake'"'"'s\n' "$m"
+    printf 'kept %s: not keep-awake'"'"'s\n' "$field"
   done
   if [[ "$state" == on ]]; then echo "awake $id"; else echo "released $id"; fi
   return "$rc"
