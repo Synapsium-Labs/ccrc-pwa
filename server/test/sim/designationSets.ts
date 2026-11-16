@@ -11,6 +11,7 @@ import type { ShareReading } from '../../../shared/serviceability.js';
 import { parseRoster } from '../../../shared/roster.js';
 import type { PoolSet } from '../../../shared/poolset.js';
 import type { AccountLimits } from '../../src/limits.js';
+import type { DesignationFact } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -335,8 +336,73 @@ const RETIRE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: 
     { id: 'R4 a pending attempt is none', old: "? { act: 'cancel-pending' } : { act: 'none' };", new: "? { act: 'none' } : { act: 'none' };" },
   ], suite: retireVerdictCases };
 
+// ------------------------------------------------------------------------------- designationFactOf, identityOf (Task 3)
+
+export type RoleOfDesignationModule = typeof import('../../src/roleOf.js');
+const row = (live: string | null, pending: string | null, pendingKind: 'designate' | 'rebind' | null): DesignationFact =>
+  ({ kind: 'row', live, pending, pendingKind, term: 3 });
+const NO_ROW: DesignationFact = { kind: 'none' };
+
+export function designationFactOfCases(m: RoleOfDesignationModule): Record<string, SuiteCase> {
+  return {
+    'no row reads none for every id': () => { expect(m.designationFactOf('overlord-quiet-otter', NO_ROW)).toBe('none'); },
+    'the bound id reads live, and another id none': () => {
+      const d = row('overlord-quiet-otter', null, null);
+      expect(m.designationFactOf('overlord-quiet-otter', d)).toBe('live');
+      expect(m.designationFactOf('lane-a-project-a', d)).toBe('none');
+    },
+    'a pending id reads pending (a designate attempt, a rebind attempt), and another id none': () => {
+      for (const kind of ['designate', 'rebind'] as const) {
+        const d = row(null, 'overlord-new-owl', kind);
+        expect(m.designationFactOf('overlord-new-owl', d), kind).toBe('pending');
+        expect(m.designationFactOf('lane-a-project-a', d), kind).toBe('none');
+      }
+    },
+    'a rebind: the old body reads live and the new one pending': () => {
+      const d = row('overlord-quiet-otter', 'overlord-new-owl', 'rebind');
+      expect(m.designationFactOf('overlord-quiet-otter', d)).toBe('live');
+      expect(m.designationFactOf('overlord-new-owl', d)).toBe('pending');
+    },
+  };
+}
+
+export function identityOfCases(m: RoleOfDesignationModule): Record<string, SuiteCase> {
+  return {
+    'no row: the session id': () => { expect(m.identityOf('overlord-quiet-otter', NO_ROW)).toBe('overlord-quiet-otter'); },
+    'the live bound id is overlord': () => { expect(m.identityOf('overlord-quiet-otter', row('overlord-quiet-otter', null, null))).toBe('overlord'); },
+    "a designate attempt's pending id is overlord": () => {
+      expect(m.identityOf('overlord-new-owl', row(null, 'overlord-new-owl', 'designate'))).toBe('overlord');
+    },
+    "a rebind attempt's pending id keeps its own id, and the old body stays overlord": () => {
+      const d = row('overlord-quiet-otter', 'overlord-new-owl', 'rebind');
+      expect(m.identityOf('overlord-new-owl', d)).toBe('overlord-new-owl');
+      expect(m.identityOf('overlord-quiet-otter', d)).toBe('overlord');
+    },
+    'another id is its own': () => {
+      expect(m.identityOf('lane-a-project-a', row('overlord-quiet-otter', 'overlord-new-owl', 'rebind'))).toBe('lane-a-project-a');
+      expect(m.identityOf('lane-a-project-a', row(null, 'overlord-new-owl', 'designate'))).toBe('lane-a-project-a');
+    },
+  };
+}
+
+const ROLE_OF_MODULE = path.join(ROOT, 'server/src/roleOf.ts');
+const DESIGNATION_FACT_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_MODULE, mutants: [
+    { id: 'F1 pending read as none', old: "if (d.pending === sessionId) return 'pending';", new: "if (d.pending === sessionId) return 'none';" },
+    { id: 'F2 the bound id read as none', old: "if (d.live === sessionId) return 'live';", new: "if (d.live === sessionId) return 'none';" },
+    { id: 'F3 a row names every id live', old: "if (d.live === sessionId) return 'live';", new: "if (d.live !== null) return 'live';" },
+    { id: 'F4 a pending attempt names every id pending', old: "if (d.pending === sessionId) return 'pending';", new: "if (d.pending !== null) return 'pending';" },
+  ], suite: designationFactOfCases };
+const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_MODULE, mutants: [
+    { id: 'I1 a rebind pending body keyed overlord', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'd.pending === sessionId' },
+    { id: 'I2 a designate pending body keyed by its id', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'false' },
+    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return 'overlord';", new: '' },
+    { id: 'I4 every id keyed overlord under a row', old: "  return sessionId;\n}\n\n/** The one narrowing", new: "  return 'overlord';\n}\n\n/** The one narrowing" },
+  ], suite: identityOfCases };
+
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#overlordAccounts': ACCOUNTS_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#retireVerdict': RETIRE_SET as MutantSet<never>,
+  'server/src/roleOf.ts#designationFactOf': DESIGNATION_FACT_SET as MutantSet<never>,
+  'server/src/roleOf.ts#identityOf': IDENTITY_SET as MutantSet<never>,
 };

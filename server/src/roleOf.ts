@@ -1,5 +1,6 @@
 import type { ChildMark, RunKind, SessionRole } from '../../shared/api.js';
 import { FLEET_ROLES, type FleetRole } from '../../shared/fleetRoles.js';
+import type { DesignationRead, PendingKind } from '../../shared/overlord-designation.js';
 
 /** L1 policy, context C3 (Session Conversation): decides a fleet session's role from measured facts, with no
  *  I/O. The table it reads is `FLEET_ROLES` (L0); the decision order is Overlord design spec §3.3.9
@@ -90,16 +91,52 @@ export interface RoleFactInputs {
   readonly openCoordinators: ReadonlySet<string> | 'unmeasured';
   /** Declared coordinator intent on the current incarnation, or 'unmeasured'. */
   readonly intentDeclared: boolean | 'unmeasured';
+  /** The designation as the caller read it this pass (`designationFactFrom`). */
+  readonly designation: DesignationFact;
+}
+
+/** The designation as one caller read it this pass: no row, or the ids it binds. An unmeasured read never reaches
+ *  here: the caller fails closed first (plan 2026-11-14 w1-designation Task 3, "What an unmeasured designation does"). */
+export type DesignationFact = { readonly kind: 'none' }
+  | { readonly kind: 'row'; readonly live: string | null; readonly pending: string | null;
+      readonly pendingKind: PendingKind | null; readonly term: number };
+
+/** `pending` when the id is the pending attempt, `live` when it is the binding, `none` otherwise. */
+export function designationFactOf(sessionId: string, d: DesignationFact): RoleFacts['designation'] {
+  if (d.kind === 'none') return 'none';
+  if (d.pending === sessionId) return 'pending';
+  if (d.live === sessionId) return 'live';
+  return 'none';
+}
+
+/** X5: the generation identity of a session. `overlord` for the live bound id, and for the pending id of a
+ *  `designate` attempt; the session id for everything else, a rebind's pending body included. */
+export function identityOf(sessionId: string, d: DesignationFact): string {
+  if (d.kind === 'none') return sessionId;
+  if (d.live === sessionId) return 'overlord';
+  if (d.pending === sessionId && d.pendingKind === 'designate') return 'overlord';
+  return sessionId;
+}
+
+/** The one narrowing of a `DesignationRead` to what the deciders read; `'unmeasured'` is the caller's to fail closed on. */
+export function designationFactFrom(r: DesignationRead): DesignationFact | 'unmeasured' {
+  if (r.kind === 'unmeasured') return 'unmeasured';
+  const row = r.row;
+  if (r.kind === 'not-designated' && row === null) return { kind: 'none' };
+  return {
+    kind: 'row', live: r.kind === 'designated' ? r.sessionId : null,
+    pending: row?.pending?.sessionId ?? null, pendingKind: row?.pending?.kind ?? null,
+    term: r.kind === 'designated' ? r.term : row?.term ?? 0,
+  };
 }
 
 const word = (v: boolean | 'unmeasured'): RoleFactWord => (v === 'unmeasured' ? 'unmeasured' : v ? 'yes' : 'no');
 
 /** THE ONE ASSEMBLY of a session's `RoleFacts` (Overlord W1a, renewal deciders Task 0): every lane that asks `roleOf`
- *  about a session builds its facts here. Pure. `designation`, `auditBody` and `replayBody` are fixed ('none', false,
- *  false) until their waves bring readers; an unmeasured input stays unmeasured, never `no`. */
+ *  about a session builds its facts here. Pure. `auditBody` and `replayBody` are fixed (false, false) until their waves bring readers; an unmeasured input stays unmeasured, never `no`. */
 export function roleFactsOf(sessionId: string, i: RoleFactInputs): RoleFacts {
   return {
-    designation: 'none', auditBody: false, replayBody: false,
+    designation: designationFactOf(sessionId, i.designation), auditBody: false, replayBody: false,
     child: i.child,
     childRunKind: i.child.kind === 'child' ? i.childRunKind : 'unmeasured',
     claimsOpenRun: i.openCoordinators === 'unmeasured' ? 'unmeasured' : word(i.openCoordinators.has(sessionId)),

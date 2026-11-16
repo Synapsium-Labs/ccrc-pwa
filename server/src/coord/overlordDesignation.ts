@@ -37,6 +37,14 @@ export interface DesignateFacts {
   readonly home: ProjectedHome | null;
 }
 
+/** The kebab words this decider and its store (`overlordDesignationStore.ts`) spell as literals that are no wire refusal:
+ *  the verdicts' acts, the store's answers, and the words of the reads they take (`PoolAnswerRead`'s `not-run`, the set
+ *  side's `set-side`, ccd's `pool-set` word, `DesignationRead`'s `not-designated`). The mail-routes kebab census admits
+ *  them through `isDesignationKebab`; a refusal the door answers is `OVERLORD_REFUSALS`' and admitted there. */
+export const DESIGNATION_KEBABS = ['refuse-input', 'retire-live', 'cancel-pending', 'not-designated', 'not-pending',
+  'generation-set', 'bad-outcome', 'not-run', 'set-side', 'pool-set'] as const;
+export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as readonly string[]).includes(w);
+
 export type DesignateVerdict =
   | { readonly act: 'refuse'; readonly word: 'overlord-exists' | 'capability-missing' | 'launch-profile-unmet'
       | 'overlord-single-account'; readonly detail: string;

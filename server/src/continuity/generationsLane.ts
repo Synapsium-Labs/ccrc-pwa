@@ -70,7 +70,7 @@ import type { CoordStore } from '../coord/store.js';
 import type { TurnMarkRead } from '../coord/stall.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { newestClaimedWorkRuns } from '../coord/bindingReads.js';
-import { roleFactsOf, roleOf, type RoleReading } from '../roleOf.js';
+import { designationFactFrom, identityOf, roleFactsOf, roleOf, type DesignationFact, type RoleReading } from '../roleOf.js';
 import { startedBeforeRelease } from '../coord/rollTarget.js';
 import type { ReleaseRead } from '../rollLane.js';
 import type { Clock, Entropy } from '../time/ports.js';
@@ -105,7 +105,7 @@ import {
 export const GENERATIONS_LANE = 'generations';
 /** At most this many starts a pass (the plan's 200): a backlog drains over several passes. */
 export const GENERATIONS_START_BATCH = 200;
-/** A generation's term in W1a: the designation's term arrives with W1. */
+/** A generation's term for every identity but the Overlord's, whose start mints with the designation's term. */
 export const GENERATIONS_TERM = 1;
 /** How many of a coordinator's newest starts the first mint looks through for one that mints (review 2003 F2). */
 export const FIRST_MINT_LOOKBACK = 20;
@@ -114,7 +114,7 @@ export const FIRST_MINT_LOOKBACK = 20;
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
   | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
-  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf' | 'itemsFor'>;
+  | 'designationRead' | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf' | 'itemsFor'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
@@ -224,7 +224,7 @@ export interface GenerationsResult {
   readonly blind: number;
   readonly cleared: number;
   /** A read that failed and stopped part of the pass, or null. */
-  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'card-reads' | 'probes' | null;
+  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'designation' | 'card-reads' | 'probes' | null;
   /** A mint that could not be written stopped the batch. */
   readonly stopped: boolean;
 }
@@ -296,15 +296,27 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
     } catch { return 'unmeasured'; }
   };
+  // The designation, read once a pass (X5, X7). Unmeasured fails the mint step closed (`fail('designation', …)`), and a role read
+  // for the renewal permit then reads undecided, so a coordinator's renewal holds as a role change.
+  let designation: DesignationFact | 'unmeasured';
+  let designationWhy = 'the designation could not be read';
+  try {
+    const read = coord.designationRead();
+    designation = designationFactFrom(read);
+    if (read.kind === 'unmeasured') designationWhy = read.why;
+  } catch (e) { designation = 'unmeasured'; designationWhy = e instanceof Error ? e.message : String(e); }
   const roleFor = (sessionId: string): RoleReading => {
+    if (designation === 'unmeasured') return { kind: 'undecided', between: 'coordinator-or-plain' };
     const child: ChildMark = registry.get(sessionId)?.child ?? { kind: 'unreadable' };
-    return roleOf(roleFactsOf(sessionId, { child, childRunKind: runKind(child), openCoordinators, intentDeclared: 'unmeasured' }));
+    return roleOf(roleFactsOf(sessionId, { child, childRunKind: runKind(child), openCoordinators, intentDeclared: 'unmeasured', designation }));
   };
 
   // ---- TWO: the starts after the cursor mint and end generations; then a coordinator with no generation mints its first.
   const notJudged = 'no start is judged and the cursor stays';
   if (input.registry === null) fail('registry', 'the registry could not be listed', notJudged);
+  else if (designation === 'unmeasured') fail('designation', designationWhy, notJudged);
   else {
+    const fact: DesignationFact = designation;
     const cursor = coord.generationsCursor(GENERATIONS_LANE);
     const starts = cursor.ok ? coord.startsSince(cursor.lastStartId, GENERATIONS_START_BATCH) : null;
     let gens = coord.liveGenerations();
@@ -320,8 +332,10 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       };
       const liveOf = (g: GenRow | null): StartFacts['live'] => g === null ? null
         : { state: g.state, reportedAt: g.startReportedAt, rowIncarnation: g.rowIncarnation, lane: g.lane };
+      const identityFor = (sessionId: string): string => identityOf(sessionId, fact);
       const mintInput = (s: StartRow, v: Extract<StartVerdict, { mint: true }>): MintInput => ({
-        identity: s.sessionId, sessionId: s.sessionId, role: v.role, term: GENERATIONS_TERM, rowIncarnation: s.rowIncarnation,
+        identity: identityFor(s.sessionId), sessionId: s.sessionId, role: v.role,
+        term: identityFor(s.sessionId) === 'overlord' && fact.kind === 'row' ? fact.term : GENERATIONS_TERM, rowIncarnation: s.rowIncarnation,
         startId: s.id, startReportedAt: s.reportedAt, resumed: v.resumed, model: s.model, lane: v.lane, host: null,
         outcome: v.outcome, mono: clock.mono(), proc: deps.proc, now,
       });
@@ -335,7 +349,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         let cursorDone = false;
         for (const [i, { start: s, newest }] of plan.judged.entries()) {
           const last = i === plan.judged.length - 1;
-          const liveGen = gens.rows.find((g) => g.identity === s.sessionId) ?? null;
+          const liveGen = gens.rows.find((g) => g.identity === identityFor(s.sessionId)) ?? null;
           const verdict = startVerdict({
             source: s.source, uuid: s.uuid, reportedAt: s.reportedAt, rowIncarnation: s.rowIncarnation,
             registry: registryOf(s.sessionId), role: roleFor(s.sessionId), newest, live: liveOf(liveGen),
@@ -370,7 +384,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       if (!passed.ok) fail('cursor', passed.detail, 'the batch ran, and no coordinator\'s first generation is minted');
       else if (!stopped && gens.ok && openCoordinators !== 'unmeasured') {
         for (const id of openCoordinators) {
-          if (gens.rows.some((g) => g.identity === id)) continue;
+          if (gens.rows.some((g) => g.identity === identityFor(id))) continue;
           const role = roleFor(id);
           if (role.kind !== 'role' || role.role !== 'coordinator') continue;
           const mine = coord.startsOf(id, FIRST_MINT_LOOKBACK);

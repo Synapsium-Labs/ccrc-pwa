@@ -42,10 +42,12 @@ import {
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import * as designation from './overlordDesignationStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
+import type { AttemptOutcome, DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
@@ -5401,6 +5403,15 @@ export class CoordStore {
   practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
   /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
+  /** Overlord §3.1 C2, H27 (`overlordDesignationStore.ts`): the designation row's one read and its writers; the three that
+   *  move authority take the journal, which appends in the row's own transaction. */
+  designationRead(): DesignationRead { return designation.designationRead(this.db); }
+  designatePending(j: designation.AuthorityAppender, i: designation.DesignateInput): designation.DesignateResult { return designation.designatePending(this.db, j, i); }
+  bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
+  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at); }
+  failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
+  retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
+  stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }

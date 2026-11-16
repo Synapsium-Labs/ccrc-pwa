@@ -19,6 +19,7 @@ import type { CcdResult } from '../src/coord/ports.js';
 import type { LaneArmRead } from '../src/coord/laneArm.js';
 import type { PlainAutoMemoryRead } from '../src/continuity/profileFor.js';
 import type { UsageRead } from '../src/usage.js';
+import type { DesignationRead } from '../../shared/overlord-designation.js';
 import { profileForCases } from './sim/launchProfileSets.js';
 import { declaredIntentOf } from '../src/continuity/profileFor.js';
 import { intentOfCheckpoint } from '../src/continuity/declaredIntent.js';
@@ -67,6 +68,8 @@ interface World {
   openGate?: boolean;
   /** The fleet node's build against the server's (W1 sandbox: `profiledigest` waits for `agreed`); `agreed` when unnamed. */
   builds?: 'agreed' | 'skewed' | 'unknown';
+  /** The designation read (Overlord W1 designation A, Task 3); no row when unnamed; `throws` makes the read throw. */
+  designation?: DesignationRead | 'throws';
 }
 
 function harness(w: World = {}) {
@@ -79,6 +82,10 @@ function harness(w: World = {}) {
     openCoordinatorIds: () => w.coordinators ?? [],
     run: ((id: number) => ({ ok: true, run: w.runKinds?.[id] === undefined ? null : { kind: w.runKinds[id] } })) as unknown as ProfileCoord['run'],
     plainAutoMemorySettings: () => w.memory ?? { kind: 'row', choice: 'off' },
+    designationRead: () => {
+      if (w.designation === 'throws') throw new Error('locked');
+      return w.designation ?? { kind: 'not-designated', row: null };
+    },
   };
   const deps: ProfileLaneDeps = {
     coord,
@@ -152,6 +159,58 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     // No surfaced reading reaches the lane before designation A (roleOf reads `overlord` only from a designation), so the
     // builds are never asked: the write-at-agreement and hold-under-skew rules are `profileDigestWriteOf`'s cases.
     expect(asked).toBe(0);
+  });
+
+  describe('the designation (Overlord W1 designation A, Task 3)', () => {
+    const PENDING_ID = 'overlord-quiet-otter';
+    const VIEW = { bound: null, term: 1, designatedTerm: 1, model: 'opus' as const, accountPools: { pools: ['pool-a'], untagged: false },
+      pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] };
+    const pendingRead = (kind: 'designate' | 'rebind'): DesignationRead => ({ kind: 'not-designated', row: { ...VIEW,
+      pending: { sessionId: PENDING_ID, kind, deadlineAt: 9, since: 1, actor: 'op', generation: null } } });
+    const boundRead: DesignationRead = { kind: 'designated', sessionId: PENDING_ID, term: 2,
+      row: { ...VIEW, term: 2, bound: { sessionId: PENDING_ID, generation: 'g1' }, pending: null } };
+
+    it('a pending body is read as the Overlord: its route is written profile=overlord, never a plain or coordinator profile', async () => {
+      for (const kind of ['designate', 'rebind'] as const) {
+        const h = harness({ lanes: LIVE, designation: pendingRead(kind) });
+        await profilePass(h.deps, [row(PENDING_ID, null)]);
+        expect(h.sent.map(sets).flat(), kind).toContain('profile=overlord');
+        expect(h.sent.map(sets).flat().filter((x) => x.startsWith('profile=') && x !== 'profile=overlord'), kind).toEqual([]);
+      }
+    });
+    it('a bound body is the Overlord too, and an ordinary row beside it keeps its own profile', async () => {
+      const h = harness({ lanes: LIVE, designation: boundRead, coordinators: ['lane-a-project-a'] });
+      await profilePass(h.deps, [row(PENDING_ID, null), row('lane-a-project-a', null)]);
+      expect(h.sent.map((a) => [a[a.indexOf('--session') + 1], sets(a).find((x) => x.startsWith('profile='))]))
+        .toEqual([[PENDING_ID, 'profile=overlord'], ['lane-a-project-a', 'profile=coordinator']]);
+    });
+    it('under skewed builds a pending body is sent the profile overlord and no profiledigest (sandbox A review F8)', async () => {
+      const h = harness({ lanes: LIVE, designation: pendingRead('designate'), builds: 'skewed' });
+      const r = await profilePass(h.deps, [row(PENDING_ID, null)]);
+      const all = h.sent.map(sets).flat();
+      expect(all).toContain('profile=overlord');
+      expect(all.filter((x) => x.startsWith('profiledigest'))).toEqual([]);
+      expect(r.byField.profiledigest).toBe(0);
+    });
+    it('an unmeasured designation writes nothing this pass on any row, counts every row with roleUnread, and journals once', async () => {
+      for (const designation of [{ kind: 'unmeasured', why: 'the row is unreadable' } as DesignationRead, 'throws' as const]) {
+        const h = harness({ lanes: LIVE, coordinators: ['lane-a-project-a'], designation });
+        const rows = [row('lane-a-project-a', null), row('lane-a-project-b', null, { child: { kind: 'child', runId: 7 } })];
+        const r = await profilePass(h.deps, rows);
+        expect(h.sent).toEqual([]);
+        expect(r).toMatchObject({ would: 0, written: 0, roleUnread: 2 });
+        await profilePass(h.deps, rows);
+        expect(h.logs.filter((l) => l.includes('whose role could not be decided'))).toHaveLength(1);
+      }
+    });
+    it('a designation that reads again after an unmeasured pass writes as before', async () => {
+      const h = harness({ lanes: LIVE, coordinators: ['lane-a-project-a'], designation: { kind: 'unmeasured', why: 'x' } });
+      await profilePass(h.deps, [row('lane-a-project-a', null)]);
+      expect(h.sent).toEqual([]);
+      h.deps.coord.designationRead = () => ({ kind: 'not-designated', row: null });
+      await profilePass(h.deps, [row('lane-a-project-a', null)]);
+      expect(h.sent).toHaveLength(1);
+    });
   });
 
   it('a route field it could not read is skipped and counted, never written blind', async () => {

@@ -312,7 +312,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
-  'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
+  'continuity_start_loads', 'answer_marks', 'overlord_authority_head', 'overlord_designation',
   'operator_responses', 'response_receipts', 'response_boots'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
@@ -373,7 +373,9 @@ describe(TABLES_PIN, () => {
         'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
       continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
-      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'mintGeneration', 'setGenerationDue', 'setHoldOff', 'stepGeneration']
+      // The designation's go-live restamps the pending body's generation with its term (Overlord W1 designation, X5).
+      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'mintGeneration', 'restampOverlordGeneration', 'setGenerationDue', 'setHoldOff',
+        'stepGeneration']
         .map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_cursor: ['server/src/continuity/continuityStore.ts#advanceCursorIn'],
       continuity_snapshots: ['server/src/continuity/continuityStore.ts#insertSnapshot'],
@@ -403,6 +405,9 @@ describe(TABLES_PIN, () => {
       // The Overlord authority journal's head row (Overlord W1, H27): one writer, the apply step of the journal's append, inside
       // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
       overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
+      // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
+      overlord_designation: ['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'stopDone']
+        .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`),
       // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
       // push's verdict (a never-delivered row holding no receipt, review 2214 F2); the receipts door's one insert, and
       // nothing deletes a receipt; the boot's record.
