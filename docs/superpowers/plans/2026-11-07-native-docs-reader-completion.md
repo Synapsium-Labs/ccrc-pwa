@@ -379,6 +379,10 @@ Each dispatch includes only wave specifics: programme/spec/plan paths; exact tas
 
 ## Deviations found
 
+- **D-8659 (2026-11-16)** — mockup-historical-class-cap. Task 6 (C1): departs from base §5.6.3's Budgets sentence ("All are decided from listed sizes **before any fetch**") and from the `inline` verdict's `size`, which that sentence makes the listed size. For a historical commit C that differs from the served tree's commit, the served listing still decides eligibility, but its size is not C's size: admission reserves the full existing class cap per asset before any fetch, nested CSS discoveries included, and a reservation never shrinks or recycles within one attempt. An `inline` row's `size` is that reservation. Same-pin listing sizes are used only when tied to the exact admitted pin. The UI discloses the conservative historical admission. This is the coordinator design call the completion plan's Task 6 labels; Task 6 amends the sentences. Issued to run 2209 at its opening.
+
+Reserve issued to run 2209: 8660, 8661, 8662.
+
 No new deviation number is defined by this documentation-only plan. At each implementation run opening the coordinator allocates and defines its known departures in the ledger in the same act. The historical class-cap asset reservations (including the base spec's listed-size amendment), conditional Docs mount focus in Task 13 (including its three rich-docs focus sentences), conservative diff limits and serial C/D decomposition are labelled coordinator calls, not historical operator rulings. A departure from an existing normative sentence gets an issued entry before dispatch, not a guessed number.
 
 ## Results
