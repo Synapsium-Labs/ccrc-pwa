@@ -3769,6 +3769,105 @@ every server test file that drives a copy passes; the `macos.yml` run on the bra
 wave-done mail (it runs after the one push).
 **Rollback.** A plain revert.
 
+### Task C36: the terminal view's stale and overlapping characters, from the drawer's provisional mask (D-8665) — now
+
+**Why.** The operator saw a session's terminal on desktop drawn with doubled lines, two lines' letters interleaved in
+one row, and leftover characters in rows that should be blank, with tmux's status row ending `‹secret m` and its date
+alone on the row below. The brief's lead, a terminal narrower or wider than the program believes, was measured and does
+not hold: the xterm, the tmux client and the window are 220 columns on every glass and in both views. Each claim below
+is labelled measured or inferred in `c36.md`, with the widths, the reproduction and the screenshots.
+
+**What was done.**
+- **The cause** (measured through a real tmux at the drawer's 220 x 51, on headless xterm). With fingerprint rows held,
+  the drawer's masker drew a 15-column provisional `SECRET_MASK` in place of an open run whose hold had expired, and
+  erased it later with `CUB 15` and `ECH 15`. The date that ends tmux's status row is 9 columns and ends in the last
+  column of the last row, so the mask ran past the edge, the terminal wrapped and scrolled the whole screen, and every
+  later redraw landed a row off tmux's picture of the glass: all 51 rows differed from the raw stream's screen, against
+  none with the shape-only masker.
+- **The change**, in `DrawerMask` alone: a withheld run is drawn as nothing until it resolves, so the drawer sends the
+  stream's own bytes unless a secret is masked in it. No mark can be drawn and taken back safely without knowing the
+  cursor's column (a mark at the right edge leaves the wrap pending, and neither `CUB` nor a saved cursor recovers it,
+  measured). D-5995's fail-closed rule and its accepted gaps are unchanged. No window size, no `ccd`, no PWA file.
+- **Tests.** `drawer-mask-screen.test.ts` renders on `@xterm/headless` (a new server dev dependency): Claude-Code-like
+  redraws ending on the status row's date leave the screen exactly as the raw stream draws it; a secret-free stream cut
+  anywhere reaches the terminal byte for byte; a key typed one key at a time still never shows past its first 19 bytes;
+  and no byte of a withheld run reaches the screen before it resolves, nor ever when it never resolves (two leak
+  mutants turn it red). Red first on `main`'s masker. `@xterm/headless` is pinned to 6.0.0, the PWA's xterm release. Two assertions in `secret-mask.test.ts` that pinned the drawn mark now pin its absence.
+
+- **D-8665** — `drawer-provisional-mark-dropped`: Task C36, issued on 2026-11-16. The drawer's provisional mask, 15
+  columns drawn in place of a shorter run and erased with `CUB` and `ECH`, ran past the right edge on tmux's status
+  row and moved the glass a row off tmux's picture of it. A withheld run is now drawn as nothing until it resolves.
+  Departures are named by slug in `c36.md`, `drawer-final-mask-columns` among them (reported, not fixed).
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its three cases are red on `main`'s masker;
+`secret-mask.test.ts` and `pty.test.ts` pass in full; before and after screenshots at 1920 and 390 px from a fixture.
+**Rollback.** A plain revert.
+
+### Task C37: the programme page shows its work, done and outstanding (design) (D-8669) — now
+
+**Why.** The operator, 2026-11-16, on a programme's page: "I want to see at a glance on that page what work remains
+outstanding in the programme, what work is already done, at a high level." The page shows Goals, Waiting on you and the
+open runs, and nothing lists the work the programme set out to do. This task is the design only: a spec with mockups,
+and a build plan. No product code.
+
+**What was done.** The spec is `docs/superpowers/specs/2026-11-16-programme-work-map-design.md`, with desktop, phone
+and no-plan mockups in the folder beside it. The build plan is `docs/superpowers/plans/2026-11-16-programme-work-map.md`.
+- **Measured.** Five programmes of different shapes, and the server's plans and runs (spec §2). The stored plan (epics
+  and tickets, from the Linear hierarchy's wave 2) is the one structured source whose status the server moves itself.
+  2 of the 16 programmes with runs have one today. Plan checkboxes are not a status: 1,724 of 23,366 are ticked across
+  862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale
+  (this programme's has 40 rows for waves 1 to 42, against wave 132).
+  A machine wave is one run (no wave of six programmes holds two work runs), so a stage such as the Overlord's W1 spans
+  many waves and is stored nowhere; and the plan's rule tying each epic to a range of waves makes epics act as stages.
+- **Decided.** The card is built on the Linear hierarchy's plan model (programme, epic, checkpoint, ticket; its wave 2
+  is on `main`) and supersedes that plan's Task 5.2. To it the design adds a sequence axis: phases in order, each
+  referencing the epics and tickets it takes on, a ticket allowed in several phases, and a slip recorded as a carry
+  from one phase to a later one. The hierarchy's work model is unchanged; epics without wave ranges, which would let
+  them run side by side, are put to the operator (Q5). Done is derived from evidence the server checks (a done run, or
+  a pull request landed on the landing line), stored with its time and re-checked on every read. The Work card sits
+  below Goals: "N of M done" with a bar and a strip of each epic's count and checkpoints, then phases in order, each
+  ticket inside with its epic as a tag, a carried ticket counted once. The view carries both axes, so which one leads
+  changes only the card. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+  `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
+  runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
+  you moves to the top of the right column. The card replaces the Linear hierarchy plan's Task 5.2.
+- **The builder check** (a fresh reader of the first draft) found two gaps that would make "N of M" wrong: a run opened
+  with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
+  ticket done except its own run. In a plan that declares phases, `runs open` now refuses `ticket-required` while the
+  run's epic has an open declared ticket that no run holds, and a coordinator's `plan ticket-done` records a finished
+  ticket with evidence the server verifies (the hierarchy's approved "the coordinator closes it").
+- **The review** (run 2252, 19 findings, all text) led to the coordinator's rulings: done derived and verified, carries
+  recorded, the view carrying both axes, and the hierarchy's model left unchanged except through the operator (Q5).
+  The rest corrected the refusal vocabulary, the claims each task waits for, the overlaps with the hierarchy's wave 3 in
+  flight and its Tasks 4.1, 4.3 and 6.1, the plan's four states (none, declared empty, ended, unreadable), the stuck
+  verdicts' reader, and three cells of the measurement.
+- **For the operator.** Five questions, raised as Waiting on you items. The operator answered four with the
+  recommendations: a stage is a "phase" (R129, item 355), phases lead the card (R130, item 354), a phase becomes a
+  Linear label written by the hierarchy's sync (R131, item 356), and live programmes declare their plans at their next
+  wave boundary after the build lands (R132, item 353). Q5, may an epic have no wave range, is open.
+- **The build** is seven tasks, WM0 to WM6, one PR each; WM6 is built only if Q5 is answered yes. Only WM4 touches
+  claim 4522's files (`ProgrammeScreen.tsx`, `pwa/src/lib/api.ts` and their test), so it waits for that claim. WM0 and
+  WM1 wait for the hierarchy wave 3's claim on `planStore.ts`, or a co-edit grant, and WM1 for `shared/api.ts`.
+
+**Departure `phase-is-not-epic`.** The first draft mapped a phase to an epic and a task to a ticket, and asked only which
+words the card should use. The operator's answer to that question (item 351, 2026-11-16): "the thing is that a
+wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." Then, the same day:
+"I guess we can allow references to epics / tickets that are part of a wave/phase"; a ticket in more than one phase is
+"a good idea"; and "I guess if we properly implement linear it should have the initiatives, projects, etc." The spec now
+keeps the two axes apart, builds the work on the hierarchy's model unchanged, and adds phases that reference it, with
+recorded carries (spec §3 and §8, D14 to D18). Items 349 to 351 were replaced by four new ones on the corrected model
+(353 to 356), and the review added a fifth (Q5).
+
+- **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
+  stored plan as the one source of its work list, on two axes, the sequence (phases, added to the plan) and the work
+  (epics and tickets), with a status decided once on the server, and falls back to the programme's runs. It replaces the
+  Linear hierarchy plan's Task 5.2. Departures are named by slug in the build plan: `phase-is-not-epic`,
+  `hierarchy-5-2-replaced`, `waiting-card-moves-right` and `ticket-required-and-done`.
+
+**Acceptance.** The spec, its mockups and the build plan are on `main`. A fresh builder read the spec before the PR.
+`deviation-refs`, `dtbd` and `topology-clean` pass, and the private-name scan of every new file is clean.
+**Rollback.** A plain revert; nothing ships.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

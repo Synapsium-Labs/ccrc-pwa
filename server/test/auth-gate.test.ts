@@ -401,7 +401,10 @@ describe('the scanner is looking at something', () => {
     // session-gated and NOT EXEMPT, no box token; the rank door works dark (`flag-off`), so it is not in FLAG_AWARE.
     // 23 since the answer marks (Overlord W1): `POST /api/answer-marks`, the same registration, session-gated and NOT EXEMPT, no
     // box token; it works dark (`flag-off`) and answers a bodiless request the same dark or signed in, so it is not in FLAG_AWARE.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(23);
+    // 24 since the ratify door (Overlord W1, portfolio B): `POST /api/programmes/:slug/goals/ratify`, the same registration,
+    // session-gated and NOT EXEMPT, no box token; it takes the account gate (`auth-off` dark), and with no store both its dark
+    // and its signed-in answers are 501, so it is not in FLAG_AWARE.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(24);
     // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
     expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
@@ -666,9 +669,12 @@ describe('the scanner is looking at something', () => {
     // 245 since the receipts door (Overlord W1 responses A), in `responses/routes.ts`: `POST /api/responses/receipts`,
     // session-gated and NOT EXEMPT, no box token: the HTTP half 241 -> 242, the gated count 146 -> 147, the exempt-HTTP count
     // stays 94.
-    // 246 since the hierarchy item route (Linear hierarchy W3 Task 3.5), in `coord/hierarchyRoutes.ts`: `POST /api/items/:id/linear`,
-    // session-gated and NOT EXEMPT, no box token: the HTTP half 242 -> 243, the gated count 147 -> 148, the exempt-HTTP count stays 94.
-    expect(ROUTES.length).toBe(246);
+    // 246 since the ratify door (Overlord W1 portfolio B, 2026-11-16), in `coord/ledgersRoutes.ts`: `POST
+    // /api/programmes/:slug/goals/ratify`, session-gated and NOT EXEMPT, no box token: the HTTP half 242 -> 243, the gated
+    // count 147 -> 148, the exempt-HTTP count stays 94.
+    // 247 since the hierarchy item route (Linear hierarchy W3 Task 3.5), in `coord/hierarchyRoutes.ts`: `POST /api/items/:id/linear`,
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 243 -> 244, the gated count 148 -> 149, the exempt-HTTP count stays 94.
+    expect(ROUTES.length).toBe(247);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -846,7 +852,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 246 scanned + the static wildcard when the bundle is built.
+    // 247 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1562,7 +1568,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 243 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 244 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1626,7 +1632,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 243 HTTP routes, not the 94 exempt.
+          //    is not itself flag-aware — the assertion that covers all 244 HTTP routes, not the 94 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

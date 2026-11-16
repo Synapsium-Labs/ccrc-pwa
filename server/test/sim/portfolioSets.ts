@@ -40,7 +40,8 @@ export const PORTFOLIO_ITEM_WAIT_SET = set([
 
 export const PORTFOLIO_FOR_SET = set([
   // The plan's red checks: answer 0 for an empty cycle series; count a review run as a wave; count a parent's answer;
-  // count a released ask that is not live up to now. P-FOR-20 to P-FOR-27 are the fix round's (review 2130, F3 and F4).
+  // count a released ask that is not live up to now. P-FOR-20 to P-FOR-27 are the fix round's (review 2130, F3 and F4), and
+  // P-FOR-28 to P-FOR-33 portfolio B's (its F10).
   { id: 'P-FOR-1', old: 'series.length === 0 ? { n: 0, medianMs: null, p85Ms: null }', new: 'series.length === 0 ? { n: 0, medianMs: 0, p85Ms: 0 }' },
   { id: 'P-FOR-2', old: 'if (!countsAsWave(r.kind)) continue;', new: "if (r.kind === 'unknown') continue;" },
   { id: 'P-FOR-3', old: 'if (a.answeredBy !== ASK_OPERATOR_PRINCIPAL) return null;', new: 'if (false) return null;' },
@@ -49,7 +50,7 @@ export const PORTFOLIO_FOR_SET = set([
   { id: 'P-FOR-6', old: 'return ranked && runs.some(', new: 'return runs.some(' },
   { id: 'P-FOR-7', old: 'r.closedAt !== null && r.closedAt >= now - WINDOW_MS)', new: 'r.closedAt !== null)' },
   { id: 'P-FOR-8', old: "w.bucket === 'failed' && w.rep.closeDetail === NEVER_STARTED_DETAIL", new: "w.bucket === 'failed'" },
-  { id: 'P-FOR-9', old: 'if (d === null || w.rep.closedAt === null) cycleUnmeasured += 1;', new: 'if (d === null || w.rep.closedAt === null) {}' },
+  { id: 'P-FOR-9', old: 'if (d === null || w.rep.closedAt === null || rebuiltWave(w)) cycleUnmeasured += 1;', new: 'if (d === null || w.rep.closedAt === null || rebuiltWave(w)) {}' },
   { id: 'P-FOR-10', old: 'return shownAt !== null && shownAt <= now;', new: 'return true;' },
   { id: 'P-FOR-11', old: 'asks: asks.filter((a) => a.live === true).length', new: 'asks: asks.length' },
   { id: 'P-FOR-12', old: 'open: isOpenRun(r), r', new: 'open: false, r' },
@@ -69,6 +70,13 @@ export const PORTFOLIO_FOR_SET = set([
   { id: 'P-FOR-25', old: 'a.releasedAt < from) return null;', new: 'a.releasedAt <= from) return null;' },
   { id: 'P-FOR-26', old: 'w.rep.closedAt >= t', new: 'w.rep.closedAt > t' },
   { id: 'P-FOR-27', old: 'r.closedAt >= now - WINDOW_MS', new: 'r.closedAt > now - WINDOW_MS' },
+  // Portfolio B, review 2130 F10: durations never negative, and a rebuilt wave never aged or timed from its stand-in.
+  { id: 'P-FOR-28', old: 'cycles.push(Math.max(0, w.rep.closedAt - d));', new: 'cycles.push(w.rep.closedAt - d);' },
+  { id: 'P-FOR-29', old: 'Math.max(0, now - Math.min(...started))', new: '(now - Math.min(...started))' },
+  { id: 'P-FOR-30', old: 'const started = open.filter((w) => !rebuiltWave(w))', new: 'const started = open' },
+  { id: 'P-FOR-31', old: 'w.rep.closedAt === null || rebuiltWave(w)) cycleUnmeasured', new: 'w.rep.closedAt === null) cycleUnmeasured' },
+  { id: 'P-FOR-32', old: 'oldestOpenUnmeasured: open.filter(rebuiltWave).length,', new: 'oldestOpenUnmeasured: 0,' },
+  { id: 'P-FOR-33', old: "const rebuiltWave = (w: Wave): boolean => w.runs.some((r) => r.rebuilt === true);", new: "const rebuiltWave = (w: Wave): boolean => w.rep.rebuilt === true && w.runs.length > 99;" },
 ]);
 
 export const PORTFOLIO_MUTANT_SETS: Record<string, MutantSet<never>> = {

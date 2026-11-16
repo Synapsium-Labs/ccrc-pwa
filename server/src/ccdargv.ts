@@ -978,6 +978,12 @@ export const CCD_ARGV = {
     if (!isRegistryId(id)) throw new Error('CCD_ARGV.poolAnswer: the session id is not a registry id');
     return argv(['pool-answer', '--session', id]);
   },
+  /** The Overlord's sleep markers (Overlord W1 ccd arms, plan Task 3; spec §3.2, C4): `ccd keep-awake --session <id>
+   *  --state on|off` sets or clears one session's `.no-hibernate` and `.no-roll`, holding keep-awake's own stamp.
+   *  `coordPause`'s and `winSize`'s shape: granted as `['keep-awake','--session']` and enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`. No caller in this piece: designation A's create and retire call it (X6), pass a
+   *  registry-validated id, add their own `id-argv-census` rows, and ask `ccdCan(state, 'keepAwake')` first. */
+  keepAwake: (id: string, state: 'on' | 'off') => argv(['keep-awake', '--session', id, '--state', state]),
 
   /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
    *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
@@ -1238,6 +1244,12 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  This is a note on the token, not a wrapper function — the gate belongs at
  *  that caller's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
+
+/** The `ccd caps` token that says this box's ccd has `ccd keep-awake` (Overlord W1 ccd arms, cross-plan ruling X8; plan
+ *  slug keep-awake-token-is-keep-awake-v1: `win-size-v1`'s shape, since a refusing row is never answered by its bare verb).
+ *  Read it with `capSupported`, never `verbSupported`, so a box whose ccd lacks the verb answers `capability-missing`
+ *  (spec Table 11.6) rather than a permit on no evidence. Spelled once in `server/src`. */
+export const KEEP_AWAKE_CAP = 'keep-awake-v1';
 
 /** The `ccd caps` token that says this box has child-workspace reclamation
  *  (spec 2026-09-22 §5.5, wave 3): `ws-audit --reclaim`, `ws-reclaim` with its
@@ -1575,6 +1587,7 @@ export const CCD_CAN = {
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
+  keepAwake: capRow(KEEP_AWAKE_CAP),
   poolAnswer: capRow(POOL_SET_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
   docsShowDraft: capRow(DOCS_CAP),

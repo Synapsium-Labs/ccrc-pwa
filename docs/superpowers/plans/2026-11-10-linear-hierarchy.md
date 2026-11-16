@@ -164,6 +164,19 @@ number from `POST /api/ledger/deviations`.
 - **D-8407 (2026-11-13)** — linear-hierarchy-fx2: FX2's hierarchy capture lands as recorded fixtures, and its one
   schema defect is fixed: `ProjectMilestone` has no `creator`, so no document selects one and a milestone binds by name
   inside its project. Its other findings are the departures above.
+- **D-8672 (2026-11-16)** — linear-hierarchy-programme: the programme is opened under the run system for waves 3 to 7.
+  The design, waves 1 and 2 and FX2 landed as plain PRs with no run, so no programme row, plan or ledger existed. The
+  coordinator writes `docs/superpowers/programs/linear-hierarchy.md`, declares the plan with `ccrc-api plan put` (a
+  `foundations` epic for waves 1 and 2, its three checkpoints met by #2612, #2661 and #2746, and one epic per wave from
+  3 to 7), numbers run waves 3 to 7 of 7, and ticks the checkboxes of waves 1 and 2 below after measuring their code on
+  `main`. Further departures of waves 3 to 7 take numbers from the block of numbers 8675 to 8681, each issued by the coordinator and defined here when issued.
+- **D-8673 (2026-11-16)** — linear-hierarchy-migration-slots: wave 2's migration landed as entry **59**, not 57. Wave 4's
+  migration (58 above) takes the next free slot when it is built (`main` ends at 82 on 2026-11-16) and is renumbered
+  again at landing if another PR takes that slot first. The Global Constraints' re-measure command still decides.
+- **D-8674 (2026-11-16)** — linear-hierarchy-abandoned-initiative: an abandoned programme's initiative reads
+  `Canceled`. Task 3.1 uses a canceled status for it only if FX2 found one, and FX2's answer 2 found `Canceled`, so
+  Task 3.3's row "initiative `Completed` with 'Abandoned on <date>: <why>'" sets `Canceled` with that line instead. A
+  programme ended `done` still reads `Completed`. `LINEAR_INITIATIVE_STATUSES` holds the five values FX2 recorded.
 - **D-8675 (2026-11-16)** — conflict-detail: a repeated create's "conflict on insert" and "name not unique" answers are
   recognised in `hierarchyOps.ts`'s shapers (`ops.ts` is frozen), carried as `detail` through `runCcrcOp`. Record:
   `2026-11-10-linear-hierarchy/w3-plan-sync.md`.
@@ -372,7 +385,7 @@ records that text):
 - issue (`issueOwned`, `teamOpenIssues`, `changedIssues`): `id identifier title description updatedAt team { key } state { type } project { id } projectMilestone { id } parent { id } labels(first: 50) { nodes { id } }`
 - every mutation answers `success` and the created or updated object's `id` (and `identifier` for issues)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // server/test/linear-hierarchy-ops.test.ts
@@ -405,12 +418,12 @@ it('withCcrcProvenance appends the line once', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd server && npx vitest run --maxWorkers=2 test/linear-hierarchy-ops.test.ts test/linear-fixtures.test.ts`
 Expected: FAIL, `hierarchyOps.js` not found.
 
-- [ ] **Step 3: Write the documents in `ops.ts`, the rows in `server/src/linear/hierarchyOps.ts`, and spread the
+- [x] **Step 3: Write the documents in `ops.ts`, the rows in `server/src/linear/hierarchyOps.ts`, and spread the
   documents into `LINEAR_DOCUMENTS`**
 
 Write each document once, in `ops.ts`. Constructed fixtures follow `mutation-attachment-link-url-constructed.json`'s shape (fixture
@@ -422,12 +435,12 @@ carries no `x-complexity`), named `read-initiative-by-id-constructed.json`, `rea
 `read-issue-owned-constructed.json`, `mutation-{initiative-create,initiative-update,initiative-to-project-create,initiative-to-project-delete,project-create,project-update,project-milestone-create,project-milestone-update,issue-relation-create}-constructed.json`.
 Each gets an `AWAITING_RECAPTURE` row in `linear-fixtures.test.ts`, and the README's table gains them under "constructed".
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd server && npx vitest run --maxWorkers=2 test/linear-hierarchy-ops.test.ts test/linear-fixtures.test.ts test/linear-ops.test.ts test/single-definition/linear-ops.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/linear/hierarchyOps.ts server/src/linear/ops.ts server/test/linear-hierarchy-ops.test.ts \
@@ -487,7 +500,7 @@ names before it merges. Every later task that depends on an answer reads it from
   - `LinearPendingInput.actor: AccountActor | CcrcActor | null`. A ccrc write row: `sessionId` and `sessionUuid` null,
     `actor` a minted `CcrcActor`; `target` an issue identifier or a lowercase UUID; `result` an identifier or a UUID.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 it('a ccrc write row records actor ccrc:<pass> and no session pair', () => {
@@ -514,10 +527,10 @@ it('the policy point passes a ccrc ask to the policy unchanged', async () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-journal.test.ts test/linear-policy.test.ts test/linear-ops.test.ts`; Expected: FAIL (`ccrcActor` not exported).
-- [ ] **Step 3: Implement** the types and `pendingRefusal`'s ccrc arm in `journal.ts`; `settleRefusal` admits a UUID `result` on a hierarchy op; `policy.ts`'s docstring keeps "the actor is attribution, never a grant".
-- [ ] **Step 4: Run them to verify they pass** — same command; Expected: PASS.
-- [ ] **Step 5: Commit** — `git add server/src/linear/policy.ts server/src/linear/journal.ts server/test/linear-journal.test.ts server/test/linear-policy.test.ts server/test/linear-ops.test.ts`; message `feat(linear): the ccrc actor in the write policy and the journal (D-8180)`.
+- [x] **Step 2: Run them to verify they fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-journal.test.ts test/linear-policy.test.ts test/linear-ops.test.ts`; Expected: FAIL (`ccrcActor` not exported).
+- [x] **Step 3: Implement** the types and `pendingRefusal`'s ccrc arm in `journal.ts`; `settleRefusal` admits a UUID `result` on a hierarchy op; `policy.ts`'s docstring keeps "the actor is attribution, never a grant".
+- [x] **Step 4: Run them to verify they pass** — same command; Expected: PASS.
+- [x] **Step 5: Commit** — `git add server/src/linear/policy.ts server/src/linear/journal.ts server/test/linear-journal.test.ts server/test/linear-policy.test.ts server/test/linear-ops.test.ts`; message `feat(linear): the ccrc actor in the write policy and the journal (D-8180)`.
 
 ### Task 1.3: The `sync` and `migration` rate lanes
 
@@ -528,7 +541,7 @@ it('the policy point passes a ccrc ask to the policy unchanged', async () => {
   `LINEAR_LANE_CALLS_PER_HOUR = { proxy: 1_400, request: 100, floor: 200, sync: 200, migration: 100 }` (still summing
   to `LINEAR_SLOT_CALLS_PER_HOUR`, 2,000; the migration's share is below the sync's and the sessions', §10.6).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 it('the five lanes sum to the slot', () => {
@@ -545,10 +558,10 @@ it('the migration lane is the smallest write lane', () => {
 });
 ```
 
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-rate.test.ts`; Expected: FAIL.
-- [ ] **Step 3: Implement** the two rows; the restart share applies to them as to every lane.
-- [ ] **Step 4: Run to pass** — same; Expected: PASS (the existing "restart starts at a quarter" rows cover the new lanes).
-- [ ] **Step 5: Commit** — `git add server/src/linear/rate.ts server/test/linear-rate.test.ts`; `feat(linear): the sync and migration rate lanes (D-8180)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-rate.test.ts`; Expected: FAIL.
+- [x] **Step 3: Implement** the two rows; the restart share applies to them as to every lane.
+- [x] **Step 4: Run to pass** — same; Expected: PASS (the existing "restart starts at a quarter" rows cover the new lanes).
+- [x] **Step 5: Commit** — `git add server/src/linear/rate.ts server/test/linear-rate.test.ts`; `feat(linear): the sync and migration rate lanes (D-8180)`.
 
 ### Task 1.4: The directory's status types (unsent until wave 3)
 
@@ -575,14 +588,14 @@ empty and `unknown`; nothing new is sent); fixture: `directory-project-statuses-
   - `export function statusOfType(entries: LinearDirectoryEntries, kind: 'project' | 'issue', type: string, teamKey: string | null): { id: string } | null`
     in `ops.ts`: the first status of that type (issue states per team), never by name.
 
-- [ ] **Step 1: Write the failing tests** — `a directory page of project statuses reads id, name and type`;
+- [x] **Step 1: Write the failing tests** — `a directory page of project statuses reads id, name and type`;
   `a wave-1 refresh sends exactly the documents it sent before` (the fetch fake's request log against today's four);
   `statusOfType finds by type and ignores a renamed name` (a status named `Shipped` of type `completed` is found for
   `completed`); `statusOfType answers null when no status has the type`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-directory-hierarchy.test.ts test/linear-ops.test.ts test/linear-fixtures.test.ts`.
-- [ ] **Step 3: Implement**; the directory keeps the slot-and-digest keying unchanged.
-- [ ] **Step 4: Run to pass** — same command.
-- [ ] **Step 5: Commit** — the files and the fixture; `feat(linear): status types in the directory, unsent until the capture (D-8180)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-directory-hierarchy.test.ts test/linear-ops.test.ts test/linear-fixtures.test.ts`.
+- [x] **Step 3: Implement**; the directory keeps the slot-and-digest keying unchanged.
+- [x] **Step 4: Run to pass** — same command.
+- [x] **Step 5: Commit** — the files and the fixture; `feat(linear): status types in the directory, unsent until the capture (D-8180)`.
 
 ### Task 1.5: `runCcrcOp`, the server-internal caller
 
@@ -603,15 +616,15 @@ write: policy ask with `{ kind: 'ccrc', pass }` → journal `pending` (refused �
 `callLinear` → shape → journal settle (`ok` with `created`, `refused`/`failed`, or `unknown` with `maybeSent: true` on a
 timeout after send) → rate settle (`oneCallOutcome`). A read skips the policy and the journal.
 
-- [ ] **Step 1: Write the failing tests** — `a write is journaled pending before the call and ok after, with the created UUID`;
+- [x] **Step 1: Write the failing tests** — `a write is journaled pending before the call and ok after, with the created UUID`;
   `a denied policy sends nothing and journals denied`; `a refused journal row sends nothing`;
   `a timeout after send answers maybeSent and journals unknown`; `a rate-limited answer closes the slot for its wait`;
   `a read takes the lane and journals nothing`; `the key is read per call and never appears in an outcome or a log`
   (spy on `console.warn`, assert no `lin_api_fixture` text).
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-ccrc-call.test.ts`.
-- [ ] **Step 3: Implement** `runCcrcOp`; it never throws (a thrown fetch is `unreachable`).
-- [ ] **Step 4: Run to pass**, then the wave's suite: `cd server && npx vitest run --maxWorkers=2 test/linear-ccrc-call.test.ts test/linear-hierarchy-ops.test.ts test/linear-journal.test.ts test/linear-policy.test.ts test/linear-rate.test.ts test/linear-fixtures.test.ts test/linear-ops.test.ts test/linear-key-containment.test.ts test/linear-proxy-routes.test.ts`
-- [ ] **Step 5: Commit** — `feat(linear): runCcrcOp, the server's own Linear caller (D-8180)`. The key containment census
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-ccrc-call.test.ts`.
+- [x] **Step 3: Implement** `runCcrcOp`; it never throws (a thrown fetch is `unreachable`).
+- [x] **Step 4: Run to pass**, then the wave's suite: `cd server && npx vitest run --maxWorkers=2 test/linear-ccrc-call.test.ts test/linear-hierarchy-ops.test.ts test/linear-journal.test.ts test/linear-policy.test.ts test/linear-rate.test.ts test/linear-fixtures.test.ts test/linear-ops.test.ts test/linear-key-containment.test.ts test/linear-proxy-routes.test.ts`
+- [x] **Step 5: Commit** — `feat(linear): runCcrcOp, the server's own Linear caller (D-8180)`. The key containment census
   (`linear-key-containment.test.ts`) gains `ccrcCall.ts` as an allowed reader of the key, with its mutant.
 
 ---
@@ -672,13 +685,13 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
 - Statuses: `not-plan-owner`, `not-linear-owner` 403; `unknown-epic`, `unknown-checkpoint`, `unknown-ticket` 404;
   `plan-too-large`, `plan-bad-body`, `waves-not-contiguous`, `dropped-needs-reason` 400; every other new word 409.
 
-- [ ] **Step 1: Write the failing tests** — `every PLAN_REFUSALS word has a status`; `isPlanKebab admits the plan words and refuses run-unreadable`;
+- [x] **Step 1: Write the failing tests** — `every PLAN_REFUSALS word has a status`; `isPlanKebab admits the plan words and refuses run-unreadable`;
   `parseItemAction reads each linear verb and refuses one with a missing field`; `a linear action never abandons`;
   `the five new run refusals are RunRefuseCodes with statuses`; the single-definition row: `LINEAR_SYNC_PROGRAMME is spelled once`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-vocabulary.test.ts test/single-definition/plan.test.ts test/mail-routes.test.ts`.
-- [ ] **Step 3: Implement**; `mail-routes.test.ts`'s guard list gains `|| isPlanKebab(tok)`; `shared/api.ts` gains no import line.
-- [ ] **Step 4: Run to pass** — same, plus `test/peers-claims-l0.test.ts test/collect-lane-l0.test.ts test/refusal-status.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the plan vocabulary (D-8181)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-vocabulary.test.ts test/single-definition/plan.test.ts test/mail-routes.test.ts`.
+- [x] **Step 3: Implement**; `mail-routes.test.ts`'s guard list gains `|| isPlanKebab(tok)`; `shared/api.ts` gains no import line.
+- [x] **Step 4: Run to pass** — same, plus `test/peers-claims-l0.test.ts test/collect-lane-l0.test.ts test/refusal-status.test.ts`.
+- [x] **Step 5: Commit** — `feat(plan): the plan vocabulary (D-8181)`.
 
 ### Task 2.2: Migration 57 and the plan store
 
@@ -803,7 +816,7 @@ binding to `pending`. `plan_sync_due.program` holds a programme slug or `upkeep:
     `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number): void` (increments `attempts`)
   - settings: `hierarchySettingsOf(db, project)`, `setHierarchySettings(db, project, s: HierarchySettingsBody, by: string, at: number)`
 
-- [ ] **Step 1: Write the failing tests** — `migration 57 applies on a file at 56 and an older build's SELECTs still run`;
+- [x] **Step 1: Write the failing tests** — `migration 57 applies on a file at 56 and an older build's SELECTs still run`;
   `every pre-existing programme reads planRequired 0 and a new one 1`; `linear-sync exists after the migration, paused`;
   `one real active programme plus linear-sync: soleActiveCoordinator still answers its claimant` (Review Focus 7);
   `a reconstructed programme reads planRequired 0`; `applyPlanChanges with newRow inserts the programme row active with
@@ -818,11 +831,11 @@ binding to `pending`. `plan_sync_due.program` holds a programme slug or `upkeep:
   epic`; `a ticket moved out of an epic settles the source epic`; `an Upkeep epic never settles done`;
   `core-vocab's handle ring stays green with planStore.ts holding the handle`;
   `a review run's advance moves no ticket`; `markSyncDue keeps the earlier dueAt`; `planOwnerOf prefers the newest claimant, then planBy`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-store.test.ts test/coord-db.test.ts`.
-- [ ] **Step 3: Implement** the entry with its header comment and the store; `store.ts` gains only the hook line and
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-store.test.ts test/coord-db.test.ts`.
+- [x] **Step 3: Implement** the entry with its header comment and the store; `store.ts` gains only the hook line and
   `reconstruct`'s column here.
-- [ ] **Step 4: Run to pass** — same, plus `test/coord-store.test.ts test/linking-store.test.ts test/single-definition/core-vocab.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): migration 57 and the plan store (D-8181)`.
+- [x] **Step 4: Run to pass** — same, plus `test/coord-store.test.ts test/linking-store.test.ts test/single-definition/core-vocab.test.ts`.
+- [x] **Step 5: Commit** — `feat(plan): migration 57 and the plan store (D-8181)`.
 
 ### Task 2.3: The plan deciders
 
@@ -859,7 +872,7 @@ binding to `pending`. `plan_sync_due.program` holds a programme slug or `upkeep:
     `gone` is `dead` or `absent` only. `unmeasured` is a doubt, neither live nor gone: it never raises *Name a Linear
     owner* and never holds an inbound issue (§7.5, the coordinator-autonomy ruling).
 
-- [ ] **Step 1: Write the failing tests** (one per rule, with the design's values):
+- [x] **Step 1: Write the failing tests** (one per rule, with the design's values):
 
 ```ts
 it('25 epics is plan-too-large', () => expect(parsePlanPut({ epics: range(25).map(epic) })).toMatchObject({ ok: false, word: 'plan-too-large' }));
@@ -878,10 +891,10 @@ it('the Linear owner of a shared key is the owning project\'s, and the default i
 it('an owner whose presence is unmeasured is not gone', …);
 ```
 
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-policy.test.ts`.
-- [ ] **Step 3: Implement**; pure, no I/O, no clock.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(plan): the plan deciders (D-8181)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-policy.test.ts`.
+- [x] **Step 3: Implement**; pure, no I/O, no clock.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `feat(plan): the plan deciders (D-8181)`.
 
 ### Task 2.4: The plan routes and the `ccrc-api plan` rows
 
@@ -926,7 +939,7 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
     body); every `plan.*` row is refused locally `no-plan-door` when a current cap file omits `plan-v1`.
   - `serverCaps` lists `plan-v1`.
 
-- [ ] **Step 1: Write the failing tests** — `a put by the claimant stores the plan and answers PlanView`;
+- [x] **Step 1: Write the failing tests** — `a put by the claimant stores the plan and answers PlanView`;
   `a put by another session is not-plan-owner`; `a programme with no run accepts its first put and records planBy`;
   `a put on a new slug with home inserts the programme row (active, that home, planRequired 1), and a later runs open
   keeps it`; `a put on a new slug with no home is plan-bad-body and stores nothing`; `a put on linear-sync is
@@ -938,10 +951,10 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
   `met with evidence {pr: 12} marks the checkpoint`; `ticket-add by a worker into another epic is not-plan-owner`;
   `ticket-move with drop and no why is dropped-needs-reason`; in `ccrc-api.test.ts`: `plan put sends byId and byUuid in the query and the body unchanged`,
   `plan show sends no identity`, `a current cap file without plan-v1 refuses no-plan-door and sends nothing`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-routes.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts`.
-- [ ] **Step 3: Implement**; the route decides nothing `planPolicy.ts` decides.
-- [ ] **Step 4: Run to pass** — plus `test/box-token-census.test.ts test/auth-gate.test.ts test/secret-mask.test.ts test/rings/fastify-l4.test.ts`; update each count after re-measuring on `origin/main`.
-- [ ] **Step 5: Commit** — `feat(plan): the plan verbs and their ccrc-api rows (D-8181)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-routes.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts`.
+- [x] **Step 3: Implement**; the route decides nothing `planPolicy.ts` decides.
+- [x] **Step 4: Run to pass** — plus `test/box-token-census.test.ts test/auth-gate.test.ts test/secret-mask.test.ts test/rings/fastify-l4.test.ts`; update each count after re-measuring on `origin/main`.
+- [x] **Step 5: Commit** — `feat(plan): the plan verbs and their ccrc-api rows (D-8181)`.
 
 ### Task 2.5: Runs attach to tickets
 
@@ -1012,7 +1025,7 @@ every file found. The fix:
   claimant) attaches only when `runs.ticketId IS NULL`, so a retried open never makes a second ticket or a second
   Linear issue.
 
-- [ ] **Step 1: Write the failing tests** — the five refusals, each with its gate-order row and reorder mutant;
+- [x] **Step 1: Write the failing tests** — the five refusals, each with its gate-order row and reorder mutant;
   `a run with no ticket gets one in its wave's epic, keyed run-<id>`; `a run opened with a ticket of project-a in project-b re-projects the ticket`;
   `an older programme (planRequired 0) with no plan opens as today`; `a review run never gets a ticket`;
   `a new slug with no row and no plan is plan-missing`; `runs open after plan close is plan-closed`;
@@ -1020,10 +1033,10 @@ every file found. The fix:
   refuses wave-epic-mismatch and leaves no planned row` (the drop injected through the `childBindGate` fake's wait);
   `a throw after the run insert rolls back the ticket too` (`plan-run-attach.test.ts`); the coordinator corpus names
   the five codes; `plan.md` names every wave-2 plan verb and the body's `home`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/open-run-preconditions.test.ts test/run-routes.test.ts test/plan-run-attach.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts test/ccrc-api-closed.test.ts test/skill-size-ratchet.test.ts`.
-- [ ] **Step 3: Implement**; the five codes are quoted in `server/src/coord` (the reverse scan).
-- [ ] **Step 4: Run to pass** — plus the measured ripple files above, at most 12 per command.
-- [ ] **Step 5: Commit** — the ripple commit first (above), then `feat(plan): runs attach to tickets (D-8181)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/open-run-preconditions.test.ts test/run-routes.test.ts test/plan-run-attach.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts test/ccrc-api-closed.test.ts test/skill-size-ratchet.test.ts`.
+- [x] **Step 3: Implement**; the five codes are quoted in `server/src/coord` (the reverse scan).
+- [x] **Step 4: Run to pass** — plus the measured ripple files above, at most 12 per command.
+- [x] **Step 5: Commit** — the ripple commit first (above), then `feat(plan): runs attach to tickets (D-8181)`.
 
 ### Task 2.6: The per-project hierarchy settings (server half)
 
@@ -1046,14 +1059,14 @@ Test `server/test/hierarchy-routes.test.ts`.
   - `GET /api/hierarchy` → `HierarchyAnswer` (session-gated, masked).
   - `export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRouteOpts): void`
 
-- [ ] **Step 1: Write the failing tests** — `setting ownsTeam on project-b clears it on project-a with the same key`;
+- [x] **Step 1: Write the failing tests** — `setting ownsTeam on project-b clears it on project-a with the same key`;
   `owner for all writes every project's linearOwner`; `GET answers the default owner and whether it is live`;
   `a hibernated owner reads live`;
   `an unknown owner id is bad-request`; `inboundWaiting reads 0 before wave 4`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/hierarchy-routes.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the per-project Linear owner and hierarchy settings (D-8181)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/hierarchy-routes.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
+- [x] **Step 5: Commit** — `feat(plan): the per-project Linear owner and hierarchy settings (D-8181)`.
 
 ### Task 2.7: The public-text check
 
@@ -1090,17 +1103,17 @@ place.
     — `private` mode passes; `public` and `unknown` refuse a team tracker id (`trackerIdsIn`) or any class match; a
     hashed hit names its class and `#h8`, never the text.
 
-- [ ] **Step 1: Write the characterization test first** — move nothing yet; assert `topology-clean.test.ts`'s
+- [x] **Step 1: Write the characterization test first** — move nothing yet; assert `topology-clean.test.ts`'s
   liveness rows (each class's `catches` and `passes`, still in that file) through the new import path, red until the
   move. `private-names.test.ts`'s CLI row still runs `server/test/private-names.mjs`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/topology-clean.test.ts test/public-text.test.ts test/private-names.test.ts test/license.test.ts`.
-- [ ] **Step 3: Move the classes and the matcher** (a commit that changes only where code lives and its imports), then add
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/topology-clean.test.ts test/public-text.test.ts test/private-names.test.ts test/license.test.ts`.
+- [x] **Step 3: Move the classes and the matcher** (a commit that changes only where code lives and its imports), then add
   `publicTextVerdict` and its tests: `a public project's ticket title naming KEY-123 is refused with ids`,
   `an email in a public summary is refused with its class`, `a private project passes both`,
   `an unknown project is treated as public`, `plan put answers linear-text-public at once and stores nothing`,
   `ticket-add and met evidence are checked too`, `publicTextClasses.ts holds no catches list` (the walk stays green).
-- [ ] **Step 4: Run to pass** — same, plus `test/plan-routes.test.ts`, the rings and single-definition files touched.
-- [ ] **Step 5: Commit** — two commits: `refactor(linking): the topology classes and the private-name matcher in shared
+- [x] **Step 4: Run to pass** — same, plus `test/plan-routes.test.ts`, the rings and single-definition files touched.
+- [x] **Step 5: Commit** — two commits: `refactor(linking): the topology classes and the private-name matcher in shared
   modules (D-8181)` and `feat(linking): the public-text check on plan text (D-8181)`.
 
 ---

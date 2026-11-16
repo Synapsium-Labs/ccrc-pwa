@@ -31,7 +31,7 @@
 import { describe, it, expect } from 'vitest';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
 import { buildDelegationJournalRecord } from '../src/coord/delegation-journal.js';
-import { recoverDelegation } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import {
   DELEGATION_DROPPED_UNMEASURED,
   DELEGATION_NO_MARKS,
