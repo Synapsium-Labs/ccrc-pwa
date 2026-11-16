@@ -5,7 +5,7 @@ Plan: `docs/superpowers/plans/2026-11-10-linear-hierarchy.md` (its "Deviations f
 Fixtures: `server/test/fixtures/linear/README.md`, "What FX2 measured"
 Home project: `ccrc-pwa`   Coordinator: the claimant of the programme's runs (`ccrc-api runs list`)
 Workspace: **a fresh child per wave** (one PR per child; every wave builds on the previous wave's merged code)
-Deviation block: D-8672..D-8681 (allocated 2026-11-16 at run-open; D-8672..D-8674 defined in the plan, the rest issued
+Deviation block: numbers 8672 to 8681 (allocated 2026-11-16 at run-open; D-8672..D-8674 defined in the plan, the rest issued
 by this coordinator in briefs). The waves' own numbers stay D-8182..D-8186.
 
 **What this programme is.** ccrc's plan gains epics, checkpoints and tickets, and ccrc keeps a matching Linear
@@ -61,6 +61,17 @@ They decide every question the plan leaves open.
   "initiative `Completed` with 'Abandoned on…'" becomes initiative `Canceled` with the "Abandoned on <date>: <why>"
   line. A finished programme still reads `Completed`. This follows the plan's own condition; it is not a new decision.
 
+- **2026-11-16 — the programme page's Plan section is the desktop-polish Work card (agreed with that programme's
+  coordinator).** The operator asked desktop-polish for a Work card on the programme page that shows a programme's work,
+  done and remaining. Its design (#2913, `docs/superpowers/specs/2026-11-16-programme-work-map-design.md`) builds on
+  this plan model unchanged, adds phases (`plan_phases`, `plan_phase_refs`), and keeps Task 5.2's read, done-when
+  list and Open in Linear links. So wave 5 builds Tasks 5.1, 5.3 and 5.4, and not `PlanSection.tsx`. This is
+  re-checked at wave 5's dispatch: if the Work card has not landed by then, the two coordinators agree who builds the
+  section before either does. The Work card's WM0/WM1 and this programme's wave 4 both change `planStore.ts`,
+  `planRoutes.ts`, `planPolicy.ts` and `ccd/ccrc-api`. Whichever lands second takes the next migration slot and merges
+  the other's store changes. If the operator rules that a phase becomes a label on each referenced issue (their item
+  356), that label is an owned field of the sync and the drift rules, built in a later wave of this programme.
+
 ## Carried constraints
 
 Reviewers of every wave get these.
@@ -103,4 +114,4 @@ Reviewers of every wave get these.
 Wave 3 (D-8182), the plan sync: plan Tasks 3.1 to 3.5, on a fresh child, building on `main` (waves 1 and 2 and FX2
 merged). Departures already ruled: D-8673 (no migration in this wave), D-8674 (abandoned → `Canceled`), and the FX2
 departures in D-8407 (milestone binds by name, "name not unique", the 80-character project name). New departures take
-numbers from this programme's block D-8675..D-8681, issued by the coordinator.
+numbers from this programme's block (numbers 8675 to 8681), issued by the coordinator.

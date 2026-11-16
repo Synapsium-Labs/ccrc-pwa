@@ -169,7 +169,7 @@ number from `POST /api/ledger/deviations`.
   coordinator writes `docs/superpowers/programs/linear-hierarchy.md`, declares the plan with `ccrc-api plan put` (a
   `foundations` epic for waves 1 and 2, its three checkpoints met by #2612, #2661 and #2746, and one epic per wave from
   3 to 7), numbers run waves 3 to 7 of 7, and ticks the checkboxes of waves 1 and 2 below after measuring their code on
-  `main`. Further departures of waves 3 to 7 take numbers from the block D-8675 to D-8681, issued by the coordinator.
+  `main`. Further departures of waves 3 to 7 take numbers from the block of numbers 8675 to 8681, each issued by the coordinator and defined here when issued.
 - **D-8673 (2026-11-16)** — linear-hierarchy-migration-slots: wave 2's migration landed as entry **59**, not 57. Wave 4's
   migration (58 above) takes the next free slot when it is built (`main` ends at 82 on 2026-11-16) and is renumbered
   again at landing if another PR takes that slot first. The Global Constraints' re-measure command still decides.
