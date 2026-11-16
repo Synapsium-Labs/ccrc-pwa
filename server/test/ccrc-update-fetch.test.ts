@@ -2223,7 +2223,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     const before = treeDigest(join(home, 'ccrc'));
     const r = runUpdate(home, ['--check']);
     expect(r.code).toBe(1);
-    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', caps: CAPS_NOW, floor: 'none', projection: 'not-configured', state: 'behind' });
+    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', caps: CAPS_NOW, floor: 'none', needs: 'none', projection: 'not-configured', state: 'behind' });
     expect(r.stdout).toMatch(/^this box: v1\.0\.0 \(oldsha[0-9a-f]*\) · latest: v2\.0\.0 — behind$/m);
     expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
     expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
@@ -2369,7 +2369,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
     const r = runUpdate(home, ['--check', '--to', 'v1.0.0']);
     expect(r.code).toBe(1);
-    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', caps: CAPS_NOW, floor: 'none', projection: 'not-configured', state: 'unversioned' });
+    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', caps: CAPS_NOW, floor: 'none', needs: 'none', projection: 'not-configured', state: 'unversioned' });
     expect(r.stdout).toMatch(/^this box: unversioned \(deploysha[0-9a-f]*\) · target: v1\.0\.0 — a release install would be the first on this box$/m);
     expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
   });
@@ -2395,7 +2395,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     // No role/timer/intent planted: this box's projection reads
     // not-configured, same word `ccrc channel` would print for it.
     expect(checkLine(r.stdout)).toBe(
-      `check: box=v1.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=none projection=not-configured state=behind`);
+      `check: box=v1.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=none needs=none projection=not-configured state=behind`);
   });
 
   // Plan D-3248: `--check` is answered by the

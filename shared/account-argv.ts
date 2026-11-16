@@ -15,6 +15,7 @@
 // Pure: no `node:*`, no Buffer. It imports the sub union from `./api.js` and the roster's grammars from `./roster.js`.
 import { ACCOUNT_SUBS, type AccountSub } from './api.js';
 import { ACCOUNT_ID_RE, HUES, MODEL_ID_RE } from './roster.js';
+import { FABLE_BILLINGS } from './rosterFacts.js';
 
 /** Why the builder refused, each its own word. `bad-sub`: off `ACCOUNT_SUBS`. `bad-id`: the lane id is off the
  *  roster's grammar, or given to a sub that names no lane, or missing from one that does. `bad-field`: a field this
@@ -106,7 +107,11 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
   // `--stated=-` is written when the caller carries it, and the verb holds it to 1 to 120 printable characters.
   'set': {
     cli: ['set'], lane: true, stdin: 'optional', stdinFlag: '--stated=-',
-    fields: { placement, limit, limitReset },
+    // The two serviceability facts (plan 2026-11-14 Task 3): the billing words come from L0, never respelled here.
+    fields: {
+      placement, limit, limitReset,
+      fableBilling: { flag: '--fable-billing', rule: e(...FABLE_BILLINGS) }, continuity: { flag: '--continuity', rule: e('on', 'off') },
+    },
   },
   'check': { cli: ['check'], lane: true, stdin: 'none', fields: {} },
   'enable': { cli: ['enable'], lane: true, stdin: 'none', fields: {} },

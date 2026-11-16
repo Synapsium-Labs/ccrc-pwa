@@ -21,7 +21,9 @@ import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-pool-a3-');
-  seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  // The session here has a pool set, so it is a set-side asker and every lane must carry a continuity record to serve
+  // it (serviceability A, F8). Each lane records one, so these cases still measure the pool rule alone.
+  seedAccountsSh(h.home, { ...POOLED_TEST_ROSTER, accounts: POOLED_TEST_ROSTER.accounts.map((a) => ({ ...a, continuity: { recordedAt: 1 } })) });
   plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });

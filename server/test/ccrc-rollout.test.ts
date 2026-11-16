@@ -31,6 +31,8 @@ interface Result { code: number; stdout: string; stderr: string }
 function plantHost(home: string, host: string, o: {
   role?: string; version?: string; sha?: string; updateExit?: number; installed?: boolean;
   caps?: string; floor?: string; checkState?: string; oldCheck?: boolean; channelLine?: string;
+  /** The pool set B1 (F6): the check line's needs= word (absent: no needs= field, as a ccrc before B1 prints). */
+  needs?: string;
   /** Fix round 1 item 4 / review 155 C34, bounded per batch E's own review
    *  fix round 1 (I1): the RAW bytes at this host's `~/.ccrc/update.json`,
    *  under a FAKE home the ssh stub really `bash -c`s the printed remote
@@ -66,6 +68,7 @@ function plantHost(home: string, host: string, o: {
   optional('check-state', o.checkState);
   optional('old-check', o.oldCheck === true ? 'yes' : undefined);
   optional('channel-line', o.channelLine);
+  optional('needs', o.needs);
   // The fake box home the ssh stub redirects HOME to before running the
   // exit-3 detail command for real. Cleared and rebuilt on every plant, the
   // same "no stale state from an earlier plant" rule the files above follow.
@@ -137,8 +140,9 @@ function plantBox(home: string): void {
     '    caps=verify,node-id,floor; [ -f "$d/caps" ] && IFS= read -r caps < "$d/caps"',
     '    floor=none; [ -f "$d/floor" ] && IFS= read -r floor < "$d/floor"',
     '    [ -f "$d/check-state" ] && IFS= read -r state < "$d/check-state"',
+    '    needs=""; [ -f "$d/needs" ] && IFS= read -r needs < "$d/needs"',
     '    if [ -f "$d/old-check" ]; then echo "check: box=$box sha=$sha target=$tgt state=$state"',
-    '    else echo "check: box=$box sha=$sha target=$tgt caps=$caps floor=$floor state=$state"; fi',
+    '    else echo "check: box=$box sha=$sha target=$tgt caps=$caps floor=$floor ${needs:+needs=$needs }state=$state"; fi',
     '    [ "$state" = current ] && exit 0; exit 1 ;;',
     '  "ccrc update --to "*)',
     '    case " $cmd " in *" --from "*) [ -f "$d/old-check" ] && { echo "ccrc: unknown argument: --from" >&2; exit 2; } ;; esac',
@@ -699,6 +703,30 @@ describe('ccrc rollout: the W4 check line, a box one wave older, the floor and t
     r = run(home, ['--force']);
     expect(r.code).toBe(2);
     expect(updates(home)).toEqual([]);
+  });
+
+  it('the capability floor (pool set B1, F6): a box whose standing fact needs a ccd word may only move FIRST — --server-first refuses before either box moves; the default order, none and an older line proceed', () => {
+    const home = twoBoxFleet('ccrc-rollout-needs-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', needs: 'pool-set' });
+    let r = run(home, ['--server-first']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toContain("rollout: the fleet box has a standing fact that needs ccd's pool-set, which its own update checks against the target only after server has moved — run it first (drop --server-first), or clear the fact there; nothing was touched");
+    expect(updates(home)).toEqual([]);
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', needs: 'unmeasured' });
+    r = run(home, ['--server-first']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("needs ccd's unmeasured");
+    expect(updates(home)).toEqual([]);
+    // The fleet box first (the default order): its own update reads the target's ccdCaps and decides.
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', needs: 'pool-set' });
+    r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const needs of ['none', undefined]) {
+      const h2 = twoBoxFleet(`ccrc-rollout-needs-${needs ?? 'absent'}-`);
+      plantHost(h2, FLEET, { role: 'fleet', version: 'v1.0.0', ...(needs === undefined ? {} : { needs }) });
+      r = run(h2, ['--server-first']);
+      expect(r.code, `${needs}: ${r.stderr}`).toBe(0);
+    }
   });
 
   it('--check reports a below-floor box and touches nothing (exit 1, no refusal — a measurement)', () => {

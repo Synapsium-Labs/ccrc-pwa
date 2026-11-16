@@ -25,7 +25,7 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, rosterWithFacts, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
   FIXTURES, TICK_RUN_N, plantFixture, plantShims, countTicks, loopSleeps, commandWords, unshimmedExternals,
@@ -156,6 +156,11 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'fable-leaving': { forks: 121, execs: 47 },
 };
 
+/** The `fable` fixture's steady tick for a session whose `poolset` exists (see its case), measured: 101/34 against `fable`'s 92/34. The pool rule's own set reads cost 6 of the 9
+ *  (the same fixture on the tree before the Overlord's arms measures 98/34); the arms cost 3, one `$( )` each for the side
+ *  read, the continuity read and the billing read. No exec: the reads are shell functions. */
+const SET_SIDE_FABLE_BUDGET = { forks: 101, execs: 34 };
+
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
  *  `300aedf8` it was 1 on every tick: the cache it sets died with the `$( )`
  *  the probe runs in. D-4960 primes the cache once in the supervisor's own
@@ -264,6 +269,24 @@ describe(`the supervise tick's fork budget: the real loop, ${N} ticks per fixtur
       }, 120_000);
     });
   }
+
+  // THE OVERLORD'S ARMS COST FORKS ONLY FOR A SESSION WITH A `poolset` ENTRY (serviceability plan F7): every fixture above
+  // has none, so its figure is unmoved. A set-side session pays `$(_session_pool_side …)` and one `$( )` per fact read at
+  // each `_serviceable` call that holds its id. This one plants a set that admits every lane and a continuity record and an
+  // `included` billing fact on all of them, so the session is held where it is, and pins the exact figure.
+  it('a `fable` session whose `poolset` exists pays the side read and the fact reads, and no other fixture does', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-set-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'fable');
+    seedAccountsSh(h.home, rosterWithFacts(Object.fromEntries(
+      ['claude', 'claude-a', 'claude-b', 'claude-d'].map((w) => [w, { fableBilling: 'included' as const, continuity: 1_790_000_000 }]))));
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.poolset`), 'pool-a+untagged');
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(SET_SIDE_FABLE_BUDGET);
+  }, 120_000);
 
   it('prints the table, for the PR\'s departure', () => {
     const rows = FIXTURES.map((name) => {

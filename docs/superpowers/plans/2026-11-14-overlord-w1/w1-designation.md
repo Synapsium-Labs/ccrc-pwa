@@ -721,9 +721,12 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
   that is no longer pending (a retire got there first), with `{ ok: false, reason: 'not-pending' }`. No append.
 - `goLive(sessionId, generation, at)`: only for the pending id; anything else is `{ ok: true, changed: false }`. For a
   `designate` attempt it appends `authority-designate` with the raised term, the session id and the generation, then
-  moves the attempt into the binding with `term += 1` and `designatedTerm = term`, clears the pending slot, and calls
+  moves the attempt into the binding with `term += 1` and `designatedTerm = term`, clears the pending slot, clears the
+  last attempt (`attemptId`, `attemptOutcome` and `attemptAt`) in the same transaction, and calls
   `restampOverlordGeneration` (the body's live generation, when one is minted, takes identity `overlord` and the
-  raised term; X5). PR B's `rebind` arm is added in Task 6.
+  raised term; X5). PR B's `rebind` arm is added in Task 6. A last attempt is a failure that still stands, so a start
+  that goes live ends it: otherwise a failed start, a later good start and a retire would leave a stale outcome that
+  the console reads as a failed first start (home plan, review 2195 F6; slug `golive-clears-last-attempt`).
 - `failPending(sessionId, outcome, at, owesStop)`: only for the pending id. It clears the slot, writes the attempt's
   outcome, and adds the id to `stopsOwed` when `owesStop`. It never touches the term or the live binding. No append.
 - `retire(actor, at)`: three cases (question 8).
@@ -753,6 +756,8 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
   - `designatePending` refuses when a row is bound or pending. `bindPendingGeneration` refuses after a retire.
   - `goLive` raises the term once and re-stamps the body's live generation (`identity: 'overlord'`, the raised term).
     A resent `goLive` for a session that is no longer pending changes nothing.
+  - `goLive` clears the last attempt: designate, `failPending`, designate, `goLive`, then a live `retire`, and
+    `designationRead()`'s `lastAttempt` is null.
   - `failPending` keeps the term and the binding, and owes the stop only when asked.
   - `retire` on each of its three cases (question 8): the term, the past ids, the outcome and `stopsOwed`.
   - `stopDone` removes one id. A later failed attempt never drops an earlier owed id.
@@ -1275,12 +1280,38 @@ untouched, and owes only the new body's stop.
   `server/test/continuity-renewal-acts.test.ts`
 
 **Restart.** `POST /api/overlord/restart`, gate `{ cap: null, stepUp: false }`, on the serialiser. It is a recovery,
-and it changes no authority (§11.2 lists no step-up for it). `restartVerdict`:
+and it changes no authority (§11.2 lists no step-up for it).
+
+**One body mapper and one decider, shared with readiness** (the coordinator's ruling on readiness review 2194, F5).
+`overlordDesignation.ts` exports both, and the readiness piece (`w1-readiness.md`) calls both. Its `restartable` and
+its push's Restart action are `restartVerdict(…).ok`, so the door and the push never disagree.
+
+```ts
+/** The Overlord's body, from the tick's listing and its assembled session. A present row is read through
+ *  `sessionReading.ts#rowStanding`; a listed id with no assembled session is `unmeasured`; only an id absent from the
+ *  listing is `gone` (`absent`). `down` is `rowStanding`'s `doubt` with presence `alive` and lifecycle `restarting`
+ *  and no unmeasured identity field: the supervisor is restarting it. Any other `doubt` is `unmeasured`. */
+export type OverlordBody =
+  | { readonly kind: 'up' } | { readonly kind: 'down'; readonly since: number | null } | { readonly kind: 'asleep' }
+  | { readonly kind: 'gone'; readonly cause: DeadCause } | { readonly kind: 'unmeasured'; readonly why: string };
+export function overlordBodyOf(f: { readonly sessionId: string; readonly listedIds: ReadonlySet<string> | null;
+  readonly session: FleetSession | null }): OverlordBody;
+export function restartVerdict(binding: { readonly sessionId: string } | null, body: OverlordBody):
+  { ok: true } | { ok: false; error: 'not-found' } | { ok: false; error: 'overlord-body-alive'; detail: 'alive' | 'restarting' | 'unmeasured' };
+```
+
+The door builds `OverlordBody` with `overlordBodyOf` from the watcher's last assembled fleet and its last listing
+(`FleetWatcher.currentRegistryIds()`), read through the port this task wires in `server.ts`. `restartVerdict`:
 
 - no live binding answers `not-found`;
-- a body that measures alive answers 409 `overlord-body-alive` (nothing to restart);
-- an unmeasured body answers 409 `overlord-body-alive`, detail `unmeasured`;
-- otherwise `ensure` runs on the bound id, the resume path (C23), then `keepAwake(id, 'on')` and the first prompt
+- an `up` body answers 409 `overlord-body-alive`, detail `alive` (nothing to restart);
+- a `down` body answers 409 `overlord-body-alive`, detail `restarting`: a crash loop the supervisor is already
+  restarting, which an `ensure` would only race;
+- an `unmeasured` body answers 409 `overlord-body-alive`, detail `unmeasured`;
+- an `asleep` body is accepted: the `ensure` wakes it (readiness reads an asleep Overlord `dead`, and its push carries
+  this door's control);
+- a `gone` body is accepted;
+- when accepted, `ensure` runs on the bound id, the resume path (C23), then `keepAwake(id, 'on')` and the first prompt
   (X4). A gone workspace is rebind's case, which the ensure's own failure names.
 
 **The pending deadline and the settle retry** (the renewal lane writes the row in this one case, §3.2; review F9,
@@ -1313,7 +1344,9 @@ id), and calls no port: no row is written and nothing is stopped. Live, the port
 store's writers and the drain, each a transaction of its own, so a concurrent door sees either side.
 
 - [ ] **Step 1: Failing tests.**
-  - Restart's three refusals, and the `ensure` it composes, with `admitWake` recorded and the first prompt sent.
+  - Restart's refusals (no binding; an `up`, a `down` and an `unmeasured` body), an `asleep` and a `gone` body
+    accepted, `overlordBodyOf` over a listed id with no assembled session and an unlisted id, and the `ensure` it
+    composes, with `admitWake` recorded and the first prompt sent.
   - **A restart of the Overlord** (X5) finds its own live generation (the lane's mint against it), end to end with
     the fakes.
   - The deadline: before it nothing happens; after it the attempt fails, its body is drained, once. A restart of the

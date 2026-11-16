@@ -456,6 +456,7 @@ export const REQUIRED_VERB_FLAG = {
   'delegation-adopt': '--state',
   'project-add': '--name',
   'pane-scope-stop': '--state',
+  'pool-answer': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -736,6 +737,11 @@ export const EXEC_WHITELIST = {
     // `win-size is grantable ONLY with --session` case, and why the enrolment
     // above exists: one of the two is in a different package from the other.
     ['win-size',   '--session'],
+    // The read-only pool answer for one session's account (Overlord W1 pool set, plan Task 6): it writes nothing and
+    // reads the session's registry fields only. ENROLLED in `REQUIRED_VERB_FLAG` above on `--session`, which is its
+    // whole argument surface (g29 is the other side), so the wire cannot widen it to another form; an older agent
+    // without this row refuses it `forbidden`, which the server reads as `ran: false`, never as an answer.
+    ['pool-answer', '--session'],
     // NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): the four
     // verbs `docs-v1` names, each ENROLLED in `REQUIRED_VERB_FLAG` above on the
     // flag that is its whole argument surface (g16-g19 are the other side).

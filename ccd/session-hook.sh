@@ -5364,7 +5364,9 @@ fi
 # `apmatch`: a Bash call naming a secret or scratch path (`~/.cc-secrets`, `~/.ccrc/auth-scratch`,
 # `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`, D-7675's Linear slot store `~/.ccrc/linear/` and legacy key
 # `~/.ccrc/linear.key`, and plan PL6's operator-secret slots `~/.ccrc/operator-secrets/`), a write under
-# `~/.cc-sessions/.auth` or `.accounts`, and a
+# `~/.cc-sessions/.auth` or `.accounts`, a write of the roster `~/.ccrc/accounts.json` or its mirror `accounts.sh`
+# (`ARF`, `APRF` for the edit tools; reads stay open), a direct run of `account-op.mjs` (`AOPRUN`: the script as a
+# segment's program, bare or after a runtime, by any path; a read of it passes), and a
 # bare `env` or `printenv` (alone, `-0` or `--null`; never with an operand, so `env FOO=1 ccd swap-self …` and
 # `printenv TMUX` pass); and `acctpath` for Read, Grep, Glob and the edit tools. A child's `deny` mode answers the same
 # category beside its own. `class` mode gains only the verb rows (the classifier's `FORBIDDEN_PATTERNS` hold the same).
@@ -5638,14 +5640,19 @@ def ENVP: "(?:[(`{]|\\$\\()";
 def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
 def ENVS: "(?:\\$\\(|`)" + SP + "*(?:[^" + WS + "/)`]*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`]";
 def BSHC: "^" + SP + "*(?:" + NS + "*/)?(?:bash|sh)" + SP + "+-c" + SP + "+";
+def ARF: DANC + "\\.ccrc" + SEPP + "accounts\\.(?:json|sh)" + BT;
+def AOPRUN: "^" + SP + "*(?:[(`{]" + SP + "*){0,4}(?:(?:then|do|else|if|while|!)" + SP + "+){0,2}(?:[A-Za-z_][A-Za-z0-9_]*=" + NS + "*" + SP + "+){0,8}(?:(?:exec|env|time|nohup|command)" + SP + "+){0,2}(?:(?:" + NS + "*/)?(?:node|nodejs|bun|deno)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8})?(?:" + NS + "*/)?account-op\\.mjs" + BT;
 def apmatch:
   (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
   (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
+  (select(test(ARF) and (hbt(SEG; BWR; ARF) or findw(ARF) or xargsw(ARF))) | "account\ta write of the roster or its mirror"),
+  (select(test("account-op") and any(split(SEG; null)[]; test(AOPRUN))) | "account\ta direct run of the account script"),
   (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
 def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)";
 def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
+def APRF: "/\\.ccrc/accounts\\.(?:json|sh)$";
 def acctpath($t; $i):
-  if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD)) | "account\ta write to an account path")
+  if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD) or test(APRF)) | "account\ta write to an account path")
   elif $t == "Read" or $t == "Grep" or $t == "Glob" then first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string") | pnorm | select(test(APSEC)) | "account\ta read of a secret or scratch path of a fleet account")
   else empty end;
 def pathwhy($t):
@@ -5689,7 +5696,8 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
        || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
        || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
        || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
-       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *account-op* || "$apf" == *accounts.json* \
+       || "$apf" == *accounts.sh* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   else
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account

@@ -154,7 +154,10 @@ real values: `deploy/reference-fleet.md` (gitignored).
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
-  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. **Switching
+  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three
+  layers refuse a write of the roster `~/.ccrc/accounts.json` or its mirror `~/.ccrc/accounts.sh` and a direct run of
+  `deploy/account-op.mjs` (matched by the script's name, in any path; reads of all three stay open), because they carry the
+  billing and continuity facts that relax a serviceability gate; it is an accident guard there too. **Switching
   accounts and the auto-swap are never refused** (the operator's ruling of 2026-10-19): `ccd swap-self`, `ccd prefer`,
   `ccd swap` in every form, `POST /api/sessions/:id/swap`, `ccrc account roster`, `printenv <NAME>` and the reads
   around a move stay open (`server/test/fixtures/account-deny/must-allow.json`).

@@ -226,6 +226,8 @@ const EXEC_KINDS_SAID =
 // must know which one is the default an absent key reads: imported, never re-spelled.
 export const CODEX_BRIDGE_MODES = ['litellm', 'direct'];
 const CODEX_UPSTREAMS = ['backend', 'siwc'];
+// Mirrors `shared/rosterFacts.ts`'s `FABLE_BILLINGS`, IN ORDER; `roster-exec-parity.test.ts` pins both declarations.
+const FABLE_BILLINGS = ['included', 'credits'];
 // Mirrors `shared/roster.ts`'s `TELEMETRY_VALUES`; `roster-exec-parity.test.ts` compares the two declarations.
 // `openrouter` is D-5521's OpenRouter key lane (D-5753).
 const TELEMETRY_VALUES = Object.freeze({ anthropic: true, codex: true, none: true, openrouter: true });
@@ -513,6 +515,27 @@ function checkAccount(raw, index) {
       + 'letters, digits and hyphens only — or remove the key to leave the account untagged.');
   }
 
+  // Mirrors `parseRoster`'s two Overlord-fact gates (H16), written `null` refused as `pool`'s is. Both are RETURNED,
+  // because `generateAccountsSh` emits them into `_ccrc_fable_billing` and `_ccrc_continuity`.
+  const fableBilling = raw['fableBilling'];
+  if (fableBilling !== undefined && (typeof fableBilling !== 'string' || !FABLE_BILLINGS.includes(fableBilling))) {
+    bad(`account "${id}" has an invalid fableBilling ${JSON.stringify(fableBilling)}.`,
+      `Set "fableBilling" for account "${id}" to ${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}, `
+      + 'or remove the key to leave the fact unset.');
+  }
+  const continuity = raw['continuity'];
+  let continuityAt;
+  if (continuity !== undefined) {
+    const keys = typeof continuity === 'object' && continuity !== null && !Array.isArray(continuity)
+      ? Object.keys(continuity) : null;
+    const at = keys !== null && keys.length === 1 && keys[0] === 'recordedAt' ? continuity['recordedAt'] : undefined;
+    if (typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) {
+      bad(`account "${id}" has an invalid continuity ${JSON.stringify(continuity)}.`,
+        `Set "continuity" for account "${id}" to {"recordedAt": <epoch seconds>}, or remove the key to leave the fact unset.`);
+    }
+    continuityAt = at;
+  }
+
   const telemetry = raw['telemetry'];
   if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
@@ -560,6 +583,8 @@ function checkAccount(raw, index) {
     id, label, configDirSuffix: suffix, homeAble, telemetry, hue,
     execKind: exec['kind'], secretsFile: exec['secretsFile'], provider: exec['provider'],
     pool: pool === undefined ? null : pool,
+    fableBilling: fableBilling === undefined ? null : fableBilling,
+    continuity: continuityAt === undefined ? null : { recordedAt: continuityAt },
     ...codexTopology,
   };
 }

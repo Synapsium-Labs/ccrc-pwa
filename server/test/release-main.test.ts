@@ -70,6 +70,11 @@ const FILES: Record<string, string> = {
   '.github/workflows/release-main.yml': '# the fixture workflow\n',
   'install.sh': '#!/usr/bin/env bash\necho fixture\n',
   'ccd/ccrc': '#!/usr/bin/env bash\necho fixture\n',
+  // build-release.sh stamps the tree's `ccd caps` as `ccdCaps` (the Overlord W1 pool set, Task 7), in a scratch HOME it
+  // seeds with the generated default roster: a ccd that answers caps, and a generator with its input.
+  'ccd/ccd': '#!/usr/bin/env bash\n# fixture ccd body: answers caps with a short list of well-shaped lines (build-release.sh stamps it)\n[ "${1:-}" = caps ] && { printf \'%s\\n\' start ws-add pool-answer pool-set; exit 0; }\necho fixture ccd body\n',
+  'deploy/gen-accounts.mjs': "process.stdout.write('CCRC_ACCOUNTS=(lane-a)\\n');\n",
+  'deploy/accounts.default.json': '{ "accounts": [] }\n',
   'shared/package.json': '{ "type": "module" }\n',
   'deploy/ccrc.service': '[Unit]\nDescription=fixture\n',
   'server/package.json': '{ "name": "s" }\n',
@@ -113,7 +118,7 @@ function fixture(home: string, opts: {
   const root = join(home, 'repo');
   for (const [rel, body] of Object.entries(FILES)) {
     mkdirSync(path.dirname(join(root, rel)), { recursive: true });
-    writeFileSync(join(root, rel), body, { mode: rel.endsWith('.sh') || rel === 'ccd/ccrc' ? 0o755 : 0o644 });
+    writeFileSync(join(root, rel), body, { mode: rel.endsWith('.sh') || rel === 'ccd/ccrc' || rel === 'ccd/ccd' ? 0o755 : 0o644 });
   }
   copyFileSync(BUILDER, join(root, 'deploy', 'build-release.sh'));
   copyFileSync(SCRIPT, join(root, 'deploy', 'release-main.sh'));

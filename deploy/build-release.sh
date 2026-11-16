@@ -175,11 +175,36 @@ done
 # cover it like everything else in the set. The field shape is the two
 # stampers' exact shape (deploy.sh `stamp_build`, `_inst_stamp`), which
 # `shared/buildinfo.ts` and `_box_build_fields` both validate.
-printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":false,"version":"%s"}\n' \
+# THE TREE'S `ccd caps`, stamped as `ccdCaps` (the Overlord W1 pool set, plan Task 7, slug `ccd-caps-ride-build-json`):
+# the whole list the BUILT tree's ccd prints, verbs and capability tokens together, because membership is all a reader
+# asks (`ccd/ccrc#_upd_cap_floor_check`, before an update or a rollback moves a box below a word a standing fact needs).
+# ccd needs bash 4.4 or later and has no general floor of its own, so this script tests it first (`br_bash_floor`), and
+# ccd caps needs a roster, so it runs in a scratch HOME seeded with the generated default one; nothing outside that HOME
+# is written. A non-zero exit, an empty list or a line off the token grammar fails the build: the field is never written
+# empty, partial, or with a byte that needs escaping.
+br_bash_floor() {   # <major> <minor> <version> -> 0 iff bash 4.4 or later; else "too old" on stdout, rc 1
+  if [ "$1" -gt 4 ] || { [ "$1" -eq 4 ] && [ "$2" -ge 4 ]; }; then return 0; fi
+  echo "too old: bash $3 cannot run ccd (it needs bash 4.4 or later; macOS ships 3.2 as /bin/bash) - run this script with a newer bash"
+  return 1
+}
+BR_FLOOR="$(br_bash_floor "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}" "$BASH_VERSION")" || die "$BR_FLOOR"
+CAPS_HOME="$STAGE/caps-home"
+mkdir -p "$CAPS_HOME/.ccrc" || die "cannot create the scratch HOME $CAPS_HOME for ccd caps"
+( cd "$TOP" && node deploy/gen-accounts.mjs deploy/accounts.default.json ) > "$CAPS_HOME/.ccrc/accounts.sh" \
+  || die "the default roster could not be generated for ccd caps (node deploy/gen-accounts.mjs deploy/accounts.default.json)"
+CCD_CAPS="$(cd "$CAPS_HOME" && HOME="$CAPS_HOME" bash "$TOP/ccd/ccd" caps)" || die "the built tree's ccd caps exited non-zero, so build.json cannot name its ccdCaps"
+[ -n "$CCD_CAPS" ] || die "the built tree's ccd caps printed nothing, so build.json cannot name its ccdCaps"
+CCD_CAPS_JSON=""
+while IFS= read -r tok; do
+  [[ "$tok" =~ ^[a-z][a-z0-9-]*$ ]] || die "the built tree's ccd caps printed a line that is not a capability token: '$tok'"
+  CCD_CAPS_JSON+="${CCD_CAPS_JSON:+,}\"$tok\""
+done <<< "$CCD_CAPS"
+
+printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":false,"version":"%s","ccdCaps":[%s]}\n' \
   "$(git -C "$ROOT" rev-parse HEAD)" \
   "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)" \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  "$VERSION" > "$TOP/build.json"
+  "$VERSION" "$CCD_CAPS_JSON" > "$TOP/build.json"
 
 # ── MANIFEST: every file, per-file sha256 ─────────────────────────────────
 # Generated OUTSIDE the tree then moved in, so `find` can never race its own
