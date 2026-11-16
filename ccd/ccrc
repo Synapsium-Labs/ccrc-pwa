@@ -24800,6 +24800,7 @@ _upd_floor_check() {
 # front. The designation piece rewrites the `poolset` remedy when its Settings doors land.
 CAP_FLOOR_ROWS=(
   'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
+  'acctorder|keep-awake-v1|the operator releases the Overlord from their own shell, never a session: ccd keep-awake --session <id> --state off, then ccd route --session <id> --set acctorder='
 )
 _cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands, CAP_FLOOR_NEEDS: their words, comma-joined; rc 0 measured (no registry: nothing stands), 1 unlistable
   local LC_ALL=C IFS=' ' reg="$_SVC_REG" row e n ids

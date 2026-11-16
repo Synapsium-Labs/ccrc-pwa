@@ -169,7 +169,7 @@ def folds_to(token, word):
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt', 'keep-awake')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):
