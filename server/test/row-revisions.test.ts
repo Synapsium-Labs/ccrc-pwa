@@ -5,7 +5,9 @@
 // Task 2 adds the revision to each case: 0 at an insert, one more after each effective write the census
 // (`single-definition/row-revisions.test.ts`) classes `raises`, and unchanged after a missed guard, a bookkeeping write, a
 // take then an untake (ruled F14) and a re-stamp to the same `askAt` (question 2).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, beforeAll } from 'vitest';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -18,7 +20,22 @@ afterEach(removeTmpFixtures);
 
 const NOW = 1_800_000_000_000;
 const OLD = NOW - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000 - 1;
-const mk = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-row-revisions-'), '.ccrc', 'coord.db')));
+// One migrated database, copied for each case: a fresh open runs every migration, which under load outruns the timeout.
+// Its own directory, outside `mkTmp`'s, which `removeTmpFixtures` clears after every case.
+let templateDir = '';
+let template = '';
+beforeAll(() => {
+  templateDir = mkdtempSync(path.join(tmpdir(), 'ccrc-row-revisions-template-'));
+  template = path.join(templateDir, 'coord.db');
+  openCoordDb(template).close();
+});
+afterAll(() => { rmSync(templateDir, { recursive: true, force: true }); });
+const mk = (): CoordStore => {
+  const dir = path.join(mkTmp('ccrc-row-revisions-'), '.ccrc');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(template, path.join(dir, 'coord.db'));
+  return new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
+};
 
 type Table = 'asks' | 'operator_items';
 type Row = Record<string, unknown>;
@@ -176,20 +193,15 @@ describe('every writer of asks and operator_items, characterized (Overlord W2 ro
     const s = mk();
     const ids = c.seed(s);
     const before = rowsOf(s, c.table, ids);
+    const revisions = revisionsOf(s, c.table, ids);
     const got = c.act(s, ids);
     if (typeof c.returns === 'object' && c.returns !== null) expect(got).toMatchObject(c.returns);
     else expect(got).toBe(c.returns);
-    expect(rowsOf(s, c.table, ids)).toEqual(c.after(before));
-  });
-
-  it.each(CASES.map((c) => [c.name, c] as const))('%s: the revision', (_name, c) => {
-    const s = mk();
-    const ids = c.seed(s);
-    const before = revisionsOf(s, c.table, ids);
-    const rows = rowsOf(s, c.table, ids);
-    c.act(s, ids);
-    const changed = c.after(rows).map((r, i) => JSON.stringify(r) !== JSON.stringify(rows[i]));
-    expect(revisionsOf(s, c.table, ids)).toEqual(before.map((r, i) => (c.revision === 'raise' && changed[i] ? r + 1 : r)));
+    const after = c.after(before);
+    expect(rowsOf(s, c.table, ids)).toEqual(after);
+    // The revision: one on for each row a `raises` case changed, unchanged otherwise.
+    const changed = after.map((r, i) => JSON.stringify(r) !== JSON.stringify(before[i]));
+    expect(revisionsOf(s, c.table, ids)).toEqual(revisions.map((r, i) => (c.revision === 'raise' && changed[i] ? r + 1 : r)));
   });
 
   it('an insert starts at revision 0, and no insert names the column', () => {

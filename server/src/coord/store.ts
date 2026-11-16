@@ -9505,7 +9505,7 @@ export class CoordStore {
    *  asked (a wedge, not a race, is the failure this guard closes). */
   settleAsk(id: number, by: string, answer: string, now: number): void {
     this.db.prepare(
-      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ? " +
+      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ?, revision = revision + 1 " +
       "WHERE id = ? AND state = 'answering'",
     ).run(by, answer, now, id);
   }
@@ -9518,7 +9518,7 @@ export class CoordStore {
   /** With the push outbox's bound write (Overlord W1): the CAS, the reach stamp and the bound row in ONE tx; `false` lost. */
   releaseAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
   releaseAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
-    const cas = this.db.prepare("UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'");
+    const cas = this.db.prepare("UPDATE asks SET state = 'released', releasedAt = ?, revision = revision + 1 WHERE id = ? AND state = 'held'");
     const move = (): boolean => Number(cas.run(now, id).changes) > 0;
     return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
@@ -9533,7 +9533,7 @@ export class CoordStore {
   declineAsk(id: number, now: number): boolean;
   declineAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
   declineAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
-    const cas = this.db.prepare("UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'");
+    const cas = this.db.prepare("UPDATE asks SET state = 'declined', releasedAt = ?, revision = revision + 1 WHERE id = ? AND state = 'held'");
     const move = (): boolean => Number(cas.run(now, id).changes) > 0;
     return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
@@ -9567,7 +9567,7 @@ export class CoordStore {
    *  trace that survives a failure in this window. */
   staleAsk(dialogId: string, childId: string, now: number): boolean {
     const res = this.db.prepare(
-      "UPDATE asks SET state = 'stale', releasedAt = ? " +
+      "UPDATE asks SET state = 'stale', releasedAt = ?, revision = revision + 1 " +
       "WHERE dialogId = ? AND childId = ? AND state IN ('held','answering')",
     ).run(now, dialogId, childId);
     return Number(res.changes) > 0;
@@ -9620,7 +9620,9 @@ export class CoordStore {
    *  rather than the permanent wedge it replaces. */
   restampAsk(a: { id: number; dialogId: string; askKey: string; askAt: number }): boolean {
     const res = this.db.prepare(
-      "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
+      // Row revisions (Overlord W2, question 2): this runs on every 2-second tick, most often with the `askAt` the row
+      // already holds, so it raises only when `askAt` moves.
+      "UPDATE asks SET askAt = ?1, revision = revision + (askAt IS NOT ?1) WHERE id = ?2 AND state = 'held' AND dialogId = ?3 AND askKey = ?4",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
   }

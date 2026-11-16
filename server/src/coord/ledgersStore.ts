@@ -185,7 +185,7 @@ function moveItemInTx(
   const closes = verdict.to === 'done' || verdict.to === 'withdrawn' || verdict.to === 'dismissed';
   const answer = act === 'tick' && fields.answer !== undefined ? fields.answer : row.answer;
   const note = act === 'return' && fields.note !== undefined ? fields.note : row.note;
-  db.prepare('UPDATE operator_items SET state = ?, tickedAt = ?, closedAt = ?, answer = ?, note = ? WHERE id = ?')
+  db.prepare('UPDATE operator_items SET state = ?, tickedAt = ?, closedAt = ?, answer = ?, note = ?, revision = revision + 1 WHERE id = ?')
     .run(verdict.to, act === 'tick' ? now : row.tickedAt, closes ? now : null, answer, note, id);
   writeItemEvent(db, id, now, act, actor, fields.note ?? null);
   return { ok: true, item: itemById(db, id) as ItemRow };
