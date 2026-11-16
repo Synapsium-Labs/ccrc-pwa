@@ -28,7 +28,7 @@ function census(files: ReadonlyArray<{ file: string; parsed: ParsedFile }>): Cen
       if (c.name === 'appendOnlyFileAt') out.portBinders.push(file);
       if (c.name === 'chainedJournalFileAt') {
         out.chainedBinders.push(file);
-        if (c.args.some((a) => LANDING_FILE.test(a.text))) out.landingInChained.push(`${file}:${c.line}`);
+        if (c.args.some((a) => LANDING_FILE.test(a.text))) out.landingInChained.push(`${file} line ${c.line}`);
       }
       if (c.name === 'cutAside' && c.callee.includes('.')) out.cutCalls.push(`${file}: ${c.callee}`);
     }
@@ -74,7 +74,7 @@ describe('the journal-file adapters\' callers (review 2191 F3)', () => {
       portBinders: ['server/src/coord/stray.ts'],
       chainedBinders: ['server/src/coord/stray.ts'],
       cutCalls: ['server/src/coord/stray.ts: raw.cutAside'],
-      landingInChained: ['server/src/coord/stray.ts:6', 'server/src/coord/stray.ts:7'],
+      landingInChained: ['server/src/coord/stray.ts line 6', 'server/src/coord/stray.ts line 7'],
     });
   });
 });
