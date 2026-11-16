@@ -355,7 +355,13 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
       }
       if (te.state === 'dropped' && tb === undefined) continue;
       if (!tpl.ok) { phases[3]!.push({ kind: 'skip', local: tlocal, why: 'no-team-key', workspaceId: wsId, bindingId: tb?.id ?? null, inputs: null, detail: null }); continue; }
-      if (tpl.workspaceId !== wsId) { phases[3]!.push({ kind: 'skip', local: tlocal, why: tb === undefined ? 'workspace-mismatch' : 'ticket-workspace-mismatch', workspaceId: wsId, bindingId: tb?.id ?? null, inputs: null, detail: null }); continue; }
+      if (tpl.workspaceId !== wsId) {
+        const inputs = plannedFingerprint({ ticket: t.id, workspaceId: tpl.workspaceId, teamKey: tpl.teamKey });
+        // A failed binding is told once: it reports its inputs (the requeue trigger) and emits no second skip, so `failedAt` stands.
+        if (tb?.state === 'failed') failedInputs.push({ bindingId: tb.id, inputs });
+        else phases[3]!.push({ kind: 'skip', local: tlocal, why: tb === undefined ? 'workspace-mismatch' : 'ticket-workspace-mismatch', workspaceId: wsId, bindingId: tb?.id ?? null, inputs, detail: null });
+        continue;
+      }
       const milestoneId = t.checkpointId === null ? null : (msIds.get(t.checkpointId) ?? null);
       const stateType = ISSUE_STATE_TYPE[te.state];
       const iStatus = statusId(tpl.ws.directory, 'issue', stateType, tpl.teamKey);

@@ -9,6 +9,7 @@ import {
   NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type BindingRow, type CheckpointRow, type EpicRow, type NewTicket, type PlanChanges,
   type PlanStorePort, type StoredPlan, type TicketRow,
 } from '../src/coord/planStore.js';
+import { planViewOf } from '../src/coord/planRoutes.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
@@ -569,7 +570,53 @@ describe('the pass: moves and closes', () => {
     due(r); await tick(r);
     const upd = r.asks.slice(from).find((a) => a.op === 'issueUpdate')!;
     expect(upd.input['teamId']).toBe(CCC_TEAM.id);
-    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2.id)).toMatchObject({ state: 'bound', identifier: 'CCC-9' });
+    expect(upd.teamKey).toBe('AAA');                                    // the ask carries the issue's CURRENT team, read from Linear
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2.id)).toMatchObject({ state: 'bound', identifier: 'CCC-9', teamKey: 'CCC' });
+  });
+
+  it('a ticket\'s own project with its key cleared is inert: no failure, no mail, no call, and plan show reads unsynced', async () => {
+    const r = await rig();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    const t2 = epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!;
+    const before = r.plan.bindingsOf(SLUG).map((b) => ({ ...b }));
+    r.db.prepare('UPDATE project_linking SET teamKey = NULL WHERE project = ?').run('project-b');
+    r.db.prepare("UPDATE plan_tickets SET title = 'Renamed' WHERE id = ?").run(t2.id);
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(r.asks).toHaveLength(from);
+    expect(r.plan.bindingsOf(SLUG)).toEqual(before);
+    expect(mails(r)).toEqual([]);
+    const view = planViewOf(r.plan.planOf(SLUG), [], r.plan.bindingsOf(SLUG), (p) => r.coord.linkingOf(p).teamKey);
+    const e1 = view.epics[0]!;
+    expect(e1.sync).toBe('bound');
+    expect(e1.tickets.find((t) => t.key === 't2')).toMatchObject({ sync: 'unsynced', syncWord: null });
+    expect(e1.tickets.find((t) => t.key === 't1')!.sync).toBe('bound');
+  });
+
+  it('plan show reads unsynced for an epic and its checkpoints when the epic\'s project has no key; the bindings are unchanged', async () => {
+    const r = await rig();
+    await tick(r);
+    const before = r.plan.bindingsOf(SLUG).map((b) => ({ ...b }));
+    r.db.prepare('UPDATE project_linking SET teamKey = NULL WHERE project = ?').run('project-a');
+    const view = planViewOf(r.plan.planOf(SLUG), [], r.plan.bindingsOf(SLUG), (p) => r.coord.linkingOf(p).teamKey);
+    expect(view.epics[0]).toMatchObject({ sync: 'unsynced', syncWord: null });
+    expect(view.epics[0]!.checkpoints.every((c) => c.sync === 'unsynced')).toBe(true);
+    expect(r.plan.bindingsOf(SLUG)).toEqual(before);
+    expect(planViewOf(r.plan.planOf(SLUG), [], r.plan.bindingsOf(SLUG)).epics[0]!.sync).toBe('bound');   // no reader: as before
+  });
+
+  it('a failed ticket-workspace-mismatch is told once: a second pass leaves failedAt unchanged', async () => {
+    const r = await rig({ slotB: true });
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'BBB' WHERE project = 'project-b'").run();
+    due(r); await tick(r);
+    const failed = r.plan.bindingsOf(SLUG).find((b) => b.state === 'failed')!;
+    expect(failed.failedWord).toBe('ticket-workspace-mismatch');
+    due(r); await tick(r);
+    due(r); await tick(r);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.id === failed.id)!.failedAt).toBe(failed.failedAt);
   });
 });
 

@@ -334,24 +334,30 @@ export class PlanSync {
     // an update or a link: the binding is bound
     if (b === null || b.linearId === null) return 'next';
     let send = step;
+    // An issue update asks the policy and the journal with the issue's CURRENT team (`LinearWriteAsk.resource.teamKey`), read
+    // by C12's read; the destination team of a move is not policy-checked (no field carries a second team: a follow-up).
+    let currentTeam: string | null = b.teamKey ?? step.teamKey;
     if (step.kind === 'update' && step.stateType !== undefined) {
       const held = await this.readIssue(step, b, subject(b.id), deadlineAt);
-      if (held === 'defer') return 'defer';
-      if (held === 'next') return 'next';
-      if (held === 'same') { this.bind(b, b.linearId, b.identifier, step.fingerprint); this.attempts.delete(slug); return 'next'; }
-      send = held === 'state-held' ? withoutState(step) : step;
+      if (typeof held === 'object') currentTeam = held.team ?? currentTeam;
+      const verdict = typeof held === 'object' ? held.verdict : held;
+      if (verdict === 'defer') return 'defer';
+      if (verdict === 'next') return 'next';
+      if (verdict === 'same') { this.bind(b, b.linearId, b.identifier, step.fingerprint, step.teamKey); this.attempts.delete(slug); return 'next'; }
+      send = verdict === 'state-held' ? withoutState(step) : step;
       if (step.comment !== undefined) {
         const c = await this.deps.call({
-          op: 'issueComment', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey,
+          op: 'issueComment', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
           target: b.identifier ?? b.linearId, fields: ['comment'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
         });
         // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
         if (!c.ok && !(c.word === 'linear-invalid' && c.detail === 'conflict')) return this.onFailure(c, subject(b.id));
       }
     }
-    const out = await this.deps.call(this.askOf(send, slot, b, 'plan-sync'));
+    const ask = this.askOf(send, slot, b, 'plan-sync');
+    const out = await this.deps.call(step.kind === 'update' && step.op === 'issueUpdate' ? { ...ask, teamKey: currentTeam } : ask);
     if (out.ok) {
-      this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint);
+      this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint, step.kind === 'update' && step.op === 'issueUpdate' ? step.teamKey : undefined);
       this.attempts.delete(slug);
       return 'next';
     }
@@ -367,17 +373,18 @@ export class PlanSync {
    *  and everything else planned (a GitHub integration moved it), the fingerprint is all that is written (`same`); when only
    *  the state agrees, the update goes without it (`state-held`); a read that cannot tell (`not-found`) sends the update as
    *  planned and lets its own answer rule. */
-  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'state-held' | 'same' | 'next' | 'defer'> {
+  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'next' | 'defer' | { verdict: 'send' | 'state-held' | 'same'; team: string | null }> {
     if (step.op !== 'issueUpdate') return 'send';
     if (this.deps.now() >= deadlineAt) return 'defer';
     const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id: b.linearId! }));
     if (!out.ok) return out.word === 'not-found' ? 'send' : (this.onFailure(out, s) === 'defer' ? 'defer' : 'next');
     const issue = out.value['issue'] as { stateType?: string; title?: string; description?: string | null; teamKey?: string; projectId?: string | null; milestoneId?: string | null };
-    if (issue.stateType !== step.stateType) return 'send';
+    const team = typeof issue.teamKey === 'string' ? issue.teamKey : null;
+    if (issue.stateType !== step.stateType) return { verdict: 'send', team };
     const sameRest = issue.title === step.input['title'] && (issue.description ?? '').trim() === String(step.input['description'] ?? '').trim()
       && issue.projectId === step.input['projectId'] && (issue.milestoneId ?? null) === (step.input['projectMilestoneId'] ?? null)
       && typeof issue.teamKey === 'string' && step.teamKey !== null && issue.teamKey.toUpperCase() === step.teamKey.toUpperCase();
-    return sameRest ? 'same' : 'state-held';
+    return { verdict: sameRest ? 'same' : 'state-held', team };
   }
 
   /** C2: a create whose binding was `pending` at the start of the step may have been sent. Read what Linear holds. */
@@ -495,8 +502,8 @@ export class PlanSync {
 
   // ── Writes ──
 
-  private bind(b: BindingRow, linearId: string, identifier: string | null, fingerprint: string): void {
-    this.deps.plan.markBound(b.id, linearId, identifier, fingerprint, this.deps.now());
+  private bind(b: BindingRow, linearId: string, identifier: string | null, fingerprint: string, teamKey?: string | null): void {
+    this.deps.plan.markBound(b.id, linearId, identifier, fingerprint, this.deps.now(), teamKey);
   }
 
   private identifierOf(out: CcrcOpOutcome, b: BindingRow): string | null {

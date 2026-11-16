@@ -429,10 +429,11 @@ export function ensurePending(db: DatabaseSync, kind: BindingKind, localId: numb
     .run(kind, localId, workspaceId, teamKey);
   return bindingOf(db, kind, localId, workspaceId)!;
 }
-export function markBound(db: DatabaseSync, id: number, linearId: string, identifier: string | null, fingerprint: string, now: number): void {
+/** `teamKey`, when given, replaces the stored key (an issue moved to another team); absent or null leaves it. */
+export function markBound(db: DatabaseSync, id: number, linearId: string, identifier: string | null, fingerprint: string, now: number, teamKey?: string | null): void {
   db.prepare(
-    "UPDATE linear_bindings SET linearId = ?, identifier = ?, fingerprint = ?, syncedAt = ?, state = 'bound', failedAt = NULL, failedWord = NULL, failedInputs = NULL WHERE id = ?",
-  ).run(linearId, identifier, fingerprint, now, id);
+    "UPDATE linear_bindings SET linearId = ?, identifier = ?, fingerprint = ?, syncedAt = ?, state = 'bound', failedAt = NULL, failedWord = NULL, failedInputs = NULL, teamKey = COALESCE(?, teamKey) WHERE id = ?",
+  ).run(linearId, identifier, fingerprint, now, teamKey ?? null, id);
 }
 export function markFailed(db: DatabaseSync, id: number, word: string, inputs: string, now: number): void {
   db.prepare("UPDATE linear_bindings SET state = 'failed', failedAt = ?, failedWord = ?, failedInputs = ? WHERE id = ?").run(now, word, inputs, id);
